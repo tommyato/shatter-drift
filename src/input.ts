@@ -39,15 +39,18 @@ export class Input {
     this.canvasHeight = canvas.clientHeight;
 
     window.addEventListener("keydown", (e) => {
-      this.keys.add(e.key.toLowerCase());
+      // Normalize spacebar: e.key returns " " but we use "space" everywhere
+      const key = e.key === " " ? "space" : e.key.toLowerCase();
+      this.keys.add(key);
       // Prevent browser defaults for game keys
-      if (["space", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(e.key.toLowerCase())) {
+      if (["space", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) {
         e.preventDefault();
       }
     });
 
     window.addEventListener("keyup", (e) => {
-      this.keys.delete(e.key.toLowerCase());
+      const key = e.key === " " ? "space" : e.key.toLowerCase();
+      this.keys.delete(key);
     });
 
     window.addEventListener("mousemove", (e) => {
