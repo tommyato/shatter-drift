@@ -238,8 +238,8 @@ export class Game {
     const shatterInput = this.input.isDown("space") || this.input.isDown("click");
     this.player.shattered = shatterInput;
 
-    // Update player
-    this.player.update(dt, move.x);
+    // Update player (negate X: camera faces +Z so screen-right = world -X)
+    this.player.update(dt, -move.x);
     this.player.group.position.z = this.playerZ;
 
     // Update difficulty
