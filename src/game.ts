@@ -5,6 +5,7 @@ import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash } from "./effects";
 import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, stopAudio } from "./audio";
+import { Autopilot } from "./autopilot";
 import { clamp } from "./utils";
 
 enum GameState {
@@ -64,6 +65,10 @@ export class Game {
   private centerStats!: HTMLElement;
   private centerRetry!: HTMLElement;
   private titleHighScore!: HTMLElement;
+
+  // Autopilot
+  private autopilot: Autopilot | null = null;
+  private demoMode = false;
 
   // Camera offset
   private cameraOffset = new THREE.Vector3(0, 3, -6);
@@ -236,9 +241,26 @@ export class Game {
     this.playerZ += this.speed * dt;
     this.distance = Math.floor(this.playerZ);
 
-    // Player input
-    const move = this.input.getMovement();
-    const shatterInput = this.input.isDown("space") || this.input.isDown("click");
+    // Player input (autopilot or human)
+    let moveX: number;
+    let shatterInput: boolean;
+
+    if (this.autopilot) {
+      const ai = this.autopilot.update(
+        this.player.group.position.x,
+        this.playerZ,
+        this.speed,
+        this.world
+      );
+      // Autopilot returns world-space moveX, but player.update expects negated input
+      moveX = ai.moveX;
+      shatterInput = ai.shatter;
+    } else {
+      const move = this.input.getMovement();
+      moveX = -move.x; // negate X: camera faces +Z so screen-right = world -X
+      shatterInput = this.input.isDown("space") || this.input.isDown("click");
+    }
+
     this.player.shattered = shatterInput;
 
     // Shatter/recombine audio triggers
@@ -246,8 +268,8 @@ export class Game {
     if (!shatterInput && this.wasShattered) playRecombine();
     this.wasShattered = shatterInput;
 
-    // Update player (negate X: camera faces +Z so screen-right = world -X)
-    this.player.update(dt, -move.x);
+    // Update player
+    this.player.update(dt, moveX);
     this.player.group.position.z = this.playerZ;
 
     // Update difficulty
@@ -380,13 +402,22 @@ export class Game {
 
   // --- Game Over ---
 
+  private gameOverTimer = 0;
+
   private updateGameOver(dt: number) {
     // Camera slowly drifts
     this.camera.position.y += dt * 0.5;
+    this.gameOverTimer += dt;
 
-    if (this.input.justPressed("space") || this.input.justPressed("click")) {
+    // Demo mode: auto-restart after 2 seconds
+    const shouldRestart = this.demoMode
+      ? this.gameOverTimer > 2
+      : this.input.justPressed("space") || this.input.justPressed("click");
+
+    if (shouldRestart) {
       this.player.group.visible = true;
       this.centerMessage.style.opacity = "0";
+      this.gameOverTimer = 0;
       this.startGame();
     }
   }
@@ -396,9 +427,12 @@ export class Game {
   private handlePortalArrival() {
     const params = new URLSearchParams(window.location.search);
     const isPortal = params.get("portal") === "true";
+    this.demoMode = params.get("demo") === "true";
 
-    if (isPortal) {
-      // Skip title, go straight to game
+    if (this.demoMode) {
+      this.autopilot = new Autopilot();
+      this.startGame();
+    } else if (isPortal) {
       this.startGame();
     }
   }
