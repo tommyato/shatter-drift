@@ -96,6 +96,7 @@ export class Game {
   private autopilot: Autopilot | null = null;
   private recorder: GameRecorder | null = null;
   private demoMode = false;
+  private portalRefUrl = "";
 
   // Camera offset
   private cameraOffset = new THREE.Vector3(0, 3, -6);
@@ -325,6 +326,18 @@ export class Game {
       this.player.shattered ? 1.5 : 0.3
     );
 
+    // Vibeverse portal check (always active, even when phasing)
+    if (!this.demoMode) {
+      const portal = this.world.checkPortalCollision(
+        this.player.group.position.x,
+        this.playerZ
+      );
+      if (portal) {
+        this.enterVibeverse();
+        return;
+      }
+    }
+
     // Collision detection — grace period: don't collide until recombine animation is mostly done
     const isPhasing = this.player.shattered || this.player.shatterT > 0.15;
     if (!isPhasing) {
@@ -473,12 +486,22 @@ export class Game {
 
   // --- Vibeverse ---
 
+  private enterVibeverse() {
+    const gameUrl = encodeURIComponent(window.location.origin + window.location.pathname);
+    const speed = Math.floor(this.speed);
+    const url = `https://portal.pieter.com/?username=crystal&color=00ffcc&speed=${speed}&ref=${gameUrl}`;
+    window.location.href = url;
+  }
+
   private handlePortalArrival() {
     const params = new URLSearchParams(window.location.search);
     const isPortal = params.get("portal") === "true";
     this.demoMode = params.get("demo") === "true";
     const shouldRecord = params.get("record") === "true";
     const recordDuration = parseInt(params.get("duration") || "15", 10);
+
+    // Store ref URL for return portal
+    this.portalRefUrl = params.get("ref") || "";
 
     if (this.demoMode) {
       this.autopilot = new Autopilot();

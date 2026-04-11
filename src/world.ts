@@ -35,6 +35,16 @@ const OBSTACLE_COLOR = 0x220033;
 const OBSTACLE_EDGE_COLOR = 0x9933ff;
 const ORB_COLOR = 0xffcc00;
 
+// --- Vibeverse portal ---
+
+export interface VibeversePortal {
+  group: THREE.Group;
+  z: number;
+  x: number;
+  active: boolean;
+  ring: THREE.Mesh;
+}
+
 // --- World generation ---
 
 const SPAWN_DISTANCE = 80; // how far ahead to spawn
@@ -43,14 +53,17 @@ const OBSTACLE_SPACING_MIN = 8;
 const OBSTACLE_SPACING_MAX = 16;
 const ORB_SPACING = 3;
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
+const PORTAL_INTERVAL = 300; // meters between portal appearances
 
 export class World {
   obstacles: Obstacle[] = [];
   orbs: EnergyOrb[] = [];
+  portals: VibeversePortal[] = [];
 
   private scene: THREE.Scene;
   private nextObstacleZ = 30;
   private nextOrbZ = 15;
+  private nextPortalZ = PORTAL_INTERVAL;
   private difficulty = 0; // 0-1, increases over time
 
   // Object pools
@@ -146,6 +159,12 @@ export class World {
       this.nextOrbZ += ORB_SPACING + Math.random() * 5;
     }
 
+    // Generate Vibeverse portals
+    while (this.nextPortalZ < playerZ + SPAWN_DISTANCE) {
+      this.spawnPortal(this.nextPortalZ);
+      this.nextPortalZ += PORTAL_INTERVAL;
+    }
+
     // Update orb rotation
     for (const orb of this.orbs) {
       if (!orb.active) continue;
@@ -156,7 +175,23 @@ export class World {
       orb.mesh.scale.setScalar(pulse);
     }
 
+    // Update portals
+    for (const portal of this.portals) {
+      if (!portal.active) continue;
+      portal.ring.rotation.z += dt * 1.5;
+      portal.ring.rotation.x += dt * 0.3;
+      // Pulse glow
+      const pulse = 0.6 + Math.sin(performance.now() * 0.003) * 0.2;
+      (portal.ring.material as THREE.MeshStandardMaterial).emissiveIntensity = pulse;
+    }
+
     // Despawn behind player
+    for (const portal of this.portals) {
+      if (portal.active && portal.z < playerZ + DESPAWN_DISTANCE) {
+        portal.active = false;
+        portal.group.visible = false;
+      }
+    }
     for (const obs of this.obstacles) {
       if (obs.active && obs.z < playerZ + DESPAWN_DISTANCE) {
         obs.active = false;
@@ -429,6 +464,65 @@ export class World {
     return collected;
   }
 
+  private spawnPortal(z: number) {
+    const group = new THREE.Group();
+    const x = (Math.random() < 0.5 ? -1 : 1) * (2 + Math.random() * 1.5);
+
+    // Torus ring
+    const torusGeo = new THREE.TorusGeometry(1.5, 0.15, 16, 32);
+    const torusMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff44,
+      emissive: 0x00ff44,
+      emissiveIntensity: 0.6,
+      metalness: 0.3,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const ring = new THREE.Mesh(torusGeo, torusMat);
+    ring.rotation.y = Math.PI / 2; // face the player
+    group.add(ring);
+
+    // Inner glow disc
+    const discGeo = new THREE.CircleGeometry(1.3, 32);
+    const discMat = new THREE.MeshBasicMaterial({
+      color: 0x00ff44,
+      transparent: true,
+      opacity: 0.15,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const disc = new THREE.Mesh(discGeo, discMat);
+    disc.rotation.y = Math.PI / 2;
+    group.add(disc);
+
+    group.position.set(x, 1, z);
+    this.scene.add(group);
+
+    this.portals.push({
+      group,
+      z,
+      x,
+      active: true,
+      ring,
+    });
+  }
+
+  /** Check if player entered a portal */
+  checkPortalCollision(playerX: number, playerZ: number): VibeversePortal | null {
+    for (const portal of this.portals) {
+      if (!portal.active) continue;
+      const dz = Math.abs(playerZ - portal.z);
+      if (dz > 2) continue;
+      const dx = Math.abs(playerX - portal.x);
+      if (dx < 1.5) {
+        return portal;
+      }
+    }
+    return null;
+  }
+
   /** Check close calls (passing through obstacle while shattered) */
   checkCloseCall(playerX: number, playerZ: number): boolean {
     for (const obs of this.obstacles) {
@@ -448,17 +542,22 @@ export class World {
   }
 
   reset() {
-    // Remove all obstacles and orbs
+    // Remove all obstacles, orbs, and portals
     for (const obs of this.obstacles) {
       this.scene.remove(obs.mesh);
     }
     for (const orb of this.orbs) {
       this.scene.remove(orb.mesh);
     }
+    for (const portal of this.portals) {
+      this.scene.remove(portal.group);
+    }
     this.obstacles.length = 0;
     this.orbs.length = 0;
+    this.portals.length = 0;
     this.nextObstacleZ = 30;
     this.nextOrbZ = 15;
+    this.nextPortalZ = PORTAL_INTERVAL;
     this.difficulty = 0;
   }
 
