@@ -7,7 +7,30 @@ import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash } from "./
 import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, stopAudio } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
-import { clamp } from "./utils";
+import { clamp, ScreenShake } from "./utils";
+
+/** Speed lines overlay — CSS radial gradient that fades in at high speed */
+class SpeedLines {
+  private el: HTMLElement;
+
+  constructor() {
+    this.el = document.createElement("div");
+    this.el.style.cssText = `
+      position: fixed; inset: 0; pointer-events: none; z-index: 10;
+      background: radial-gradient(ellipse at center, transparent 30%, rgba(0,255,204,0.0) 70%);
+      opacity: 0; transition: opacity 0.3s;
+    `;
+    document.body.appendChild(this.el);
+  }
+
+  update(speedNorm: number) {
+    // Start showing at 60% speed, full at 100%
+    const t = clamp((speedNorm - 0.6) / 0.4, 0, 1);
+    const alpha = t * 0.12;
+    this.el.style.background = `radial-gradient(ellipse at center, transparent 20%, rgba(0,255,204,${alpha}) 100%)`;
+    this.el.style.opacity = t > 0.01 ? "1" : "0";
+  }
+}
 
 enum GameState {
   Title,
@@ -40,6 +63,8 @@ export class Game {
   private trail!: ParticleTrail;
   private explosion!: ExplosionEffect;
   private collectFlash!: CollectFlash;
+  private shake = new ScreenShake();
+  private speedLines!: SpeedLines;
 
   // State
   private state = GameState.Title;
@@ -134,6 +159,7 @@ export class Game {
     this.trail = new ParticleTrail(this.scene, 0x00ffcc);
     this.explosion = new ExplosionEffect(this.scene);
     this.collectFlash = new CollectFlash(this.scene);
+    this.speedLines = new SpeedLines();
 
     // Cache HUD elements
     this.hudScore = document.getElementById("hud-score")!;
@@ -357,6 +383,12 @@ export class Game {
       this.playerZ + 15
     );
 
+    // Screen shake
+    this.shake.apply(this.camera, dt);
+
+    // Speed lines
+    this.speedLines.update(this.speed / MAX_SPEED);
+
     // Update HUD
     this.hudScore.textContent = String(this.score);
     this.hudDistance.textContent = `${this.distance}m`;
@@ -387,8 +419,12 @@ export class Game {
     playDeath();
     updateAmbient(0, false);
 
-    // Explosion
+    // Screen shake + explosion
+    this.shake.trigger(1.5);
     this.explosion.trigger(this.player.group.position.clone());
+
+    // Reset speed lines
+    this.speedLines.update(0);
 
     // Save high score
     if (this.score > this.highScore) {
@@ -417,8 +453,9 @@ export class Game {
   private gameOverTimer = 0;
 
   private updateGameOver(dt: number) {
-    // Camera slowly drifts
+    // Camera slowly drifts + continue shake
     this.camera.position.y += dt * 0.5;
+    this.shake.apply(this.camera, dt);
     this.gameOverTimer += dt;
 
     // Demo mode: auto-restart after 2 seconds
