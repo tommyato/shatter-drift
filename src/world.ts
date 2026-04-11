@@ -45,8 +45,6 @@ export interface VibeversePortal {
 
 const SPAWN_DISTANCE = 80; // how far ahead to spawn
 const DESPAWN_DISTANCE = -10; // how far behind to remove
-const OBSTACLE_SPACING_MIN = 8;
-const OBSTACLE_SPACING_MAX = 16;
 const ORB_SPACING = 3;
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 const PORTAL_INTERVAL = 300; // meters between portal appearances
@@ -62,7 +60,6 @@ export class World {
   private nextOrbZ = 15;
   private nextPortalZ = PORTAL_INTERVAL;
   private nextMarkerZ = 100; // distance markers every 100m
-  private difficulty = 0; // 0-1, increases over time
   private cleanupTimer = 0; // periodic cleanup of inactive objects
 
   // Starfield
@@ -289,20 +286,11 @@ export class World {
     }
   }
 
-  setDifficulty(d: number) {
-    this.difficulty = THREE.MathUtils.clamp(d, 0, 1);
-  }
-
   update(dt: number, playerZ: number, speed: number) {
-    // Generate obstacles ahead
+    // Generate obstacles ahead — spacing is biome-driven
     while (this.nextObstacleZ < playerZ + SPAWN_DISTANCE) {
       this.spawnObstacle(this.nextObstacleZ);
-      const spacing = THREE.MathUtils.lerp(
-        OBSTACLE_SPACING_MAX,
-        OBSTACLE_SPACING_MIN,
-        this.difficulty
-      );
-      this.nextObstacleZ += spacing + (Math.random() - 0.5) * 4;
+      this.nextObstacleZ += this.getBiomeSpacing();
     }
 
     // Generate orbs
@@ -468,43 +456,120 @@ export class World {
     }
   }
 
+  /**
+   * Biome spacing — wider and simpler early, denser and more complex later.
+   * Random variance is baked in per-biome to avoid uniform rhythms.
+   */
+  private getBiomeSpacing(): number {
+    const idx = this.biomes.biomeIndex;
+    if (idx === 0) return 18 + Math.random() * 6;   // THE VOID: 18–24, wide open
+    if (idx === 1) return 13 + Math.random() * 5;   // CRYSTAL CAVES: 13–18
+    if (idx === 2) return 9 + Math.random() * 4;    // NEON DISTRICT: 9–13
+    if (idx === 3) return 6 + Math.random() * 4;    // SOLAR STORM: 6–10, dense
+    return 4 + Math.random() * 4;                   // COSMIC RIFT: 4–8, brutal
+  }
+
+  /**
+   * Formation selection is gated by biome — early biomes get simple
+   * obstacles only, later biomes unlock complex multi-piece formations.
+   */
   private spawnObstacle(z: number) {
     const type = Math.random();
-    const d = this.difficulty;
+    const biome = this.biomes.biomeIndex;
 
-    if (type < 0.25) {
-      // Wall with gap (gate) — always present, core obstacle
+    if (biome === 0) {
+      // THE VOID: gates and simple pillars only — learn the mechanics
+      if (type < 0.5) {
+        this.spawnGate(z);
+      } else if (type < 0.85) {
+        this.spawnPillar(z);
+      } else {
+        this.spawnDoublePillar(z);
+      }
+      return;
+    }
+
+    if (biome === 1) {
+      // CRYSTAL CAVES: introduces double pillars and wide bars
+      if (type < 0.30) {
+        this.spawnGate(z);
+      } else if (type < 0.50) {
+        this.spawnPillar(z);
+      } else if (type < 0.72) {
+        this.spawnDoublePillar(z);
+      } else {
+        this.spawnWideBar(z);
+      }
+      return;
+    }
+
+    if (biome === 2) {
+      // NEON DISTRICT: full pattern variety, no scatter field yet
+      if (type < 0.20) {
+        this.spawnGate(z);
+      } else if (type < 0.35) {
+        this.spawnPillar(z);
+      } else if (type < 0.50) {
+        this.spawnDoublePillar(z);
+      } else if (type < 0.62) {
+        this.spawnWideBar(z);
+      } else if (type < 0.78) {
+        this.spawnWeave(z);
+      } else if (type < 0.92) {
+        this.spawnDiamond(z);
+      } else {
+        this.spawnGate(z);
+      }
+      return;
+    }
+
+    if (biome === 3) {
+      // SOLAR STORM: all formations including zigzag corridors
+      if (type < 0.12) {
+        this.spawnGate(z);
+      } else if (type < 0.24) {
+        this.spawnPillar(z);
+      } else if (type < 0.36) {
+        this.spawnDoublePillar(z);
+      } else if (type < 0.48) {
+        this.spawnWideBar(z);
+      } else if (type < 0.62) {
+        this.spawnWeave(z);
+      } else if (type < 0.76) {
+        this.spawnDiamond(z);
+      } else if (type < 0.90) {
+        this.spawnZigzagCorridor(z);
+      } else {
+        this.spawnScatterField(z);
+      }
+      return;
+    }
+
+    // COSMIC RIFT (biome 4+): maximum challenge, all formations at high weight
+    if (type < 0.10) {
       this.spawnGate(z);
-    } else if (type < 0.40) {
-      // Single pillar
+    } else if (type < 0.20) {
       this.spawnPillar(z);
-    } else if (type < 0.52) {
-      // Double pillar
+    } else if (type < 0.30) {
       this.spawnDoublePillar(z);
-    } else if (type < 0.62) {
-      // Low bar
+    } else if (type < 0.40) {
       this.spawnWideBar(z);
-    } else if (type < 0.72 && d > 0.15) {
-      // Weave: staggered pillars forcing serpentine
+    } else if (type < 0.54) {
       this.spawnWeave(z);
-    } else if (type < 0.80 && d > 0.25) {
-      // Diamond formation: 4 pillars in diamond shape
+    } else if (type < 0.68) {
       this.spawnDiamond(z);
-    } else if (type < 0.88 && d > 0.35) {
-      // Zigzag corridor: 3 offset gates in quick succession
+    } else if (type < 0.82) {
       this.spawnZigzagCorridor(z);
-    } else if (type < 0.95 && d > 0.5) {
-      // Scatter field: cluster of small pillars
-      this.spawnScatterField(z);
     } else {
-      // Default fallback to gate
-      this.spawnGate(z);
+      this.spawnScatterField(z);
     }
   }
 
   private spawnGate(z: number) {
     const gapX = (Math.random() - 0.5) * 5;
-    const gapWidth = THREE.MathUtils.lerp(4, 2.5, this.difficulty);
+    // Gap narrows with each biome — more forgiving early, punishing late
+    const biomeGapWidths = [4.5, 4.0, 3.5, 3.0, 2.5];
+    const gapWidth = biomeGapWidths[Math.min(this.biomes.biomeIndex, 4)];
     const wallHeight = 3;
     const wallThickness = 0.6;
 
@@ -660,7 +725,8 @@ export class World {
    * Forces serpentine dodging.
    */
   private spawnWeave(z: number) {
-    const count = 3 + (this.difficulty > 0.6 ? 1 : 0);
+    // Later biomes add a 4th pillar to the weave
+    const count = 3 + (this.biomes.biomeIndex >= 3 ? 1 : 0);
     const startSide = Math.random() < 0.5 ? -1 : 1;
 
     for (let i = 0; i < count; i++) {
@@ -696,7 +762,9 @@ export class World {
    */
   private spawnDiamond(z: number) {
     const cx = (Math.random() - 0.5) * 3;
-    const spread = THREE.MathUtils.lerp(3.5, 2.5, this.difficulty);
+    // Tighter diamond in later biomes — less room to thread the needle
+    const biomeSpread = [4.0, 3.5, 3.0, 2.5, 2.0];
+    const spread = biomeSpread[Math.min(this.biomes.biomeIndex, 4)];
     const pillarW = 0.8 + Math.random() * 0.6;
     const pillarH = 2 + Math.random();
 
@@ -734,11 +802,14 @@ export class World {
    * Forces fast reactions or shatter-through.
    */
   private spawnZigzagCorridor(z: number) {
-    const gateSpacing = THREE.MathUtils.lerp(5, 3.5, this.difficulty);
+    // Faster gate rhythm and tighter gaps in later biomes
+    const biomeGateSpacing = [5.5, 5.0, 4.5, 4.0, 3.5];
+    const biomeZigzagGap = [3.5, 3.2, 3.0, 2.8, 2.5];
+    const gateSpacing = biomeGateSpacing[Math.min(this.biomes.biomeIndex, 4)];
 
     for (let i = 0; i < 3; i++) {
       const gapX = (i % 2 === 0 ? -1 : 1) * (1.5 + Math.random() * 1.5);
-      const gapWidth = THREE.MathUtils.lerp(3.5, 2.5, this.difficulty);
+      const gapWidth = biomeZigzagGap[Math.min(this.biomes.biomeIndex, 4)];
       const wallHeight = 3;
       const wallThickness = 0.6;
       const pz = z + i * gateSpacing;
@@ -1048,7 +1119,6 @@ export class World {
     this.nextOrbZ = 15;
     this.nextPortalZ = PORTAL_INTERVAL;
     this.nextMarkerZ = 100;
-    this.difficulty = 0;
   }
 
   dispose() {

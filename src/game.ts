@@ -114,8 +114,7 @@ enum GameState {
 }
 
 // --- Game tuning ---
-const INITIAL_SPEED = 15;
-const SPEED_INCREASE = 0.8; // units/sec per second of play
+const INITIAL_SPEED = 12;
 const MAX_SPEED = 45;
 const ORB_SCORE = 100;
 const CLOSE_CALL_SCORE = 50;
@@ -532,8 +531,8 @@ export class Game {
   private updatePlaying(dt: number) {
     this.playTime += dt;
 
-    // Speed increases over time
-    this.speed = Math.min(MAX_SPEED, INITIAL_SPEED + this.playTime * SPEED_INCREASE);
+    // Piecewise speed ramp — gentle in early biomes, punishing in later ones
+    this.speed = this.computeSpeed(this.distance);
 
     // Move forward
     this.playerZ += this.speed * dt;
@@ -592,8 +591,7 @@ export class Game {
     this.player.update(dt, moveX);
     this.player.group.position.z = this.playerZ;
 
-    // Update difficulty
-    this.world.setDifficulty(Math.min(1, this.playTime / 120)); // max difficulty at 2 minutes
+    // World difficulty is now fully biome-driven (see world.ts)
 
     // Update world
     this.world.update(dt, this.playerZ, this.speed);
@@ -957,6 +955,11 @@ export class Game {
           playCloseCall();
           this.milestones.registerCloseCall();
 
+          // Near-miss bonus: +25 score with popup and distortion flash
+          this.score += 25;
+          this.popups.showAt3D("+25 NEAR MISS!", this.player.group.position.x, this.playerZ, this.camera, "#88ccff", 20);
+          this.postfx.triggerDistort(0.3);
+
           // Brief slow-mo on close calls for dramatic effect
           this.slowMoFactor = 0.3;
           this.slowMoTimer = 0.15;
@@ -1082,6 +1085,29 @@ export class Game {
 
     // Tutorial
     this.tutorial.update(dt, moveX, shatterInput, this.wasShattered);
+  }
+
+  /**
+   * Piecewise speed curve — each biome has its own ramp.
+   * Distances match biome boundaries in biomes.ts.
+   */
+  private computeSpeed(distance: number): number {
+    if (distance < 300) {
+      // THE VOID: 12 → 20 (gentle warm-up)
+      return 12 + (distance / 300) * 8;
+    } else if (distance < 700) {
+      // CRYSTAL CAVES: 20 → 30 (moderate ramp)
+      return 20 + ((distance - 300) / 400) * 10;
+    } else if (distance < 1200) {
+      // NEON DISTRICT: 30 → 38 (full speed ramp)
+      return 30 + ((distance - 700) / 500) * 8;
+    } else if (distance < 1800) {
+      // SOLAR STORM: 38 → 43 (dense and fast)
+      return 38 + ((distance - 1200) / 600) * 5;
+    } else {
+      // COSMIC RIFT: 43 → 45 (maximum challenge)
+      return Math.min(MAX_SPEED, 43 + ((distance - 1800) / 500) * 2);
+    }
   }
 
   private updatePowerUpHUD() {
