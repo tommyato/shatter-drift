@@ -12,6 +12,7 @@ import { clamp, ScreenShake } from "./utils";
 import { BiomeManager } from "./biomes";
 import { PowerUpManager, PowerUpType } from "./powerups";
 import { MilestoneTracker } from "./milestones";
+import { BossWaveManager } from "./bosswaves";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -134,6 +135,7 @@ export class Game {
   private biomes!: BiomeManager;
   private powerups!: PowerUpManager;
   private milestones!: MilestoneTracker;
+  private bossWaves!: BossWaveManager;
 
   // Lights (for biome transitions)
   private ambientLight!: THREE.AmbientLight;
@@ -177,6 +179,7 @@ export class Game {
   private centerRetry!: HTMLElement;
   private titleHighScore!: HTMLElement;
   private hudPowerUp!: HTMLElement;
+  private hudBossWarning!: HTMLElement;
 
   // Autopilot & recording
   private autopilot: Autopilot | null = null;
@@ -250,6 +253,9 @@ export class Game {
     // Power-ups
     this.powerups = new PowerUpManager(this.scene);
 
+    // Boss waves
+    this.bossWaves = new BossWaveManager(this.scene, this.biomes);
+
     // Milestones
     this.milestones = new MilestoneTracker();
 
@@ -275,6 +281,7 @@ export class Game {
     this.centerRetry = document.getElementById("center-retry")!;
     this.titleHighScore = document.getElementById("title-high-score")!;
     this.hudPowerUp = document.getElementById("hud-powerup")!;
+    this.hudBossWarning = document.getElementById("hud-boss-warning")!;
 
     // Show high score on title
     if (this.highScore > 0) {
@@ -389,6 +396,7 @@ export class Game {
     this.biomes.reset();
     this.powerups.reset();
     this.milestones.reset();
+    this.bossWaves.reset();
 
     // Reset scene to first biome
     this.applyBiomeColors();
@@ -477,6 +485,17 @@ export class Game {
     // Update power-ups
     this.powerups.update(dt, this.playerZ, this.player.group.position.x);
 
+    // Update boss waves
+    this.bossWaves.update(dt, this.playerZ);
+
+    // Boss warning display
+    if (this.bossWaves.warningActive) {
+      this.hudBossWarning.textContent = this.bossWaves.warningText;
+      this.hudBossWarning.style.opacity = String(0.5 + Math.sin(performance.now() * 0.01) * 0.5);
+    } else {
+      this.hudBossWarning.style.opacity = "0";
+    }
+
     // Check milestones
     this.milestones.check(this.distance, this.score, this.combo, this.speed);
 
@@ -543,16 +562,24 @@ export class Game {
         this.playerZ,
         this.player.getCollisionRadius()
       );
-      if (hit) {
+      // Check boss wave collision
+      const bossHit = this.bossWaves.checkCollision(
+        this.player.group.position.x,
+        this.playerZ,
+        this.player.getCollisionRadius()
+      );
+      if (hit || bossHit) {
         // Shield absorbs one hit
         if (this.powerups.consumeShield()) {
           this.shake.trigger(0.8);
           this.screenFlash.trigger(0x44aaff, 0.3);
           playShieldBreak();
           this.player.setShieldActive(false);
-          // Remove the obstacle that was hit
-          hit.active = false;
-          hit.mesh.visible = false;
+          // Remove the regular obstacle that was hit (boss parts persist)
+          if (hit) {
+            hit.active = false;
+            hit.mesh.visible = false;
+          }
         } else {
           this.die();
           return;
@@ -577,8 +604,10 @@ export class Game {
         );
       }
     } else {
-      // Check close calls while shattered
-      if (this.world.checkCloseCall(this.player.group.position.x, this.playerZ)) {
+      // Check close calls while shattered (regular obstacles + boss parts)
+      const regularCloseCall = this.world.checkCloseCall(this.player.group.position.x, this.playerZ);
+      const bossCloseCall = this.bossWaves.checkCloseCall(this.player.group.position.x, this.playerZ);
+      if (regularCloseCall || bossCloseCall) {
         if (this.playerZ - this.lastCloseCall > 3) {
           const puMultiplier = this.powerups.getScoreMultiplier();
           this.score += CLOSE_CALL_SCORE * puMultiplier;
