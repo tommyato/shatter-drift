@@ -24,6 +24,7 @@ import { ChallengeManager } from "./challenges";
 import { WorldEventManager } from "./events";
 import { UnlockManager } from "./unlocks";
 import { AfterimageTrail } from "./afterimage";
+import { RunHistoryTracker } from "./stats";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -144,6 +145,7 @@ export class Game {
   private screenFlash!: ScreenFlash;
   private postfx!: PostFXPass;
   private afterimage!: AfterimageTrail;
+  private runHistory!: RunHistoryTracker;
 
   // New systems
   private biomes!: BiomeManager;
@@ -316,6 +318,7 @@ export class Game {
     this.worldEvents = new WorldEventManager(this.scene, this.biomes);
     this.unlocks = new UnlockManager();
     this.afterimage = new AfterimageTrail(this.scene);
+    this.runHistory = new RunHistoryTracker();
 
     // Cache HUD elements
     this.hudScore = document.getElementById("hud-score")!;
@@ -334,13 +337,20 @@ export class Game {
     this.hudBossWarning = document.getElementById("hud-boss-warning")!;
 
     // Show stats on title
-    if (this.highScore > 0) {
-      let statsText = `HIGH SCORE: ${this.highScore.toLocaleString()}`;
+    const summary = this.runHistory.getSummary();
+    if (summary.totalRuns > 0 || this.highScore > 0) {
+      const hs = Math.max(this.highScore, summary.bestScore);
+      let statsText = `HIGH SCORE: ${hs.toLocaleString()}`;
       if (this.bestGrade) statsText += ` | BEST: ${this.bestGrade}`;
-      if (this.bestDistance > 0) statsText += ` | ${this.bestDistance.toLocaleString()}m`;
-      if (this.totalRuns > 0) statsText += ` | RUNS: ${this.totalRuns}`;
+      const bd = Math.max(this.bestDistance, summary.bestDistance);
+      if (bd > 0) statsText += ` | ${bd.toLocaleString()}m`;
+      const runs = Math.max(this.totalRuns, summary.totalRuns);
+      if (runs > 0) statsText += ` | RUNS: ${runs}`;
+      if (summary.avgScore > 0) statsText += ` | AVG: ${summary.avgScore.toLocaleString()}`;
       const cStats = this.challenges.getStats();
       if (cStats.completed > 0) statsText += ` | ★ ${cStats.completed}/${cStats.total}`;
+      const trendIcon = summary.recentTrend === "up" ? " ↑" : summary.recentTrend === "down" ? " ↓" : "";
+      if (trendIcon) statsText += trendIcon;
       this.titleHighScore.textContent = statsText;
     }
 
@@ -1167,6 +1177,52 @@ export class Game {
       localStorage.setItem("shatterDriftBestGrade", this.bestGrade);
     }
 
+    // Record run in history and get comparison
+    const comparison = this.runHistory.recordRun({
+      score: this.score,
+      distance: this.distance,
+      maxCombo: this.maxCombo,
+      closeCallCount: this.closeCallCount,
+      topSpeed: Math.floor(this.speed),
+      biomeIndex: this.biomes.biomeIndex,
+      grade: grade.label,
+      timestamp: Date.now(),
+    });
+
+    // Build personal best indicators
+    const pbIndicators: string[] = [];
+    if (!comparison.isFirstRun) {
+      if (comparison.newBestScore) pbIndicators.push("🏆 BEST SCORE");
+      if (comparison.newBestDistance) pbIndicators.push("📏 BEST DISTANCE");
+      if (comparison.newBestCombo) pbIndicators.push("🔥 BEST COMBO");
+      if (comparison.newBestSpeed) pbIndicators.push("⚡ BEST SPEED");
+      if (comparison.newBestBiome) pbIndicators.push("🌍 NEW ZONE");
+    }
+    const pbLine = pbIndicators.length > 0
+      ? `<div style="color:#ffcc00;font-size:11px;margin:6px 0;letter-spacing:1px">${pbIndicators.join(" • ")}</div>`
+      : "";
+
+    // Improvement/comparison line
+    let compLine = "";
+    if (!comparison.isFirstRun && comparison.previousBest !== null) {
+      if (comparison.newBestScore && comparison.improvementPct > 0) {
+        compLine = `<div style="color:#00ff88;font-size:11px">↑ ${comparison.improvementPct}% improvement!</div>`;
+      } else if (comparison.averageScore > 0) {
+        const vsAvg = this.score >= comparison.averageScore ? "above" : "below";
+        const diff = Math.abs(this.score - comparison.averageScore);
+        compLine = `<div style="color:#8888aa;font-size:10px">${diff.toLocaleString()} ${vsAvg} your average</div>`;
+      }
+    }
+
+    // Streak line
+    let streakLine = "";
+    if (comparison.bestStreak >= 2) {
+      streakLine = `<div style="color:#ff88ff;font-size:11px">🔥 ${comparison.bestStreak} run improvement streak!</div>`;
+    }
+
+    // Run count line
+    const runLine = `<div style="color:#666688;font-size:10px;margin-top:4px">Run #${comparison.runNumber}</div>`;
+
     // Show game over with more stats
     this.state = GameState.GameOver;
     this.centerTitle!.textContent = "SHATTERED";
@@ -1179,15 +1235,27 @@ export class Game {
       Close Calls: ${this.closeCallCount}<br>
       Zone: ${this.biomes.currentBiome.displayName}<br>
       <span style="color:#ffcc00;font-size:12px">Challenges: ${challengeStats.completed}/${challengeStats.total}</span><br>
+      ${pbLine}
+      ${compLine}
+      ${streakLine}
       ${isNewHighScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore.toLocaleString()}`}
+      ${runLine}
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
     this.centerMessage.style.opacity = "1";
 
-    // Death popup
+    // Death popup — show the most exciting achievement
     if (isNewHighScore) {
       setTimeout(() => {
         this.popups.showCenter("NEW HIGH SCORE!", this.score.toLocaleString(), "#ffcc00");
+      }, 500);
+    } else if (comparison.bestStreak >= 3) {
+      setTimeout(() => {
+        this.popups.showCenter(`${comparison.bestStreak} RUN STREAK!`, "KEEP GOING", "#ff88ff");
+      }, 500);
+    } else if (pbIndicators.length >= 2) {
+      setTimeout(() => {
+        this.popups.showCenter("PERSONAL BESTS!", `${pbIndicators.length} NEW RECORDS`, "#00ffcc");
       }, 500);
     }
 
