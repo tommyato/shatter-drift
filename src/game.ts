@@ -6,6 +6,7 @@ import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash } from "./effects";
 import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, stopAudio } from "./audio";
 import { Autopilot } from "./autopilot";
+import { GameRecorder } from "./recorder";
 import { clamp } from "./utils";
 
 enum GameState {
@@ -66,8 +67,9 @@ export class Game {
   private centerRetry!: HTMLElement;
   private titleHighScore!: HTMLElement;
 
-  // Autopilot
+  // Autopilot & recording
   private autopilot: Autopilot | null = null;
+  private recorder: GameRecorder | null = null;
   private demoMode = false;
 
   // Camera offset
@@ -183,6 +185,9 @@ export class Game {
     // Render with bloom
     this.composer.render();
 
+    // Update recorder
+    this.recorder?.update();
+
     this.input.endFrame();
   }
 
@@ -229,6 +234,13 @@ export class Game {
     // Position camera behind player
     this.camera.position.set(0, 3, -6);
     this.camera.lookAt(0, 0, 10);
+
+    // Start recording if in record mode (slight delay to skip title transition)
+    if (this.recorder && !this.recorder.isRecording) {
+      setTimeout(() => {
+        this.recorder?.start(this.renderer.domElement);
+      }, 500);
+    }
   }
 
   private updatePlaying(dt: number) {
@@ -428,9 +440,14 @@ export class Game {
     const params = new URLSearchParams(window.location.search);
     const isPortal = params.get("portal") === "true";
     this.demoMode = params.get("demo") === "true";
+    const shouldRecord = params.get("record") === "true";
+    const recordDuration = parseInt(params.get("duration") || "15", 10);
 
     if (this.demoMode) {
       this.autopilot = new Autopilot();
+      if (shouldRecord) {
+        this.recorder = new GameRecorder(recordDuration);
+      }
       this.startGame();
     } else if (isPortal) {
       this.startGame();
