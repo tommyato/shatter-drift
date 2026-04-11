@@ -16,6 +16,7 @@ import { BossWaveManager } from "./bosswaves";
 import { ScorePopups } from "./popups";
 import { ShockwaveEffect } from "./shockwave";
 import { EnvironmentParticles } from "./environment";
+import { Tutorial } from "./tutorial";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -143,6 +144,7 @@ export class Game {
   private popups!: ScorePopups;
   private shockwave!: ShockwaveEffect;
   private envParticles!: EnvironmentParticles;
+  private tutorial!: Tutorial;
 
   // Lights (for biome transitions)
   private ambientLight!: THREE.AmbientLight;
@@ -288,6 +290,7 @@ export class Game {
     this.popups = new ScorePopups();
     this.shockwave = new ShockwaveEffect(this.scene);
     this.envParticles = new EnvironmentParticles(this.scene, this.biomes);
+    this.tutorial = new Tutorial();
 
     // Cache HUD elements
     this.hudScore = document.getElementById("hud-score")!;
@@ -436,6 +439,11 @@ export class Game {
     this.hud.classList.remove("hidden");
     this.titleOverlay.classList.add("hidden");
     this.centerMessage.style.opacity = "0";
+
+    // Tutorial for first-time players
+    if (!this.demoMode) {
+      this.tutorial.startIfNeeded();
+    }
 
     // Position camera behind player
     this.camera.position.set(0, 3, -6);
@@ -812,6 +820,9 @@ export class Game {
       this.hudState.textContent = "SOLID";
       this.hudState.className = "whole";
     }
+
+    // Tutorial
+    this.tutorial.update(dt, moveX, shatterInput, this.wasShattered);
   }
 
   private updatePowerUpHUD() {
