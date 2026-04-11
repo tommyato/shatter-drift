@@ -85,6 +85,51 @@ export class Input {
     window.addEventListener("blur", () => {
       this.keys.clear();
     });
+
+    // --- Touch controls ---
+    // Left half = move left/right via drag; tap anywhere = shatter
+    this.initTouch(canvas);
+  }
+
+  // Touch state
+  private touchStartX = 0;
+  private touchCurrentX = 0;
+  private touching = false;
+  private touchMoveX = 0;
+
+  private initTouch(canvas: HTMLCanvasElement) {
+    canvas.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      this.touchStartX = touch.clientX;
+      this.touchCurrentX = touch.clientX;
+      this.touching = true;
+      // Touch = shatter (like holding click)
+      this.keys.add("click");
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+      if (!this.touching) return;
+      const touch = e.touches[0];
+      this.touchCurrentX = touch.clientX;
+      // Map horizontal drag to movement: 80px = full input
+      this.touchMoveX = (this.touchCurrentX - this.touchStartX) / 80;
+      this.touchMoveX = Math.max(-1, Math.min(1, this.touchMoveX));
+    }, { passive: false });
+
+    canvas.addEventListener("touchend", (e) => {
+      e.preventDefault();
+      this.touching = false;
+      this.touchMoveX = 0;
+      this.keys.delete("click");
+    }, { passive: false });
+
+    canvas.addEventListener("touchcancel", () => {
+      this.touching = false;
+      this.touchMoveX = 0;
+      this.keys.delete("click");
+    });
   }
 
   /** Call at the start of each frame */
@@ -131,7 +176,7 @@ export class Input {
     return keys.some((k) => this.isDown(k));
   }
 
-  /** Get a movement vector from WASD/arrow keys. Returns {x, y} normalized. */
+  /** Get a movement vector from WASD/arrow keys + touch drag. Returns {x, y} normalized. */
   getMovement(): { x: number; y: number } {
     let x = 0;
     let y = 0;
@@ -139,11 +184,15 @@ export class Input {
     if (this.isDown("s") || this.isDown("arrowdown")) y -= 1;
     if (this.isDown("a") || this.isDown("arrowleft")) x -= 1;
     if (this.isDown("d") || this.isDown("arrowright")) x += 1;
-    // Normalize diagonal
+    // Normalize diagonal (keyboard only)
     const len = Math.sqrt(x * x + y * y);
     if (len > 0) {
       x /= len;
       y /= len;
+    }
+    // Blend touch input (overrides keyboard if touching)
+    if (this.touching) {
+      x = this.touchMoveX;
     }
     return { x, y };
   }
