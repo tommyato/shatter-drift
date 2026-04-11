@@ -171,11 +171,17 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
       z-index: 20;
       pointer-events: auto;
       overflow-y: auto;
       padding: 20px 0;
+    }
+    /* Flex spacers center content when it fits, but collapse when it overflows
+       so the top isn't pushed off screen (unlike justify-content: center) */
+    #title-overlay::before,
+    #title-overlay::after {
+      content: '';
+      flex: 1 0 0px;
     }
 
     #title-overlay h1 {

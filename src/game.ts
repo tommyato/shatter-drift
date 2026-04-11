@@ -697,7 +697,7 @@ export class Game {
       shatterInput = ai.shatter;
     } else {
       const move = this.input.getMovement();
-      moveX = -move.x; // negate X: camera faces +Z so screen-right = world -X
+      moveX = move.x;
       shatterInput = this.input.isDown("space") || this.input.isDown("click");
     }
 
@@ -1174,14 +1174,18 @@ export class Game {
       this.playerZ + this.cameraOffset.z
     );
     this.camera.position.lerp(targetCamPos, 1 - Math.exp(-5 * dt));
-    // Keep up vector constant, apply roll via rotation.z after lookAt
+    // Keep up vector constant, apply roll via quaternion to avoid Euler gimbal ambiguity
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(
       this.player.group.position.x * 0.5,
       0.5,
       this.playerZ + 15
     );
-    this.camera.rotation.z = this.cameraRoll;
+    // rotateZ applies roll around the camera's local Z (view axis) using quaternions,
+    // bypassing the Euler decomposition that can flip the world when facing +Z
+    if (Math.abs(this.cameraRoll) > 0.0001) {
+      this.camera.rotateZ(this.cameraRoll);
+    }
 
     // Screen shake
     this.shake.apply(this.camera, dt);
