@@ -176,11 +176,19 @@ export class PowerUpManager {
       }
     }
 
-    // Despawn
-    for (const pu of this.powerups) {
+    // Despawn and cleanup
+    for (let i = this.powerups.length - 1; i >= 0; i--) {
+      const pu = this.powerups[i];
       if (pu.active && pu.z < playerZ + DESPAWN_DISTANCE) {
         pu.active = false;
-        pu.mesh.visible = false;
+        this.scene.remove(pu.mesh);
+        pu.mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+        this.powerups.splice(i, 1);
       }
     }
 
@@ -218,7 +226,8 @@ export class PowerUpManager {
   }
 
   checkCollection(playerX: number, playerZ: number, radius: number): PowerUp | null {
-    for (const pu of this.powerups) {
+    for (let i = this.powerups.length - 1; i >= 0; i--) {
+      const pu = this.powerups[i];
       if (!pu.active || pu.collected) continue;
       const dx = playerX - pu.x;
       const dz = playerZ - pu.z;
@@ -226,7 +235,14 @@ export class PowerUpManager {
       if (dist < radius + 0.5) {
         pu.collected = true;
         pu.active = false;
-        pu.mesh.visible = false;
+        this.scene.remove(pu.mesh);
+        pu.mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+        this.powerups.splice(i, 1);
         return pu;
       }
     }

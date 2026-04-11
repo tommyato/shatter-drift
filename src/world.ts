@@ -63,6 +63,7 @@ export class World {
   private nextPortalZ = PORTAL_INTERVAL;
   private nextMarkerZ = 100; // distance markers every 100m
   private difficulty = 0; // 0-1, increases over time
+  private cleanupTimer = 0; // periodic cleanup of inactive objects
 
   // Starfield
   private starfield!: THREE.Points;
@@ -223,6 +224,71 @@ export class World {
     this.floorMats.push(mat);
   }
 
+  /** Remove inactive objects from arrays and dispose their Three.js resources */
+  private cleanupInactive() {
+    // Obstacles
+    for (let i = this.obstacles.length - 1; i >= 0; i--) {
+      const obs = this.obstacles[i];
+      if (!obs.active) {
+        this.scene.remove(obs.mesh);
+        if (obs.mesh instanceof THREE.Mesh) {
+          obs.mesh.geometry.dispose();
+          (obs.mesh.material as THREE.Material).dispose();
+        } else if (obs.mesh instanceof THREE.Group) {
+          obs.mesh.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.geometry.dispose();
+              (child.material as THREE.Material).dispose();
+            }
+            if (child instanceof THREE.LineSegments) {
+              child.geometry.dispose();
+              (child.material as THREE.Material).dispose();
+            }
+          });
+        }
+        this.obstacles.splice(i, 1);
+      }
+    }
+    // Orbs
+    for (let i = this.orbs.length - 1; i >= 0; i--) {
+      if (!this.orbs[i].active) {
+        const orb = this.orbs[i];
+        this.scene.remove(orb.mesh);
+        orb.mesh.geometry.dispose();
+        (orb.mesh.material as THREE.Material).dispose();
+        this.orbs.splice(i, 1);
+      }
+    }
+    // Portals
+    for (let i = this.portals.length - 1; i >= 0; i--) {
+      if (!this.portals[i].active) {
+        const portal = this.portals[i];
+        this.scene.remove(portal.group);
+        portal.group.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+        this.portals.splice(i, 1);
+      }
+    }
+    // Markers
+    for (let i = this.markers.length - 1; i >= 0; i--) {
+      if (!this.markers[i].active) {
+        const marker = this.markers[i];
+        this.scene.remove(marker.group);
+        marker.group.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+        this.markers.splice(i, 1);
+      }
+    }
+  }
+
   setDifficulty(d: number) {
     this.difficulty = THREE.MathUtils.clamp(d, 0, 1);
   }
@@ -328,6 +394,13 @@ export class World {
       }
     }
 
+    // Periodic cleanup — remove inactive objects from arrays and scene to prevent memory growth
+    this.cleanupTimer += dt;
+    if (this.cleanupTimer > 3) { // every 3 seconds
+      this.cleanupTimer = 0;
+      this.cleanupInactive();
+    }
+
     // Move tunnel walls and floor with player
     for (const wall of this.tunnelWalls) {
       wall.position.z = playerZ;
@@ -352,9 +425,11 @@ export class World {
       const baseOpacity = this.biomes.colors.gridOpacity;
       this.gridMats[i].opacity = baseOpacity + proximityGlow * 0.15;
     }
-    // Vertical lines scroll with player
+    // Vertical lines scroll with player + update base opacity
+    const baseOpacityV = this.biomes.colors.gridOpacity * 0.5; // vertical lines subtler
     for (let i = horizontalLineCount; i < this.gridLines.length; i++) {
       this.gridLines[i].position.z = playerZ - totalGridLength / 2;
+      this.gridMats[i].opacity = baseOpacityV;
     }
 
     // Move starfield with player (parallax)
@@ -364,22 +439,26 @@ export class World {
     this.updateBiomeVisuals();
   }
 
+  private lastStarTint: [number, number, number] = [0, 0, 0];
+
   private updateBiomeVisuals() {
     const c = this.biomes.colors;
 
-    // Star tint
+    // Star tint — only update when tint actually changes (saves iterating 2000 stars every frame)
     const tint = c.starTint;
-    for (let i = 0; i < this.starBaseColors.length / 3; i++) {
-      this.starColors[i * 3] = this.starBaseColors[i * 3] * tint[0];
-      this.starColors[i * 3 + 1] = this.starBaseColors[i * 3 + 1] * tint[1];
-      this.starColors[i * 3 + 2] = this.starBaseColors[i * 3 + 2] * tint[2];
+    if (tint[0] !== this.lastStarTint[0] || tint[1] !== this.lastStarTint[1] || tint[2] !== this.lastStarTint[2]) {
+      this.lastStarTint = [tint[0], tint[1], tint[2]];
+      for (let i = 0; i < this.starBaseColors.length / 3; i++) {
+        this.starColors[i * 3] = this.starBaseColors[i * 3] * tint[0];
+        this.starColors[i * 3 + 1] = this.starBaseColors[i * 3 + 1] * tint[1];
+        this.starColors[i * 3 + 2] = this.starBaseColors[i * 3 + 2] * tint[2];
+      }
+      (this.starfield.geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
     }
-    (this.starfield.geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
 
-    // Grid lines
+    // Grid lines — only update color, NOT opacity (proximity glow is set in update())
     for (const mat of this.gridMats) {
       mat.color.setHex(c.gridColor);
-      mat.opacity = c.gridOpacity;
     }
 
     // Tunnel walls — tint with biome edge color

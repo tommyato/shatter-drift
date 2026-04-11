@@ -84,10 +84,27 @@ export class BossWaveManager {
         this.animatePart(part, wave.timer, dt);
       }
 
-      // Despawn far behind
+      // Despawn far behind — remove from scene and dispose
       if (wave.z < playerZ - 20) {
         wave.active = false;
-        wave.group.visible = false;
+        this.scene.remove(wave.group);
+        wave.group.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+          if (child instanceof THREE.LineSegments) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+      }
+    }
+
+    // Cleanup inactive waves from array
+    for (let i = this.waves.length - 1; i >= 0; i--) {
+      if (!this.waves[i].active) {
+        this.waves.splice(i, 1);
       }
     }
 
