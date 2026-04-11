@@ -38,6 +38,8 @@
       font-weight: 700;
       color: #00ffcc;
       text-shadow: 0 0 20px rgba(0,255,204,0.5);
+      transition: transform 0.1s ease-out;
+      transform-origin: right top;
     }
 
     #hud-distance {
@@ -62,10 +64,12 @@
       top: 80px;
       right: 28px;
       font-size: 20px;
+      font-weight: 700;
       color: #ffcc00;
       text-shadow: 0 0 15px rgba(255,204,0,0.5);
       opacity: 0;
-      transition: opacity 0.15s;
+      transition: opacity 0.15s, transform 0.15s ease-out, text-shadow 0.15s;
+      transform-origin: right top;
     }
 
     #hud-state-indicator {

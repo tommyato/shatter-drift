@@ -602,6 +602,11 @@ export class Game {
         this.collectFlash.trigger(
           new THREE.Vector3(orb.x, orb.y, orb.z)
         );
+        // Score flash effect on big combos
+        if (this.combo >= 5) {
+          this.hudScore.style.transform = "scale(1.2)";
+          setTimeout(() => { this.hudScore.style.transform = "scale(1)"; }, 100);
+        }
       }
     } else {
       // Check close calls while shattered (regular obstacles + boss parts)
@@ -619,6 +624,12 @@ export class Game {
           // Brief slow-mo on close calls for dramatic effect
           this.slowMoFactor = 0.3;
           this.slowMoTimer = 0.15;
+
+          // Particle burst at close call location
+          this.trail.emit(
+            new THREE.Vector3(this.player.group.position.x, 0.5, this.playerZ),
+            8, 2.0
+          );
         }
       }
       // Shattering breaks combo (unless HyperPhase is active)
@@ -656,10 +667,16 @@ export class Game {
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
 
     if (this.combo > 1) {
-      this.hudCombo.textContent = `x${Math.min(this.combo, COMBO_MAX)}`;
+      const comboVal = Math.min(this.combo, COMBO_MAX);
+      this.hudCombo.textContent = `x${comboVal}`;
       this.hudCombo.style.opacity = "1";
+      // Scale and glow based on combo level
+      const comboScale = 1 + comboVal * 0.05;
+      this.hudCombo.style.transform = `scale(${comboScale})`;
+      this.hudCombo.style.textShadow = `0 0 ${10 + comboVal * 3}px rgba(255,204,0,${0.3 + comboVal * 0.07})`;
     } else {
       this.hudCombo.style.opacity = "0";
+      this.hudCombo.style.transform = "scale(1)";
     }
 
     // Power-up HUD
