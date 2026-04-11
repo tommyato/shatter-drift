@@ -396,6 +396,26 @@
       to { opacity: 1; transform: translateY(0); }
     }
 
+    /* Pause menu */
+    #pause-menu {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      z-index: 35;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,5,10,0.85);
+      backdrop-filter: blur(6px);
+      pointer-events: auto;
+    }
+    #pause-menu.hidden { display: none; }
+    #pause-resume:hover {
+      color: #00ffcc;
+      border-color: #00ffcc;
+      text-shadow: 0 0 10px rgba(0,255,204,0.3);
+    }
+
     /* Show desktop/mobile controls based on device */
     .controls-mobile, .prompt-mobile { display: none; }
     @media (hover: none) and (pointer: coarse) {
@@ -460,6 +480,24 @@
         <div class="cosmetic-grid" id="trail-grid"></div>
       </div>
       <div id="customize-back">BACK</div>
+    </div>
+
+    <!-- Pause menu -->
+    <div id="pause-menu" class="hidden">
+      <h2 style="font-family:'Orbitron',monospace;font-size:28px;color:#00ffcc;letter-spacing:6px;margin-bottom:32px;text-shadow:0 0 20px rgba(0,255,204,0.3)">PAUSED</h2>
+      <div style="margin-bottom:24px;text-align:center">
+        <div style="font-family:'Orbitron',monospace;font-size:11px;color:#668899;letter-spacing:2px;margin-bottom:8px">VOLUME</div>
+        <input id="pause-volume" type="range" min="0" max="100" style="
+          width:200px;accent-color:#00ffcc;cursor:pointer;
+        ">
+      </div>
+      <div id="pause-resume" style="
+        font-family:'Orbitron',monospace;font-size:16px;color:#ffcc00;
+        cursor:pointer;padding:12px 40px;border:1px solid #334455;
+        border-radius:4px;background:rgba(0,20,30,0.5);
+        transition:all 0.3s;letter-spacing:3px;text-align:center;
+      ">RESUME</div>
+      <div style="font-family:'Orbitron',monospace;font-size:10px;color:#334455;margin-top:16px;letter-spacing:1px">PRESS ESC TO RESUME</div>
     </div>
   </div>
 

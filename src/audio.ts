@@ -30,6 +30,9 @@ export function initAudio() {
   if (initialized) return;
   initialized = true;
   const c = ensureContext();
+  // Apply saved volume
+  const savedVol = getMasterVolume();
+  if (masterGain) masterGain.gain.value = savedVol * 0.5;
 
   // Ambient drone — low oscillator
   droneOsc = c.createOscillator();
@@ -498,6 +501,19 @@ export function playWorldEvent() {
 }
 
 /** Stop all audio (cleanup) */
+/** Set master volume (0-1). Persists to localStorage. */
+export function setMasterVolume(vol: number) {
+  const v = Math.max(0, Math.min(1, vol));
+  if (masterGain) masterGain.gain.value = v * 0.5; // 0.5 is the base max
+  localStorage.setItem("shatterDriftVolume", String(v));
+}
+
+/** Get saved volume (0-1) */
+export function getMasterVolume(): number {
+  const saved = localStorage.getItem("shatterDriftVolume");
+  return saved !== null ? parseFloat(saved) : 1;
+}
+
 export function stopAudio() {
   if (!ctx) return;
   droneGain?.gain.setTargetAtTime(0, ctx.currentTime, 0.1);

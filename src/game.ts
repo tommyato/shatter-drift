@@ -6,7 +6,7 @@ import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
 import { PostFXPass } from "./postfx";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, stopAudio, startMusic, updateMusic, fadeOutMusic } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { clamp, ScreenShake } from "./utils";
@@ -111,6 +111,7 @@ class ScreenFlash {
 enum GameState {
   Title,
   Playing,
+  Paused,
   GameOver,
 }
 
@@ -212,6 +213,7 @@ export class Game {
   private hudBossWarning!: HTMLElement;
   private customizePanel!: HTMLElement;
   private customizeOpen = false;
+  private pauseMenu!: HTMLElement;
 
   // Persistent stats
   private totalRuns = 0;
@@ -341,6 +343,10 @@ export class Game {
     this.hudPowerUp = document.getElementById("hud-powerup")!;
     this.hudBossWarning = document.getElementById("hud-boss-warning")!;
     this.customizePanel = document.getElementById("customize-panel")!;
+    this.pauseMenu = document.getElementById("pause-menu")!;
+
+    // Pause menu
+    this.initPauseMenu();
 
     // Customize UI
     this.initCustomizePanel();
@@ -368,6 +374,46 @@ export class Game {
 
     // Handle Vibeverse portal arrival
     this.handlePortalArrival();
+  }
+
+  private initPauseMenu() {
+    const volumeSlider = document.getElementById("pause-volume") as HTMLInputElement;
+    const resumeBtn = document.getElementById("pause-resume")!;
+
+    // Set initial volume
+    volumeSlider.value = String(Math.round(getMasterVolume() * 100));
+
+    volumeSlider.addEventListener("input", () => {
+      setMasterVolume(parseInt(volumeSlider.value) / 100);
+    });
+
+    resumeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.resumeGame();
+    });
+
+    // ESC to pause/resume
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        if (this.state === GameState.Playing) {
+          this.pauseGame();
+        } else if (this.state === GameState.Paused) {
+          this.resumeGame();
+        }
+      }
+    });
+  }
+
+  private pauseGame() {
+    this.state = GameState.Paused;
+    this.pauseMenu.classList.remove("hidden");
+  }
+
+  private resumeGame() {
+    this.state = GameState.Playing;
+    this.pauseMenu.classList.add("hidden");
+    // Reset clock delta so we don't get a huge dt spike
+    this.clock.getDelta();
   }
 
   private initCustomizePanel() {
@@ -491,6 +537,9 @@ export class Game {
         break;
       case GameState.Playing:
         this.updatePlaying(dt);
+        break;
+      case GameState.Paused:
+        // Frozen — only render, don't update game logic
         break;
       case GameState.GameOver:
         this.updateGameOver(dt);
