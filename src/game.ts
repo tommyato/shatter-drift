@@ -4,7 +4,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { Input } from "./input";
 import { Player } from "./player";
 import { World } from "./world";
-import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash } from "./effects";
+import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
 import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, stopAudio, startMusic, updateMusic, fadeOutMusic } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
@@ -13,6 +13,9 @@ import { BiomeManager } from "./biomes";
 import { PowerUpManager, PowerUpType } from "./powerups";
 import { MilestoneTracker } from "./milestones";
 import { BossWaveManager } from "./bosswaves";
+import { ScorePopups } from "./popups";
+import { ShockwaveEffect } from "./shockwave";
+import { EnvironmentParticles } from "./environment";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -126,6 +129,7 @@ export class Game {
   private trail!: ParticleTrail;
   private explosion!: ExplosionEffect;
   private collectFlash!: CollectFlash;
+  private debris!: DebrisBurst;
   private shake = new ScreenShake();
   private speedLines!: SpeedLines;
   private vignette!: Vignette;
@@ -136,6 +140,9 @@ export class Game {
   private powerups!: PowerUpManager;
   private milestones!: MilestoneTracker;
   private bossWaves!: BossWaveManager;
+  private popups!: ScorePopups;
+  private shockwave!: ShockwaveEffect;
+  private envParticles!: EnvironmentParticles;
 
   // Lights (for biome transitions)
   private ambientLight!: THREE.AmbientLight;
@@ -155,6 +162,9 @@ export class Game {
   private lastCloseCall = -10;
   private wasShattered = false;
   private closeCallCount = 0;
+  private phaseStreak = 0; // consecutive close calls without recombining
+  private deathSlowMo = false;
+  private deathSlowMoTimer = 0;
 
   // Camera juice
   private baseFOV = 70;
@@ -181,6 +191,11 @@ export class Game {
   private hudPowerUp!: HTMLElement;
   private hudBossWarning!: HTMLElement;
 
+  // Persistent stats
+  private totalRuns = 0;
+  private bestGrade = "";
+  private bestDistance = 0;
+
   // Autopilot & recording
   private autopilot: Autopilot | null = null;
   private recorder: GameRecorder | null = null;
@@ -196,8 +211,11 @@ export class Game {
   }
 
   private init() {
-    // Load high score
+    // Load persistent stats
     this.highScore = parseInt(localStorage.getItem("shatterDriftHighScore") || "0", 10);
+    this.totalRuns = parseInt(localStorage.getItem("shatterDriftTotalRuns") || "0", 10);
+    this.bestGrade = localStorage.getItem("shatterDriftBestGrade") || "";
+    this.bestDistance = parseInt(localStorage.getItem("shatterDriftBestDistance") || "0", 10);
 
     // Init Three.js
     const container = document.getElementById("game-container")!;
@@ -263,9 +281,13 @@ export class Game {
     this.trail = new ParticleTrail(this.scene, 0x00ffcc);
     this.explosion = new ExplosionEffect(this.scene);
     this.collectFlash = new CollectFlash(this.scene);
+    this.debris = new DebrisBurst(this.scene);
     this.speedLines = new SpeedLines();
     this.vignette = new Vignette();
     this.screenFlash = new ScreenFlash();
+    this.popups = new ScorePopups();
+    this.shockwave = new ShockwaveEffect(this.scene);
+    this.envParticles = new EnvironmentParticles(this.scene, this.biomes);
 
     // Cache HUD elements
     this.hudScore = document.getElementById("hud-score")!;
@@ -283,9 +305,13 @@ export class Game {
     this.hudPowerUp = document.getElementById("hud-powerup")!;
     this.hudBossWarning = document.getElementById("hud-boss-warning")!;
 
-    // Show high score on title
+    // Show stats on title
     if (this.highScore > 0) {
-      this.titleHighScore.textContent = `HIGH SCORE: ${this.highScore}`;
+      let statsText = `HIGH SCORE: ${this.highScore.toLocaleString()}`;
+      if (this.bestGrade) statsText += ` | BEST: ${this.bestGrade}`;
+      if (this.bestDistance > 0) statsText += ` | ${this.bestDistance.toLocaleString()}m`;
+      if (this.totalRuns > 0) statsText += ` | RUNS: ${this.totalRuns}`;
+      this.titleHighScore.textContent = statsText;
     }
 
     // Resize
@@ -329,8 +355,12 @@ export class Game {
     this.trail.update(dt);
     this.explosion.update(dt);
     this.collectFlash.update(dt);
+    this.debris.update(dt);
     this.screenFlash.update(dt);
     this.milestones.update(dt);
+    this.popups.update(dt);
+    this.shockwave.update(dt);
+    this.envParticles.update(dt, this.playerZ);
 
     // Camera FOV interpolation
     this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, this.targetFOV, 1 - Math.exp(-3 * dt));
@@ -382,6 +412,7 @@ export class Game {
     this.playerZ = 0;
     this.playTime = 0;
     this.closeCallCount = 0;
+    this.phaseStreak = 0;
     this.player.laneX = 0;
     this.player.shattered = false;
     this.slowMoFactor = 1;
@@ -460,7 +491,11 @@ export class Game {
 
     // Shatter/recombine audio triggers
     if (shatterInput && !this.wasShattered) playShatter();
-    if (!shatterInput && this.wasShattered) playRecombine();
+    if (!shatterInput && this.wasShattered) {
+      playRecombine();
+      // Reset phase streak when recombining
+      if (this.phaseStreak > 0) this.phaseStreak = 0;
+    }
     this.wasShattered = shatterInput;
 
     // Update player
@@ -479,6 +514,12 @@ export class Game {
       this.milestones.showBiomeAnnouncement(this.biomes.currentBiome.displayName);
       playBiomeTransition();
       this.shake.trigger(0.3);
+      // Epic shockwave on biome transition
+      this.shockwave.trigger(
+        new THREE.Vector3(this.player.group.position.x, 0, this.playerZ),
+        this.biomes.colors.playerTrail, 15, 1.0
+      );
+      this.screenFlash.trigger(this.biomes.colors.playerTrail, 0.25);
     }
     this.applyBiomeColors();
 
@@ -546,6 +587,18 @@ export class Game {
       this.milestones.showPowerUpAnnouncement(
         collectedPU.type.toUpperCase()
       );
+      // Shockwave on power-up collection
+      this.shockwave.trigger(
+        new THREE.Vector3(this.player.group.position.x, 0, this.playerZ),
+        config.color, 5, 0.6
+      );
+      // Score popup for power-up
+      const puLabel = collectedPU.type.toUpperCase();
+      const colorHex = "#" + config.color.toString(16).padStart(6, "0");
+      this.popups.showAt3D(
+        puLabel, this.player.group.position.x, this.playerZ, this.camera,
+        colorHex, 28
+      );
     }
 
     // Magnet effect — attract orbs when magnet is active
@@ -597,15 +650,35 @@ export class Game {
         if (this.combo > this.maxCombo) this.maxCombo = this.combo;
         const multiplier = Math.min(this.combo, COMBO_MAX);
         const puMultiplier = this.powerups.getScoreMultiplier();
-        this.score += ORB_SCORE * multiplier * puMultiplier;
+        const orbPoints = ORB_SCORE * multiplier * puMultiplier;
+        this.score += orbPoints;
         playCollect(this.combo);
         this.collectFlash.trigger(
           new THREE.Vector3(orb.x, orb.y, orb.z)
         );
+
+        // Floating score popup
+        const comboLabel = this.combo > 1 ? ` x${Math.min(this.combo, COMBO_MAX)}` : "";
+        const popupColor = this.combo >= 8 ? "#ff4444" : this.combo >= 5 ? "#ffaa00" : "#ffcc00";
+        const popupSize = Math.min(14 + this.combo * 2, 30);
+        this.popups.showAt3D(
+          `+${orbPoints}${comboLabel}`,
+          orb.x, orb.z, this.camera,
+          popupColor, popupSize
+        );
+
         // Score flash effect on big combos
         if (this.combo >= 5) {
           this.hudScore.style.transform = "scale(1.2)";
           setTimeout(() => { this.hudScore.style.transform = "scale(1)"; }, 100);
+        }
+
+        // Shockwave ring at x5+ combo
+        if (this.combo === 5 || this.combo === 10) {
+          this.shockwave.trigger(
+            new THREE.Vector3(orb.x, 0, orb.z),
+            0xffcc00, 4, 0.4
+          );
         }
       }
     } else {
@@ -614,8 +687,11 @@ export class Game {
       const bossCloseCall = this.bossWaves.checkCloseCall(this.player.group.position.x, this.playerZ);
       if (regularCloseCall || bossCloseCall) {
         if (this.playerZ - this.lastCloseCall > 3) {
+          this.phaseStreak++;
+          const streakBonus = Math.min(this.phaseStreak, 5); // up to 5x streak
           const puMultiplier = this.powerups.getScoreMultiplier();
-          this.score += CLOSE_CALL_SCORE * puMultiplier;
+          const closeCallPoints = CLOSE_CALL_SCORE * streakBonus * puMultiplier;
+          this.score += closeCallPoints;
           this.lastCloseCall = this.playerZ;
           this.closeCallCount++;
           playCloseCall();
@@ -629,6 +705,28 @@ export class Game {
           this.trail.emit(
             new THREE.Vector3(this.player.group.position.x, 0.5, this.playerZ),
             8, 2.0
+          );
+
+          // Vertical shockwave ring (through the obstacle!)
+          this.shockwave.triggerVertical(
+            new THREE.Vector3(this.player.group.position.x, 1, this.playerZ),
+            0xff44ff, 3 + streakBonus, 0.4
+          );
+
+          // Debris burst — pieces scatter as you phase through!
+          const debrisColor = this.biomes.colors.obstacleEdge;
+          this.debris.trigger(
+            new THREE.Vector3(this.player.group.position.x, 0.8, this.playerZ),
+            debrisColor, 8 + streakBonus * 3
+          );
+
+          // Score popup with streak indicator
+          const streakLabel = this.phaseStreak > 1 ? ` STREAK x${this.phaseStreak}` : "";
+          const popupColor = this.phaseStreak >= 4 ? "#ff44ff" : this.phaseStreak >= 2 ? "#aa88ff" : "#88ccff";
+          this.popups.showAt3D(
+            `+${closeCallPoints} PHASE${streakLabel}`,
+            this.player.group.position.x, this.playerZ, this.camera,
+            popupColor, 16 + streakBonus * 2
           );
         }
       }
@@ -744,31 +842,77 @@ export class Game {
     this.shake.trigger(1.5);
     this.explosion.trigger(this.player.group.position.clone());
 
+    // Death shockwave — dramatic expanding ring
+    this.shockwave.trigger(
+      this.player.group.position.clone(),
+      0xff4444, 12, 0.8
+    );
+    // Second delayed ring
+    setTimeout(() => {
+      this.shockwave.trigger(
+        this.player.group.position.clone(),
+        0xff8844, 8, 0.6
+      );
+    }, 150);
+
     // Reset speed lines + vignette
     this.speedLines.update(0);
-    this.vignette.setIntensity(0);
     this.targetCameraRoll = 0;
 
-    // Save high score
-    if (this.score > this.highScore) {
+    // Dramatic vignette on death
+    this.vignette.setIntensity(0.8);
+
+    // Screen flash red
+    this.screenFlash.trigger(0xff2222, 0.3);
+
+    // Save stats
+    this.totalRuns++;
+    localStorage.setItem("shatterDriftTotalRuns", String(this.totalRuns));
+
+    const isNewHighScore = this.score > this.highScore;
+    if (isNewHighScore) {
       this.highScore = this.score;
       localStorage.setItem("shatterDriftHighScore", String(this.highScore));
+    }
+    if (this.distance > this.bestDistance) {
+      this.bestDistance = this.distance;
+      localStorage.setItem("shatterDriftBestDistance", String(this.bestDistance));
+    }
+
+    // Performance grade — drives replayability ("I can get S rank!")
+    const grade = this.calculateGrade();
+
+    // Save best grade
+    const gradeRanks = ["E RANK", "D RANK", "C RANK", "B RANK", "A RANK", "S RANK"];
+    const currentIdx = gradeRanks.indexOf(grade.label);
+    const bestIdx = gradeRanks.indexOf(this.bestGrade);
+    if (currentIdx > bestIdx) {
+      this.bestGrade = grade.label;
+      localStorage.setItem("shatterDriftBestGrade", this.bestGrade);
     }
 
     // Show game over with more stats
     this.state = GameState.GameOver;
     this.centerTitle!.textContent = "SHATTERED";
     this.centerStats!.innerHTML = `
+      <div style="font-size:40px;margin-bottom:12px;color:${grade.color};text-shadow:0 0 20px ${grade.color}88;letter-spacing:4px">${grade.label}</div>
       Score: <span class="highlight">${this.score.toLocaleString()}</span><br>
       Distance: ${this.distance.toLocaleString()}m<br>
       Top Speed: ${Math.floor(this.speed)} m/s<br>
       Max Combo: x${this.maxCombo}<br>
       Close Calls: ${this.closeCallCount}<br>
       Zone: ${this.biomes.currentBiome.displayName}<br>
-      ${this.score >= this.highScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore.toLocaleString()}`}
+      ${isNewHighScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore.toLocaleString()}`}
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
     this.centerMessage.style.opacity = "1";
+
+    // Death popup
+    if (isNewHighScore) {
+      setTimeout(() => {
+        this.popups.showCenter("NEW HIGH SCORE!", this.score.toLocaleString(), "#ffcc00");
+      }, 500);
+    }
 
     // Hide player
     this.player.group.visible = false;
@@ -784,6 +928,10 @@ export class Game {
     this.shake.apply(this.camera, dt);
     this.gameOverTimer += dt;
 
+    // Slowly fade vignette out
+    const vigFade = Math.max(0, 0.8 - this.gameOverTimer * 0.3);
+    this.vignette.setIntensity(vigFade);
+
     // Demo mode: auto-restart after 2 seconds
     const shouldRestart = this.demoMode
       ? this.gameOverTimer > 2
@@ -795,6 +943,23 @@ export class Game {
       this.gameOverTimer = 0;
       this.startGame();
     }
+  }
+
+  private calculateGrade(): { label: string; color: string } {
+    // Grade based on weighted performance metrics
+    const scorePoints = Math.min(this.score / 50000, 1) * 30;
+    const distPoints = Math.min(this.distance / 2000, 1) * 25;
+    const comboPoints = Math.min(this.maxCombo / 10, 1) * 20;
+    const closeCallPoints = Math.min(this.closeCallCount / 15, 1) * 15;
+    const biomePoints = Math.min(this.biomes.biomeIndex / 4, 1) * 10;
+    const total = scorePoints + distPoints + comboPoints + closeCallPoints + biomePoints;
+
+    if (total >= 90) return { label: "S RANK", color: "#ffcc00" };
+    if (total >= 75) return { label: "A RANK", color: "#00ffcc" };
+    if (total >= 55) return { label: "B RANK", color: "#44aaff" };
+    if (total >= 35) return { label: "C RANK", color: "#aa88ff" };
+    if (total >= 15) return { label: "D RANK", color: "#ff88aa" };
+    return { label: "E RANK", color: "#666688" };
   }
 
   // --- Vibeverse ---

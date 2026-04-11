@@ -241,6 +241,129 @@ export class ExplosionEffect {
   }
 }
 
+// --- Debris burst (phase-through satisfaction) ---
+
+const MAX_DEBRIS = 60;
+
+interface DebrisParticle {
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  life: number;
+  rotSpeed: THREE.Vector3;
+}
+
+export class DebrisBurst {
+  private particles: DebrisParticle[] = [];
+  private meshes: THREE.Mesh[] = [];
+  private pool: THREE.Mesh[] = [];
+  private scene: THREE.Scene;
+  private shardGeo: THREE.BufferGeometry;
+
+  constructor(scene: THREE.Scene) {
+    this.scene = scene;
+    this.shardGeo = new THREE.TetrahedronGeometry(0.08, 0);
+
+    // Pre-create mesh pool
+    for (let i = 0; i < MAX_DEBRIS; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xff44ff,
+        transparent: true,
+        opacity: 0.8,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(this.shardGeo, mat);
+      mesh.visible = false;
+      scene.add(mesh);
+      this.pool.push(mesh);
+    }
+  }
+
+  /** Burst debris at a position — called when phasing through an obstacle */
+  trigger(position: THREE.Vector3, color: number = 0xff44ff, count: number = 12) {
+    for (let i = 0; i < count; i++) {
+      // Find an available mesh
+      let mesh: THREE.Mesh | null = null;
+      for (const m of this.pool) {
+        if (!m.visible) { mesh = m; break; }
+      }
+      if (!mesh) {
+        // Reuse oldest particle
+        if (this.particles.length > 0) {
+          const old = this.particles.shift()!;
+          mesh = this.meshes.shift()!;
+        } else break;
+      }
+
+      mesh.visible = true;
+      mesh.position.copy(position);
+      (mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
+      (mesh.material as THREE.MeshBasicMaterial).opacity = 0.8;
+      mesh.scale.setScalar(0.5 + Math.random() * 1.5);
+
+      const dir = new THREE.Vector3(
+        (Math.random() - 0.5),
+        Math.random() * 0.5 + 0.2,
+        (Math.random() - 0.5)
+      ).normalize();
+      const speed = 4 + Math.random() * 10;
+
+      const particle: DebrisParticle = {
+        position: position.clone(),
+        velocity: dir.multiplyScalar(speed),
+        life: 0.3 + Math.random() * 0.5,
+        rotSpeed: new THREE.Vector3(
+          (Math.random() - 0.5) * 15,
+          (Math.random() - 0.5) * 15,
+          (Math.random() - 0.5) * 15
+        ),
+      };
+
+      this.particles.push(particle);
+      this.meshes.push(mesh);
+    }
+  }
+
+  update(dt: number) {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      const mesh = this.meshes[i];
+
+      p.life -= dt;
+      p.position.add(p.velocity.clone().multiplyScalar(dt));
+      p.velocity.y -= dt * 8; // gravity
+      p.velocity.multiplyScalar(1 - dt * 3); // drag
+
+      mesh.position.copy(p.position);
+      mesh.rotation.x += p.rotSpeed.x * dt;
+      mesh.rotation.y += p.rotSpeed.y * dt;
+      mesh.rotation.z += p.rotSpeed.z * dt;
+
+      // Fade out
+      const alpha = Math.max(0, p.life / 0.5);
+      (mesh.material as THREE.MeshBasicMaterial).opacity = alpha * 0.8;
+
+      // Scale down as it dies
+      const scaleFade = Math.max(0.1, p.life * 2);
+      mesh.scale.setScalar(mesh.scale.x > 0.1 ? scaleFade : 0.1);
+
+      if (p.life <= 0) {
+        mesh.visible = false;
+        this.particles.splice(i, 1);
+        this.meshes.splice(i, 1);
+      }
+    }
+  }
+
+  dispose() {
+    for (const mesh of this.pool) {
+      this.scene.remove(mesh);
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.shardGeo.dispose();
+  }
+}
+
 // --- Orb collect flash ---
 
 export class CollectFlash {

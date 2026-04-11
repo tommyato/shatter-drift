@@ -224,6 +224,31 @@ export class World {
       this.nextPortalZ += PORTAL_INTERVAL;
     }
 
+    // Animate obstacles — pulse emissive glow
+    const time = performance.now() * 0.001;
+    for (const obs of this.obstacles) {
+      if (!obs.active) continue;
+      // Distance-based pulse intensity (closer = more visible animation)
+      const distToPlayer = Math.abs(obs.z - playerZ);
+      if (distToPlayer > 40) continue; // skip far obstacles for perf
+
+      const mesh = obs.mesh;
+      // Pulse the obstacle — subtle breathing effect
+      if (mesh instanceof THREE.Mesh && mesh.material instanceof THREE.MeshStandardMaterial) {
+        const basePulse = this.biomes.colors.obstacleEmissiveIntensity;
+        mesh.material.emissiveIntensity = basePulse + Math.sin(time * 2 + obs.z * 0.3) * 0.1;
+      }
+      // Traverse groups (gates have children)
+      if (mesh instanceof THREE.Group) {
+        mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+            const basePulse = this.biomes.colors.obstacleEmissiveIntensity;
+            child.material.emissiveIntensity = basePulse + Math.sin(time * 2 + obs.z * 0.3) * 0.1;
+          }
+        });
+      }
+    }
+
     // Update orb rotation
     for (const orb of this.orbs) {
       if (!orb.active) continue;
