@@ -4,6 +4,7 @@ import { Input } from "./input";
 import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash } from "./effects";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, stopAudio } from "./audio";
 import { clamp } from "./utils";
 
 enum GameState {
@@ -48,6 +49,7 @@ export class Game {
   private playerZ = 0;
   private playTime = 0;
   private lastCloseCall = -10;
+  private wasShattered = false;
 
   // HUD elements
   private hudScore!: HTMLElement;
@@ -200,6 +202,7 @@ export class Game {
   // --- Playing ---
 
   private startGame() {
+    initAudio();
     this.state = GameState.Playing;
     this.score = 0;
     this.distance = 0;
@@ -237,6 +240,11 @@ export class Game {
     const move = this.input.getMovement();
     const shatterInput = this.input.isDown("space") || this.input.isDown("click");
     this.player.shattered = shatterInput;
+
+    // Shatter/recombine audio triggers
+    if (shatterInput && !this.wasShattered) playShatter();
+    if (!shatterInput && this.wasShattered) playRecombine();
+    this.wasShattered = shatterInput;
 
     // Update player (negate X: camera faces +Z so screen-right = world -X)
     this.player.update(dt, -move.x);
@@ -281,6 +289,7 @@ export class Game {
         this.combo++;
         const multiplier = Math.min(this.combo, COMBO_MAX);
         this.score += ORB_SCORE * multiplier;
+        playCollect(this.combo);
         this.collectFlash.trigger(
           new THREE.Vector3(orb.x, orb.y, orb.z)
         );
@@ -291,7 +300,7 @@ export class Game {
         if (this.playerZ - this.lastCloseCall > 3) {
           this.score += CLOSE_CALL_SCORE;
           this.lastCloseCall = this.playerZ;
-          // Could flash "CLOSE CALL" text here
+          playCloseCall();
         }
       }
       // Shattering breaks combo
@@ -326,6 +335,9 @@ export class Game {
       this.hudCombo.style.opacity = "0";
     }
 
+    // Update ambient audio
+    updateAmbient(this.speed, true);
+
     // State indicator
     if (this.player.shattered) {
       this.hudState.textContent = "PHASE";
@@ -337,6 +349,10 @@ export class Game {
   }
 
   private die() {
+    // Death sound + stop ambient
+    playDeath();
+    updateAmbient(0, false);
+
     // Explosion
     this.explosion.trigger(this.player.group.position.clone());
 
