@@ -11,7 +11,7 @@ interface Popup {
   startY: number;
 }
 
-const MAX_POPUPS = 15;
+const MAX_POPUPS = 8;
 
 export class ScorePopups {
   private container: HTMLElement;
@@ -78,28 +78,28 @@ export class ScorePopups {
     });
   }
 
-  /** Show a popup anchored to a 3D world position projected to screen */
+  /** Show a popup anchored to a 3D world position — pushed to screen edges to avoid obstructing gameplay */
   showAt3D(
     text: string,
     worldX: number,
     worldZ: number,
     camera: THREE.Camera,
     color: string = "#ffcc00",
-    size: number = 20
+    size: number = 14
   ) {
     // Project world position to screen
     const vec = new THREE.Vector3(worldX, 1.5, worldZ);
     vec.project(camera);
 
-    const halfW = window.innerWidth / 2;
-    const halfH = window.innerHeight / 2;
-    const sx = vec.x * halfW + halfW;
-    const sy = -vec.y * halfH + halfH;
-
     // Don't show if behind camera
     if (vec.z > 1) return;
 
-    this.show(text, sx, sy, color, size);
+    const halfW = window.innerWidth / 2;
+    // Push popup to top margin — keeps it visible but out of the play area
+    const sx = vec.x * halfW + halfW;
+    const sy = Math.min(80, 40 + Math.random() * 40);
+
+    this.show(text, sx, sy, color, size, 0.6);
   }
 
   /** Show a centered large popup (for milestones) */

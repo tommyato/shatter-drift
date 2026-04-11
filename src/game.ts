@@ -261,8 +261,8 @@ export class Game {
       300
     );
 
-    // Lighting — minimal, let emissives and bloom do the work
-    this.ambientLight = new THREE.AmbientLight(0x222244, 0.3);
+    // Lighting — enough to see walls, emissives and bloom add the punch
+    this.ambientLight = new THREE.AmbientLight(0x222244, 0.5);
     this.scene.add(this.ambientLight);
 
     this.directionalLight = new THREE.DirectionalLight(0x4466aa, 0.5);

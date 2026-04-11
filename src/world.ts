@@ -182,13 +182,13 @@ export class World {
 
     for (const side of [-1, 1]) {
       const mat = new THREE.MeshStandardMaterial({
-        color: 0x050510,
-        emissive: 0x110022,
-        emissiveIntensity: 0.1,
-        metalness: 0.9,
+        color: 0x0a0a20,
+        emissive: 0x221144,
+        emissiveIntensity: 0.3,
+        metalness: 0.8,
         roughness: 0.3,
         transparent: true,
-        opacity: 0.15,
+        opacity: 0.45,
         side: THREE.DoubleSide,
       });
 
@@ -205,13 +205,13 @@ export class World {
     // Subtle floor panels for depth
     const panelGeo = new THREE.PlaneGeometry(LANE_WIDTH * 2, 300, 1, 1);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x030308,
-      emissive: 0x060610,
-      emissiveIntensity: 0.05,
-      metalness: 0.9,
+      color: 0x060612,
+      emissive: 0x0c0c22,
+      emissiveIntensity: 0.15,
+      metalness: 0.8,
       roughness: 0.5,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.65,
     });
     const floor = new THREE.Mesh(panelGeo, mat);
     floor.rotation.x = -Math.PI / 2;
@@ -452,7 +452,7 @@ export class World {
     // Tunnel walls — tint with biome edge color
     for (const mat of this.tunnelWallMats) {
       mat.emissive.setHex(c.obstacleEdge);
-      mat.emissiveIntensity = 0.05 + c.obstacleEmissiveIntensity * 0.15;
+      mat.emissiveIntensity = 0.15 + c.obstacleEmissiveIntensity * 0.4;
     }
   }
 
