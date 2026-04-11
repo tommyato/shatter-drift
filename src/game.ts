@@ -4,7 +4,7 @@ import { Input } from "./input";
 import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash } from "./effects";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, stopAudio } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, stopAudio, startMusic, updateMusic, fadeOutMusic } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { clamp, ScreenShake } from "./utils";
@@ -240,6 +240,7 @@ export class Game {
 
   private startGame() {
     initAudio();
+    startMusic();
     this.state = GameState.Playing;
     this.score = 0;
     this.distance = 0;
@@ -414,8 +415,9 @@ export class Game {
       this.hudCombo.style.opacity = "0";
     }
 
-    // Update ambient audio
+    // Update ambient audio + music
     updateAmbient(this.speed, true);
+    updateMusic(dt, this.speed, this.player.shattered);
 
     // State indicator
     if (this.player.shattered) {
@@ -428,9 +430,10 @@ export class Game {
   }
 
   private die() {
-    // Death sound + stop ambient
+    // Death sound + stop ambient + fade music
     playDeath();
     updateAmbient(0, false);
+    fadeOutMusic();
 
     // Screen shake + explosion
     this.shake.trigger(1.5);

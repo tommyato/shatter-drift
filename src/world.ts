@@ -216,19 +216,35 @@ export class World {
 
   private spawnObstacle(z: number) {
     const type = Math.random();
+    const d = this.difficulty;
 
-    if (type < 0.4) {
-      // Wall with gap (gate)
+    if (type < 0.25) {
+      // Wall with gap (gate) — always present, core obstacle
       this.spawnGate(z);
-    } else if (type < 0.7) {
+    } else if (type < 0.40) {
       // Single pillar
       this.spawnPillar(z);
-    } else if (type < 0.85) {
+    } else if (type < 0.52) {
       // Double pillar
       this.spawnDoublePillar(z);
-    } else {
-      // Low bar (jump-like, but player dodges sideways)
+    } else if (type < 0.62) {
+      // Low bar
       this.spawnWideBar(z);
+    } else if (type < 0.72 && d > 0.15) {
+      // Weave: staggered pillars forcing serpentine
+      this.spawnWeave(z);
+    } else if (type < 0.80 && d > 0.25) {
+      // Diamond formation: 4 pillars in diamond shape
+      this.spawnDiamond(z);
+    } else if (type < 0.88 && d > 0.35) {
+      // Zigzag corridor: 3 offset gates in quick succession
+      this.spawnZigzagCorridor(z);
+    } else if (type < 0.95 && d > 0.5) {
+      // Scatter field: cluster of small pillars
+      this.spawnScatterField(z);
+    } else {
+      // Default fallback to gate
+      this.spawnGate(z);
     }
   }
 
@@ -382,6 +398,163 @@ export class World {
     edges.position.set(0, 0, 0);
 
     return mesh;
+  }
+
+  /**
+   * Weave: 3-4 staggered pillars at close Z spacing, alternating left/right.
+   * Forces serpentine dodging.
+   */
+  private spawnWeave(z: number) {
+    const count = 3 + (this.difficulty > 0.6 ? 1 : 0);
+    const startSide = Math.random() < 0.5 ? -1 : 1;
+
+    for (let i = 0; i < count; i++) {
+      const side = startSide * (i % 2 === 0 ? 1 : -1);
+      const x = side * (1.5 + Math.random() * 1.5);
+      const width = 2 + Math.random();
+      const height = 2 + Math.random() * 1.5;
+      const mesh = this.createObstacleMesh(width, height, 0.8, 0, 0);
+      const pz = z + i * 3.5;
+      mesh.position.set(x, 0, pz);
+      this.scene.add(mesh);
+
+      this.obstacles.push({
+        mesh,
+        z: pz,
+        halfWidth: width / 2,
+        halfHeight: height / 2,
+        x,
+        isGate: false,
+        gapX: 0,
+        gapHalfWidth: 0,
+        active: true,
+      });
+    }
+
+    // Advance nextObstacleZ past the formation
+    this.nextObstacleZ = z + count * 3.5 + 4;
+  }
+
+  /**
+   * Diamond formation: 4 pillars arranged in a diamond.
+   * Gap is in the center — player threads the needle.
+   */
+  private spawnDiamond(z: number) {
+    const cx = (Math.random() - 0.5) * 3;
+    const spread = THREE.MathUtils.lerp(3.5, 2.5, this.difficulty);
+    const pillarW = 0.8 + Math.random() * 0.6;
+    const pillarH = 2 + Math.random();
+
+    // Top, Bottom, Left, Right relative to center
+    const offsets = [
+      { x: cx, z: z + spread },       // front
+      { x: cx, z: z - spread },       // back
+      { x: cx - spread, z: z },       // left
+      { x: cx + spread, z: z },       // right
+    ];
+
+    for (const off of offsets) {
+      const mesh = this.createObstacleMesh(pillarW, pillarH, pillarW, 0, 0);
+      mesh.position.set(off.x, 0, off.z);
+      // Rotate 45° for diamond look
+      mesh.rotation.y = Math.PI / 4;
+      this.scene.add(mesh);
+
+      this.obstacles.push({
+        mesh,
+        z: off.z,
+        halfWidth: pillarW * 0.7, // slightly smaller collision for rotated box
+        halfHeight: pillarH / 2,
+        x: off.x,
+        isGate: false,
+        gapX: 0,
+        gapHalfWidth: 0,
+        active: true,
+      });
+    }
+  }
+
+  /**
+   * Zigzag corridor: 3 gates with alternating gap positions in quick succession.
+   * Forces fast reactions or shatter-through.
+   */
+  private spawnZigzagCorridor(z: number) {
+    const gateSpacing = THREE.MathUtils.lerp(5, 3.5, this.difficulty);
+
+    for (let i = 0; i < 3; i++) {
+      const gapX = (i % 2 === 0 ? -1 : 1) * (1.5 + Math.random() * 1.5);
+      const gapWidth = THREE.MathUtils.lerp(3.5, 2.5, this.difficulty);
+      const wallHeight = 3;
+      const wallThickness = 0.6;
+      const pz = z + i * gateSpacing;
+
+      const group = new THREE.Group();
+      group.position.z = pz;
+
+      // Left wall
+      const leftWidth = (gapX - gapWidth / 2) + LANE_WIDTH / 2 + 1;
+      if (leftWidth > 0.5) {
+        const leftX = -LANE_WIDTH / 2 - 1 + leftWidth / 2;
+        group.add(this.createObstacleMesh(leftWidth, wallHeight, wallThickness, leftX, 0));
+      }
+
+      // Right wall
+      const rightStart = gapX + gapWidth / 2;
+      const rightWidth = LANE_WIDTH / 2 + 1 - rightStart;
+      if (rightWidth > 0.5) {
+        const rightX = rightStart + rightWidth / 2;
+        group.add(this.createObstacleMesh(rightWidth, wallHeight, wallThickness, rightX, 0));
+      }
+
+      this.scene.add(group);
+      this.obstacles.push({
+        mesh: group,
+        z: pz,
+        halfWidth: LANE_WIDTH,
+        halfHeight: wallHeight / 2,
+        x: 0,
+        isGate: true,
+        gapX,
+        gapHalfWidth: gapWidth / 2,
+        active: true,
+      });
+    }
+
+    // Advance past formation
+    this.nextObstacleZ = z + 3 * gateSpacing + 4;
+  }
+
+  /**
+   * Scatter field: 5-7 small pillars randomly placed.
+   * Creates a debris field requiring constant micro-dodging or sustained shatter.
+   */
+  private spawnScatterField(z: number) {
+    const count = 5 + Math.floor(Math.random() * 3);
+    const fieldDepth = 10;
+
+    for (let i = 0; i < count; i++) {
+      const x = (Math.random() - 0.5) * 7;
+      const pz = z + Math.random() * fieldDepth;
+      const w = 0.6 + Math.random() * 0.8;
+      const h = 1 + Math.random() * 2;
+      const mesh = this.createObstacleMesh(w, h, w, 0, 0);
+      mesh.position.set(x, 0, pz);
+      this.scene.add(mesh);
+
+      this.obstacles.push({
+        mesh,
+        z: pz,
+        halfWidth: w / 2,
+        halfHeight: h / 2,
+        x,
+        isGate: false,
+        gapX: 0,
+        gapHalfWidth: 0,
+        active: true,
+      });
+    }
+
+    this.nextObstacleZ = z + fieldDepth + 4;
   }
 
   private spawnOrbCluster(z: number) {
