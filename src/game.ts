@@ -555,6 +555,17 @@ export class Game {
         this.biomes.colors.playerTrail, 15, 1.0
       );
       this.screenFlash.trigger(this.biomes.colors.playerTrail, 0.25);
+
+      // Zone completion bonus — reward for reaching the next biome
+      const zoneBonus = 1000 * this.biomes.biomeIndex;
+      this.score += zoneBonus;
+      setTimeout(() => {
+        this.popups.showCenter(
+          "ZONE CLEAR",
+          `+${zoneBonus.toLocaleString()}`,
+          "#" + this.biomes.colors.playerTrail.toString(16).padStart(6, "0")
+        );
+      }, 800); // slight delay so biome name shows first
     }
     this.applyBiomeColors();
 
