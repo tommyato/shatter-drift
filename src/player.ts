@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { CrystalSkin } from "./unlocks";
 
 const FRAGMENT_COUNT = 20; // icosahedron faces
 const SHATTER_SPREAD = 2.5;
@@ -213,6 +214,17 @@ export class Player {
 
     // Trail position (world space)
     this.trailPosition.copy(this.group.position);
+  }
+
+  /** Apply a crystal skin to the player mesh */
+  applySkin(skin: CrystalSkin) {
+    const mat = this.crystalMesh.material as THREE.MeshStandardMaterial;
+    mat.color.setHex(skin.bodyColor);
+    mat.emissive.setHex(skin.emissiveColor);
+    mat.emissiveIntensity = skin.emissiveIntensity;
+    mat.wireframe = skin.wireframe ?? false;
+    // Update glow ring to match skin
+    (this.glowRing.material as THREE.MeshBasicMaterial).color.setHex(skin.emissiveColor);
   }
 
   /** Get collision radius (smaller when shattered = more forgiving) */

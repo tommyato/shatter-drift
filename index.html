@@ -242,6 +242,126 @@
       animation: fadeInUp 0.8s ease-out 1.2s both;
     }
 
+    /* Customize button */
+    #title-overlay .customize-btn {
+      font-family: 'Orbitron', monospace;
+      font-size: 12px;
+      color: #668899;
+      letter-spacing: 3px;
+      margin-top: 16px;
+      cursor: pointer;
+      border: 1px solid #334455;
+      border-radius: 4px;
+      padding: 8px 24px;
+      background: rgba(0,20,30,0.5);
+      transition: all 0.3s;
+      animation: fadeInUp 0.8s ease-out 1.5s both;
+    }
+    #title-overlay .customize-btn:hover {
+      color: #00ffcc;
+      border-color: #00ffcc;
+      background: rgba(0,255,204,0.05);
+      text-shadow: 0 0 10px rgba(0,255,204,0.3);
+    }
+
+    /* Customize panel */
+    #customize-panel {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,5,10,0.92);
+      backdrop-filter: blur(8px);
+      pointer-events: auto;
+      overflow-y: auto;
+      padding: 20px;
+    }
+    #customize-panel.hidden { display: none; }
+    #customize-panel h2 {
+      font-family: 'Orbitron', monospace;
+      font-size: 24px;
+      color: #00ffcc;
+      letter-spacing: 4px;
+      margin-bottom: 24px;
+      text-shadow: 0 0 20px rgba(0,255,204,0.3);
+    }
+    .cosmetic-section {
+      margin-bottom: 24px;
+      width: 90%;
+      max-width: 500px;
+    }
+    .cosmetic-section h3 {
+      font-family: 'Orbitron', monospace;
+      font-size: 13px;
+      color: #668899;
+      letter-spacing: 3px;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+    .cosmetic-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+    }
+    .cosmetic-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border: 1px solid #223344;
+      border-radius: 6px;
+      cursor: pointer;
+      background: rgba(0,15,25,0.6);
+      transition: all 0.2s;
+      min-width: 130px;
+    }
+    .cosmetic-item:hover { border-color: #668899; background: rgba(0,30,50,0.5); }
+    .cosmetic-item.selected { border-color: #00ffcc; background: rgba(0,255,204,0.08); }
+    .cosmetic-item.locked { opacity: 0.35; cursor: default; }
+    .cosmetic-item.locked:hover { border-color: #223344; background: rgba(0,15,25,0.6); }
+    .cosmetic-swatch {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      box-shadow: 0 0 8px currentColor;
+    }
+    .cosmetic-name {
+      font-family: 'Orbitron', monospace;
+      font-size: 11px;
+      color: #aabbcc;
+      letter-spacing: 1px;
+    }
+    .cosmetic-item.selected .cosmetic-name { color: #00ffcc; }
+    .cosmetic-item.locked .cosmetic-name { color: #445566; }
+    .cosmetic-lock {
+      font-size: 9px;
+      color: #445566;
+      font-family: 'Orbitron', monospace;
+    }
+    #customize-back {
+      font-family: 'Orbitron', monospace;
+      font-size: 14px;
+      color: #668899;
+      cursor: pointer;
+      border: 1px solid #334455;
+      border-radius: 4px;
+      padding: 10px 32px;
+      background: rgba(0,20,30,0.5);
+      transition: all 0.3s;
+      margin-top: 12px;
+      letter-spacing: 2px;
+    }
+    #customize-back:hover {
+      color: #ffcc00;
+      border-color: #ffcc00;
+      text-shadow: 0 0 10px rgba(255,204,0,0.3);
+    }
+
     @keyframes promptPulse {
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.4; transform: scale(0.98); }
@@ -311,6 +431,21 @@
       </div>
       <div class="prompt">PRESS SPACE OR CLICK</div>
       <div class="high-score" id="title-high-score"></div>
+      <div class="customize-btn" id="customize-btn">CUSTOMIZE</div>
+    </div>
+
+    <!-- Customize panel -->
+    <div id="customize-panel" class="hidden">
+      <h2>CUSTOMIZE</h2>
+      <div class="cosmetic-section">
+        <h3>CRYSTAL SKIN</h3>
+        <div class="cosmetic-grid" id="crystal-grid"></div>
+      </div>
+      <div class="cosmetic-section">
+        <h3>TRAIL STYLE</h3>
+        <div class="cosmetic-grid" id="trail-grid"></div>
+      </div>
+      <div id="customize-back">BACK</div>
     </div>
   </div>
 

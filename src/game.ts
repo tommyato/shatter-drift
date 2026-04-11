@@ -22,7 +22,7 @@ import { Tutorial } from "./tutorial";
 import { SpeedGateManager } from "./speedgates";
 import { ChallengeManager } from "./challenges";
 import { WorldEventManager } from "./events";
-import { UnlockManager } from "./unlocks";
+import { UnlockManager, TRAIL_STYLES, CRYSTAL_SKINS, type TrailStyle, type CrystalSkin } from "./unlocks";
 import { AfterimageTrail } from "./afterimage";
 import { RibbonTrail } from "./ribbon";
 import { RunHistoryTracker } from "./stats";
@@ -209,6 +209,8 @@ export class Game {
   private titleHighScore!: HTMLElement;
   private hudPowerUp!: HTMLElement;
   private hudBossWarning!: HTMLElement;
+  private customizePanel!: HTMLElement;
+  private customizeOpen = false;
 
   // Persistent stats
   private totalRuns = 0;
@@ -337,6 +339,10 @@ export class Game {
     this.titleHighScore = document.getElementById("title-high-score")!;
     this.hudPowerUp = document.getElementById("hud-powerup")!;
     this.hudBossWarning = document.getElementById("hud-boss-warning")!;
+    this.customizePanel = document.getElementById("customize-panel")!;
+
+    // Customize UI
+    this.initCustomizePanel();
 
     // Show stats on title
     const summary = this.runHistory.getSummary();
@@ -361,6 +367,84 @@ export class Game {
 
     // Handle Vibeverse portal arrival
     this.handlePortalArrival();
+  }
+
+  private initCustomizePanel() {
+    const crystalGrid = document.getElementById("crystal-grid")!;
+    const trailGrid = document.getElementById("trail-grid")!;
+    const backBtn = document.getElementById("customize-back")!;
+    const openBtn = document.getElementById("customize-btn")!;
+
+    const unlockedRewards = this.challenges.getUnlockedRewards();
+    const unlockedCrystals = new Set(["default", ...unlockedRewards.filter(r => r.type === "crystal").map(r => r.value)]);
+    const unlockedTrails = new Set(["default", ...unlockedRewards.filter(r => r.type === "trail").map(r => r.value)]);
+
+    const selectedCrystal = this.unlocks.getSelectedCrystal().id;
+    const selectedTrail = this.unlocks.getSelectedTrail().id;
+
+    // Build crystal skin items
+    for (const skin of Object.values(CRYSTAL_SKINS)) {
+      const unlocked = unlockedCrystals.has(skin.id);
+      const item = document.createElement("div");
+      item.className = `cosmetic-item${skin.id === selectedCrystal ? " selected" : ""}${!unlocked ? " locked" : ""}`;
+      const hexColor = `#${skin.emissiveColor.toString(16).padStart(6, "0")}`;
+      item.innerHTML = `
+        <div class="cosmetic-swatch" style="background:${hexColor};color:${hexColor}"></div>
+        <div>
+          <div class="cosmetic-name">${skin.name}</div>
+          ${!unlocked ? `<div class="cosmetic-lock">🔒 Complete challenge</div>` : ""}
+        </div>`;
+      if (unlocked) {
+        item.addEventListener("click", () => {
+          this.unlocks.selectCrystal(skin.id);
+          this.player.applySkin(skin);
+          crystalGrid.querySelectorAll(".cosmetic-item").forEach(el => el.classList.remove("selected"));
+          item.classList.add("selected");
+        });
+      }
+      crystalGrid.appendChild(item);
+    }
+
+    // Build trail style items
+    for (const trail of Object.values(TRAIL_STYLES)) {
+      const unlocked = unlockedTrails.has(trail.id);
+      const item = document.createElement("div");
+      item.className = `cosmetic-item${trail.id === selectedTrail ? " selected" : ""}${!unlocked ? " locked" : ""}`;
+      const hexColor = `#${trail.color.toString(16).padStart(6, "0")}`;
+      item.innerHTML = `
+        <div class="cosmetic-swatch" style="background:${hexColor};color:${hexColor}"></div>
+        <div>
+          <div class="cosmetic-name">${trail.name}</div>
+          ${!unlocked ? `<div class="cosmetic-lock">🔒 Complete challenge</div>` : ""}
+        </div>`;
+      if (unlocked) {
+        item.addEventListener("click", () => {
+          this.unlocks.selectTrail(trail.id);
+          trailGrid.querySelectorAll(".cosmetic-item").forEach(el => el.classList.remove("selected"));
+          item.classList.add("selected");
+        });
+      }
+      trailGrid.appendChild(item);
+    }
+
+    // Open customize panel
+    openBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.customizeOpen = true;
+      this.titleOverlay.classList.add("hidden");
+      this.customizePanel.classList.remove("hidden");
+    });
+
+    // Back button
+    backBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.customizeOpen = false;
+      this.customizePanel.classList.add("hidden");
+      this.titleOverlay.classList.remove("hidden");
+    });
+
+    // Apply initial skin
+    this.player.applySkin(this.unlocks.getSelectedCrystal());
   }
 
   private loop() {
@@ -464,7 +548,7 @@ export class Game {
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(0, 0, 0);
 
-    if (this.input.justPressed("space") || this.input.justPressed("click")) {
+    if (!this.customizeOpen && (this.input.justPressed("space") || this.input.justPressed("click"))) {
       this.startGame();
     }
   }
@@ -506,9 +590,14 @@ export class Game {
     // Reset scene to first biome
     this.applyBiomeColors();
 
-    // Show HUD, hide title
+    // Apply selected cosmetics
+    this.player.applySkin(this.unlocks.getSelectedCrystal());
+
+    // Show HUD, hide title + customize
     this.hud.classList.remove("hidden");
     this.titleOverlay.classList.add("hidden");
+    this.customizePanel.classList.add("hidden");
+    this.customizeOpen = false;
     this.centerMessage.style.opacity = "0";
 
     // Tutorial for first-time players
