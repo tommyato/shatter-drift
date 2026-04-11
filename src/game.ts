@@ -5,6 +5,7 @@ import { Input } from "./input";
 import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
+import { PostFXPass } from "./postfx";
 import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, stopAudio, startMusic, updateMusic, fadeOutMusic } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
@@ -22,6 +23,7 @@ import { SpeedGateManager } from "./speedgates";
 import { ChallengeManager } from "./challenges";
 import { WorldEventManager } from "./events";
 import { UnlockManager } from "./unlocks";
+import { AfterimageTrail } from "./afterimage";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -140,6 +142,8 @@ export class Game {
   private speedLines!: SpeedLines;
   private vignette!: Vignette;
   private screenFlash!: ScreenFlash;
+  private postfx!: PostFXPass;
+  private afterimage!: AfterimageTrail;
 
   // New systems
   private biomes!: BiomeManager;
@@ -262,10 +266,15 @@ export class Game {
     this.rimLight.position.set(0, 2, -3);
     this.scene.add(this.rimLight);
 
-    // Post-processing (bloom)
+    // Post-processing (bloom + custom PostFX)
     const { composer, bloom } = createComposer(this.renderer, this.scene, this.camera);
     this.composer = composer;
     this.bloomPass = bloom;
+
+    // Custom post-processing: chromatic aberration, film grain, scan lines, distortion
+    this.postfx = new PostFXPass();
+    this.postfx.setResolution(window.innerWidth, window.innerHeight);
+    this.composer.addPass(this.postfx.pass);
 
     // Input
     this.input.init(this.renderer.domElement);
@@ -306,6 +315,7 @@ export class Game {
     this.challenges = new ChallengeManager();
     this.worldEvents = new WorldEventManager(this.scene, this.biomes);
     this.unlocks = new UnlockManager();
+    this.afterimage = new AfterimageTrail(this.scene);
 
     // Cache HUD elements
     this.hudScore = document.getElementById("hud-score")!;
@@ -348,6 +358,25 @@ export class Game {
     if (this.state === GameState.Playing) {
       const puTimeScale = this.powerups.getTimeScale();
       dt *= puTimeScale;
+    }
+
+    // Death slow-mo — dramatic time dilation before game over screen
+    if (this.deathSlowMo) {
+      this.deathSlowMoTimer -= dt;
+      const deathProgress = 1 - Math.max(0, this.deathSlowMoTimer / 0.6);
+      // Start at 20% speed, ease out to 5%
+      const deathTimescale = 0.2 * (1 - deathProgress * 0.7);
+      dt *= deathTimescale;
+
+      // Camera zooms in during death slow-mo
+      this.targetFOV = this.baseFOV - 15 * deathProgress;
+
+      // Bloom intensifies
+      this.bloomPass.strength = 2.0 - deathProgress * 0.5;
+
+      if (this.deathSlowMoTimer <= 0) {
+        this.deathSlowMo = false;
+      }
     }
 
     // Apply close-call slow-mo (brief dramatic pause)
@@ -398,7 +427,10 @@ export class Game {
     this.cameraRoll = THREE.MathUtils.lerp(this.cameraRoll, this.targetCameraRoll, 1 - Math.exp(-5 * dt));
     this.camera.rotation.z = this.cameraRoll;
 
-    // Render with bloom
+    // Update PostFX
+    this.postfx.update(dt);
+
+    // Render with bloom + PostFX
     this.composer.render();
 
     // Update recorder
@@ -524,10 +556,20 @@ export class Game {
     // Shield visual indicator
     this.player.setShieldActive(this.powerups.hasActivePowerUp(PowerUpType.Shield));
 
-    // Shatter/recombine audio triggers
-    if (shatterInput && !this.wasShattered) playShatter();
+    // Shatter/recombine audio triggers + visual effects
+    if (shatterInput && !this.wasShattered) {
+      playShatter();
+      // Energy pulse on entering phase mode
+      this.postfx.triggerDistort(0.3);
+      this.shockwave.trigger(
+        new THREE.Vector3(this.player.group.position.x, 0.5, this.playerZ),
+        0xff44ff, 3, 0.3
+      );
+    }
     if (!shatterInput && this.wasShattered) {
       playRecombine();
+      // Snap-back effect on recombining
+      this.postfx.triggerDistort(0.2);
       // Reset phase streak when recombining
       if (this.phaseStreak > 0) this.phaseStreak = 0;
     }
@@ -555,6 +597,8 @@ export class Game {
         this.biomes.colors.playerTrail, 15, 1.0
       );
       this.screenFlash.trigger(this.biomes.colors.playerTrail, 0.25);
+      // PostFX: biome transition distortion
+      this.postfx.triggerDistort(0.8);
 
       // Zone completion bonus — reward for reaching the next biome
       const zoneBonus = 1000 * this.biomes.biomeIndex;
@@ -582,6 +626,7 @@ export class Game {
       playSpeedBoost();
       this.shake.trigger(0.6);
       this.screenFlash.trigger(0x00ffff, 0.2);
+      this.postfx.triggerDistort(0.7);
       // Dramatic shockwave at gate position
       if (gateResult.gatePosition) {
         this.shockwave.trigger(gateResult.gatePosition, 0x00ffff, 8, 0.7);
@@ -640,6 +685,7 @@ export class Game {
       playChallengeComplete();
       this.screenFlash.trigger(0xffcc00, 0.3);
       this.shake.trigger(0.5);
+      this.postfx.triggerDistort(0.6);
       this.popups.showCenter(
         "CHALLENGE COMPLETE",
         challenge.name,
@@ -680,6 +726,16 @@ export class Game {
       new THREE.Vector3(this.player.group.position.x, 0, this.playerZ - 0.5),
       (this.player.shattered ? 3 : 1) * trailSize,
       (this.player.shattered ? 1.5 : 0.3) * trailSize
+    );
+
+    // Afterimage trail — ghostly copies at high speed
+    this.afterimage.setIntensity(this.speed / MAX_SPEED);
+    this.afterimage.setColor(trailColor);
+    this.afterimage.update(
+      dt,
+      this.player.group.position,
+      this.player.crystalMesh.rotation,
+      this.player.shattered
     );
 
     // Extra trail during speed boost
@@ -760,6 +816,8 @@ export class Game {
         if (this.powerups.consumeShield()) {
           this.shake.trigger(0.8);
           this.screenFlash.trigger(0x44aaff, 0.3);
+          this.postfx.triggerDistort(0.6);
+          this.postfx.triggerGlitch(0.3);
           playShieldBreak();
           this.player.setShieldActive(false);
           // Remove the regular obstacle that was hit (boss parts persist)
@@ -805,14 +863,40 @@ export class Game {
         if (this.combo >= 5) {
           this.hudScore.style.transform = "scale(1.2)";
           setTimeout(() => { this.hudScore.style.transform = "scale(1)"; }, 100);
+          // PostFX distort on high combos
+          this.postfx.triggerDistort(0.2 + Math.min(this.combo, COMBO_MAX) * 0.03);
         }
 
-        // Shockwave ring at x5+ combo
-        if (this.combo === 5 || this.combo === 10) {
+        // Shockwave ring at combo milestones
+        if (this.combo === 5) {
           this.shockwave.trigger(
             new THREE.Vector3(orb.x, 0, orb.z),
-            0xffcc00, 4, 0.4
+            0xffcc00, 5, 0.5
           );
+          this.screenFlash.trigger(0xffaa00, 0.1);
+          this.popups.showCenter("COMBO x5", "ON FIRE", "#ffaa00");
+        } else if (this.combo === 8) {
+          this.shockwave.trigger(
+            new THREE.Vector3(orb.x, 0, orb.z),
+            0xff6600, 7, 0.6
+          );
+          this.screenFlash.trigger(0xff6600, 0.15);
+          this.shake.trigger(0.3);
+          this.popups.showCenter("COMBO x8", "BLAZING", "#ff6600");
+        } else if (this.combo === 10) {
+          // Max combo — huge celebration
+          this.shockwave.trigger(
+            new THREE.Vector3(orb.x, 0, orb.z),
+            0xff4444, 10, 0.8
+          );
+          this.screenFlash.trigger(0xff4444, 0.2);
+          this.shake.trigger(0.5);
+          this.postfx.triggerDistort(0.6);
+          this.debris.trigger(
+            new THREE.Vector3(this.player.group.position.x, 1, this.playerZ),
+            0xffcc00, 20
+          );
+          this.popups.showCenter("MAX COMBO", "LEGENDARY", "#ff4444");
         }
       }
     } else {
@@ -834,6 +918,9 @@ export class Game {
           // Brief slow-mo on close calls for dramatic effect
           this.slowMoFactor = 0.3;
           this.slowMoTimer = 0.15;
+
+          // PostFX: distortion pulse on phase-through
+          this.postfx.triggerDistort(0.5 + streakBonus * 0.15);
 
           // Particle burst at close call location
           this.trail.emit(
@@ -910,6 +997,12 @@ export class Game {
 
     // Speed lines with biome color
     this.speedLines.update(this.speed / MAX_SPEED, this.biomes.colors.playerTrail);
+
+    // PostFX: drive chromatic aberration from speed, vignette from speed
+    this.postfx.setSpeed(this.speed / MAX_SPEED);
+    const pfxVignette = speedNorm * 0.5 + (this.biomes.isTransitioning ? 0.3 : 0);
+    this.postfx.setVignette(pfxVignette);
+    this.postfx.setBiomeTint(this.biomes.colors.playerTrail, 0.12);
 
     // Update HUD
     this.hudScore.textContent = String(this.score);
@@ -988,6 +1081,10 @@ export class Game {
   }
 
   private die() {
+    // Start death slow-mo sequence — brief time dilation before game over
+    this.deathSlowMo = true;
+    this.deathSlowMoTimer = 0.6; // 0.6s of dramatic slow-mo
+
     // Death sound + stop ambient + fade music
     playDeath();
     updateAmbient(0, false);
@@ -997,18 +1094,29 @@ export class Game {
     this.shake.trigger(1.5);
     this.explosion.trigger(this.player.group.position.clone());
 
+    // Death debris burst — player shatters dramatically
+    this.debris.trigger(this.player.group.position.clone(), 0xff4444, 20);
+    this.debris.trigger(this.player.group.position.clone(), 0xff8844, 15);
+
     // Death shockwave — dramatic expanding ring
     this.shockwave.trigger(
       this.player.group.position.clone(),
-      0xff4444, 12, 0.8
+      0xff4444, 15, 1.0
     );
     // Second delayed ring
     setTimeout(() => {
       this.shockwave.trigger(
         this.player.group.position.clone(),
-        0xff8844, 8, 0.6
+        0xff8844, 10, 0.8
       );
     }, 150);
+    // Third ring for extra drama
+    setTimeout(() => {
+      this.shockwave.trigger(
+        this.player.group.position.clone(),
+        0xff2222, 6, 0.5
+      );
+    }, 300);
 
     // Reset speed lines + vignette
     this.speedLines.update(0);
@@ -1016,9 +1124,17 @@ export class Game {
 
     // Dramatic vignette on death
     this.vignette.setIntensity(0.8);
+    this.postfx.setVignette(1.0);
 
     // Screen flash red
     this.screenFlash.trigger(0xff2222, 0.3);
+
+    // PostFX: heavy death glitch + distortion
+    this.postfx.triggerGlitch(1.0);
+    this.postfx.triggerDistort(2.0);
+
+    // Bloom surge on death
+    this.bloomPass.strength = 2.0;
 
     // Save stats
     this.totalRuns++;
@@ -1162,5 +1278,6 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
+    this.postfx.setResolution(w, h);
   }
 }
