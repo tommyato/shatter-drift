@@ -116,8 +116,14 @@ export class Autopilot {
       result.moveX = Math.sign(diff) * Math.min(1, Math.abs(diff) * 0.8);
     }
 
-    // Occasionally shatter for style (every ~8 seconds, 0.5s burst)
-    if (!result.shatter && Math.random() < 0.002) {
+    // Shatter for style more often (every ~4 seconds, 0.5s burst)
+    // This makes demo videos showcase the core mechanic
+    if (!result.shatter && Math.random() < 0.004) {
+      this.shatterTimer = 0.5;
+    }
+
+    // Also shatter when an obstacle is nearby-ish for dramatic close calls
+    if (!result.shatter && nearestObs && nearestDist < 8 && nearestDist > 3 && Math.random() < 0.02) {
       this.shatterTimer = 0.4;
     }
 

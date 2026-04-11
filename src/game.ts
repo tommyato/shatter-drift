@@ -542,7 +542,9 @@ export class Game {
 
     // Camera FOV — increases with speed for rush feeling
     const speedNorm = this.speed / MAX_SPEED;
-    this.targetFOV = this.baseFOV + speedNorm * 15; // 70 → 85 FOV
+    const comboFOVBoost = Math.min(this.combo, COMBO_MAX) * 0.5; // combo widens FOV slightly
+    const phaseNarrow = this.player.shattered ? -3 : 0; // tighter FOV while phasing = focus effect
+    this.targetFOV = this.baseFOV + speedNorm * 15 + comboFOVBoost + phaseNarrow;
 
     // Camera roll on lateral movement (subtle)
     this.targetCameraRoll = -moveX * 0.03;
@@ -728,6 +730,24 @@ export class Game {
             this.player.group.position.x, this.playerZ, this.camera,
             popupColor, 16 + streakBonus * 2
           );
+
+          // Dramatic announcements at streak milestones
+          if (this.phaseStreak === 3) {
+            this.popups.showCenter("PHANTOM", "", "#aa88ff");
+            this.screenFlash.trigger(0xaa44ff, 0.15);
+          } else if (this.phaseStreak === 5) {
+            this.popups.showCenter("UNSTOPPABLE", "", "#ff44ff");
+            this.screenFlash.trigger(0xff44ff, 0.2);
+            this.shake.trigger(0.4);
+          } else if (this.phaseStreak === 8) {
+            this.popups.showCenter("TRANSCENDENT", "", "#ff88ff");
+            this.screenFlash.trigger(0xff88ff, 0.25);
+            this.shake.trigger(0.6);
+            this.shockwave.trigger(
+              new THREE.Vector3(this.player.group.position.x, 0, this.playerZ),
+              0xff44ff, 10, 0.7
+            );
+          }
         }
       }
       // Shattering breaks combo (unless HyperPhase is active)
