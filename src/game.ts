@@ -677,7 +677,8 @@ export class Game {
     }
 
     // Apply event effects to bloom and FOV
-    this.bloomPass.strength = this.biomes.colors.bloomStrength + this.worldEvents.getBloomBoost();
+    const comboBloom = Math.min(this.combo, COMBO_MAX) * 0.03; // combo intensifies bloom
+    this.bloomPass.strength = this.biomes.colors.bloomStrength + this.worldEvents.getBloomBoost() + comboBloom;
     this.targetFOV += this.worldEvents.getFOVPulse();
 
     // Update challenges
@@ -740,6 +741,24 @@ export class Game {
       (this.player.shattered ? 3 : 1) * trailSize,
       (this.player.shattered ? 1.5 : 0.3) * trailSize
     );
+
+    // Combo fire — energy particles rise upward at high combo
+    if (this.combo >= 5 && !this.player.shattered) {
+      const comboFire = Math.min(this.combo, COMBO_MAX) - 4; // 1-6 intensity
+      const fireColor = this.combo >= 8 ? 0xff4400 : 0xffcc00;
+      this.trail.setColor(fireColor);
+      this.trail.emit(
+        new THREE.Vector3(
+          this.player.group.position.x + (Math.random() - 0.5) * 0.5,
+          0.8 + Math.random() * 0.5,
+          this.playerZ
+        ),
+        comboFire, // more particles at higher combo
+        0.8
+      );
+      // Reset trail color for main trail
+      this.trail.setColor(trailColor);
+    }
 
     // Ribbon trail — smooth flowing ribbon behind player
     const ribbonWidth = this.player.shattered ? 0.5 : 0.2 + speedNorm * 0.3;
