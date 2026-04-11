@@ -518,6 +518,7 @@ export class Game {
 
     // Position camera behind player
     this.camera.position.set(0, 3, -6);
+    this.camera.up.set(0, 1, 0);
     this.camera.lookAt(0, 0, 10);
 
     // Start recording if in record mode (slight delay to skip title transition)
@@ -1031,13 +1032,14 @@ export class Game {
       this.playerZ + this.cameraOffset.z
     );
     this.camera.position.lerp(targetCamPos, 1 - Math.exp(-5 * dt));
-    // Apply roll via up vector (avoids Euler decomposition ambiguity with rotation.z)
-    this.camera.up.set(-Math.sin(this.cameraRoll), Math.cos(this.cameraRoll), 0);
+    // Keep up vector constant, apply roll via rotation.z after lookAt
+    this.camera.up.set(0, 1, 0);
     this.camera.lookAt(
       this.player.group.position.x * 0.5,
       0.5,
       this.playerZ + 15
     );
+    this.camera.rotation.z = this.cameraRoll;
 
     // Screen shake
     this.shake.apply(this.camera, dt);
