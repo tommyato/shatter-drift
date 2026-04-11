@@ -16,6 +16,7 @@ import { BossWaveManager } from "./bosswaves";
 import { ScorePopups } from "./popups";
 import { ShockwaveEffect } from "./shockwave";
 import { EnvironmentParticles } from "./environment";
+import { SkyboxManager } from "./skybox";
 import { Tutorial } from "./tutorial";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
@@ -144,6 +145,7 @@ export class Game {
   private popups!: ScorePopups;
   private shockwave!: ShockwaveEffect;
   private envParticles!: EnvironmentParticles;
+  private skybox!: SkyboxManager;
   private tutorial!: Tutorial;
 
   // Lights (for biome transitions)
@@ -290,6 +292,7 @@ export class Game {
     this.popups = new ScorePopups();
     this.shockwave = new ShockwaveEffect(this.scene);
     this.envParticles = new EnvironmentParticles(this.scene, this.biomes);
+    this.skybox = new SkyboxManager(this.scene);
     this.tutorial = new Tutorial();
 
     // Cache HUD elements
@@ -364,6 +367,13 @@ export class Game {
     this.popups.update(dt);
     this.shockwave.update(dt);
     this.envParticles.update(dt, this.playerZ);
+    this.skybox.update(
+      this.biomes.biomeIndex,
+      this.biomes.isTransitioning,
+      this.biomes.progress,
+      this.playerZ,
+      dt
+    );
 
     // Camera FOV interpolation
     this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, this.targetFOV, 1 - Math.exp(-3 * dt));

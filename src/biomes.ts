@@ -201,6 +201,10 @@ export class BiomeManager {
     return this.transitioning;
   }
 
+  get progress(): number {
+    return this.transitionProgress;
+  }
+
   update(distance: number): boolean {
     const next = this.nextBiome;
     if (!next) return false;
