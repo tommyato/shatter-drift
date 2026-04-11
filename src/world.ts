@@ -61,6 +61,7 @@ export class World {
   private nextObstacleZ = 30;
   private nextOrbZ = 15;
   private nextPortalZ = PORTAL_INTERVAL;
+  private nextMarkerZ = 100; // distance markers every 100m
   private difficulty = 0; // 0-1, increases over time
 
   // Starfield
@@ -79,6 +80,9 @@ export class World {
   // Floor panels
   private floorPanels: THREE.Mesh[] = [];
   private floorMats: THREE.MeshStandardMaterial[] = [];
+
+  // Distance markers
+  private markers: { group: THREE.Group; z: number; active: boolean }[] = [];
 
   constructor(scene: THREE.Scene, biomes: BiomeManager) {
     this.scene = scene;
@@ -127,9 +131,11 @@ export class World {
 
   private createGridLines() {
     // Create scrolling grid on the "floor" for speed perception
+    // Cross-hatch pattern: both horizontal AND vertical lines
     const lineCount = 40;
     const lineSpacing = 4;
 
+    // Horizontal lines (cross the path)
     for (let i = 0; i < lineCount; i++) {
       const points = [
         new THREE.Vector3(-LANE_WIDTH, -1.5, i * lineSpacing),
@@ -140,6 +146,27 @@ export class World {
         color: 0x112233,
         transparent: true,
         opacity: 0.3,
+      });
+      const line = new THREE.LineSegments(geo, mat);
+      this.scene.add(line);
+      this.gridLines.push(line);
+      this.gridMats.push(mat);
+    }
+
+    // Vertical lines (run along the path) — adds depth perception
+    const vLineCount = 8;
+    const vSpacing = LANE_WIDTH * 2 / (vLineCount - 1);
+    for (let i = 0; i < vLineCount; i++) {
+      const x = -LANE_WIDTH + i * vSpacing;
+      const points = [
+        new THREE.Vector3(x, -1.5, 0),
+        new THREE.Vector3(x, -1.5, lineCount * lineSpacing),
+      ];
+      const geo = new THREE.BufferGeometry().setFromPoints(points);
+      const mat = new THREE.LineBasicMaterial({
+        color: 0x112233,
+        transparent: true,
+        opacity: 0.15,
       });
       const line = new THREE.LineSegments(geo, mat);
       this.scene.add(line);
@@ -224,6 +251,12 @@ export class World {
       this.nextPortalZ += PORTAL_INTERVAL;
     }
 
+    // Generate distance markers every 100m
+    while (this.nextMarkerZ < playerZ + SPAWN_DISTANCE) {
+      this.spawnDistanceMarker(this.nextMarkerZ);
+      this.nextMarkerZ += 100;
+    }
+
     // Animate obstacles — pulse emissive glow
     const time = performance.now() * 0.001;
     for (const obs of this.obstacles) {
@@ -288,6 +321,12 @@ export class World {
         orb.mesh.visible = false;
       }
     }
+    for (const marker of this.markers) {
+      if (marker.active && marker.z < playerZ + DESPAWN_DISTANCE) {
+        marker.active = false;
+        marker.group.visible = false;
+      }
+    }
 
     // Move tunnel walls and floor with player
     for (const wall of this.tunnelWalls) {
@@ -295,6 +334,27 @@ export class World {
     }
     for (const floor of this.floorPanels) {
       floor.position.z = playerZ;
+    }
+
+    // Move grid lines with player (scroll effect)
+    const lineSpacing = 4;
+    const totalGridLength = 40 * lineSpacing;
+    const horizontalLineCount = 40; // first 40 are horizontal
+    for (let i = 0; i < Math.min(horizontalLineCount, this.gridLines.length); i++) {
+      const baseZ = i * lineSpacing;
+      // Wrap around as player moves forward
+      const offsetZ = ((baseZ - playerZ % totalGridLength) + totalGridLength) % totalGridLength;
+      this.gridLines[i].position.z = playerZ - totalGridLength / 2 + offsetZ;
+
+      // Proximity-based brightness — lines near the player glow brighter
+      const distFromPlayer = Math.abs(this.gridLines[i].position.z - playerZ);
+      const proximityGlow = Math.max(0, 1 - distFromPlayer / 30);
+      const baseOpacity = this.biomes.colors.gridOpacity;
+      this.gridMats[i].opacity = baseOpacity + proximityGlow * 0.15;
+    }
+    // Vertical lines scroll with player
+    for (let i = horizontalLineCount; i < this.gridLines.length; i++) {
+      this.gridLines[i].position.z = playerZ - totalGridLength / 2;
     }
 
     // Move starfield with player (parallax)
@@ -771,6 +831,45 @@ export class World {
     return collected;
   }
 
+  private spawnDistanceMarker(z: number) {
+    const c = this.biomes.colors;
+    const group = new THREE.Group();
+    group.position.z = z;
+
+    // Glowing line across the floor
+    const lineGeo = new THREE.PlaneGeometry(LANE_WIDTH * 1.5, 0.15);
+    const lineMat = new THREE.MeshBasicMaterial({
+      color: c.playerTrail,
+      transparent: true,
+      opacity: 0.3,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const line = new THREE.Mesh(lineGeo, lineMat);
+    line.rotation.x = -Math.PI / 2;
+    line.position.y = -1.49;
+    group.add(line);
+
+    // Side pillars with distance label effect
+    for (const side of [-1, 1]) {
+      const pillarGeo = new THREE.BoxGeometry(0.1, 2, 0.1);
+      const pillarMat = new THREE.MeshBasicMaterial({
+        color: c.playerTrail,
+        transparent: true,
+        opacity: 0.2,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const pillar = new THREE.Mesh(pillarGeo, pillarMat);
+      pillar.position.set(side * (LANE_WIDTH / 2 + 0.5), -0.5, 0);
+      group.add(pillar);
+    }
+
+    this.scene.add(group);
+    this.markers.push({ group, z, active: true });
+  }
+
   private spawnPortal(z: number) {
     const group = new THREE.Group();
     const x = (Math.random() < 0.5 ? -1 : 1) * (2 + Math.random() * 1.5);
@@ -862,9 +961,14 @@ export class World {
     this.obstacles.length = 0;
     this.orbs.length = 0;
     this.portals.length = 0;
+    for (const marker of this.markers) {
+      this.scene.remove(marker.group);
+    }
+    this.markers.length = 0;
     this.nextObstacleZ = 30;
     this.nextOrbZ = 15;
     this.nextPortalZ = PORTAL_INTERVAL;
+    this.nextMarkerZ = 100;
     this.difficulty = 0;
   }
 
