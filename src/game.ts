@@ -26,6 +26,7 @@ import { UnlockManager, TRAIL_STYLES, CRYSTAL_SKINS, type TrailStyle, type Cryst
 import { AfterimageTrail } from "./afterimage";
 import { RibbonTrail } from "./ribbon";
 import { RunHistoryTracker } from "./stats";
+import { fetchLeaderboard, submitScore, getPlayerName, setPlayerName, type LeaderboardEntry } from "./leaderboard";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -599,6 +600,9 @@ export class Game {
     this.customizePanel.classList.add("hidden");
     this.customizeOpen = false;
     this.centerMessage.style.opacity = "0";
+    // Clear leaderboard from previous game over
+    const lbSection = document.getElementById("leaderboard-section");
+    if (lbSection) lbSection.innerHTML = "";
 
     // Tutorial for first-time players
     if (!this.demoMode) {
@@ -1395,6 +1399,9 @@ export class Game {
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
     this.centerMessage.style.opacity = "1";
 
+    // Leaderboard — submit score and show top 10
+    this.showLeaderboard(this.score, Math.floor(this.distance), grade.label, this.biomes.currentBiome.displayName);
+
     // Death popup — show the most exciting achievement
     if (isNewHighScore) {
       setTimeout(() => {
@@ -1414,6 +1421,80 @@ export class Game {
     this.player.group.visible = false;
   }
 
+  private async showLeaderboard(score: number, distance: number, grade: string, biome: string) {
+    const lbContainer = document.getElementById("leaderboard-section");
+    if (!lbContainer) return;
+
+    // Show loading state
+    lbContainer.innerHTML = '<div style="color:#445566;font-size:11px;text-align:center;margin-top:12px">Loading leaderboard...</div>';
+
+    // Name entry (persistent)
+    let playerName = getPlayerName();
+    if (!playerName) {
+      playerName = "PLAYER" + Math.floor(Math.random() * 9999).toString().padStart(4, "0");
+      setPlayerName(playerName);
+    }
+
+    // Submit score + fetch leaderboard in parallel
+    const [submitResult, topScores] = await Promise.all([
+      submitScore({ name: playerName, score, distance, grade, biome }),
+      fetchLeaderboard(10),
+    ]);
+
+    // Build leaderboard HTML
+    let html = `<div style="margin-top:16px;border-top:1px solid #223344;padding-top:12px">`;
+    html += `<div style="font-family:'Orbitron',monospace;font-size:12px;color:#668899;letter-spacing:3px;text-align:center;margin-bottom:8px">GLOBAL LEADERBOARD</div>`;
+
+    if (submitResult) {
+      html += `<div style="color:#00ffcc;font-size:11px;text-align:center;margin-bottom:8px">You ranked #${submitResult.rank} of ${submitResult.total}</div>`;
+    }
+
+    // Name edit row
+    html += `<div style="text-align:center;margin-bottom:10px">`;
+    html += `<input id="lb-name-input" type="text" maxlength="16" value="${playerName}" style="
+      background:rgba(0,20,30,0.6);border:1px solid #334455;color:#00ffcc;
+      font-family:'Orbitron',monospace;font-size:11px;padding:4px 8px;
+      text-align:center;width:120px;border-radius:3px;letter-spacing:1px;
+      outline:none;" placeholder="YOUR NAME">`;
+    html += `</div>`;
+
+    if (topScores.length > 0) {
+      html += `<table style="width:100%;font-size:11px;border-collapse:collapse">`;
+      html += `<tr style="color:#445566"><td style="padding:2px 6px">#</td><td>NAME</td><td style="text-align:right">SCORE</td><td style="text-align:right">DIST</td></tr>`;
+      for (let i = 0; i < topScores.length; i++) {
+        const s = topScores[i];
+        const isYou = submitResult && s.score === score && s.name === playerName;
+        const rowColor = isYou ? "#00ffcc" : (i < 3 ? "#ffcc00" : "#8899aa");
+        const bg = isYou ? "rgba(0,255,204,0.05)" : "transparent";
+        html += `<tr style="color:${rowColor};background:${bg}">`;
+        html += `<td style="padding:2px 6px">${i + 1}</td>`;
+        html += `<td>${s.name}</td>`;
+        html += `<td style="text-align:right">${s.score.toLocaleString()}</td>`;
+        html += `<td style="text-align:right">${s.distance}m</td>`;
+        html += `</tr>`;
+      }
+      html += `</table>`;
+    } else {
+      html += `<div style="color:#445566;font-size:11px;text-align:center">No scores yet — you're first!</div>`;
+    }
+
+    html += `</div>`;
+    lbContainer.innerHTML = html;
+
+    // Wire up name input — save on change
+    const nameInput = document.getElementById("lb-name-input") as HTMLInputElement;
+    if (nameInput) {
+      nameInput.addEventListener("change", () => {
+        const newName = nameInput.value.trim().slice(0, 16) || playerName;
+        setPlayerName(newName);
+      });
+      // Prevent space from restarting game while typing name
+      nameInput.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+      });
+    }
+  }
+
   // --- Game Over ---
 
   private gameOverTimer = 0;
@@ -1429,9 +1510,11 @@ export class Game {
     this.vignette.setIntensity(vigFade);
 
     // Demo mode: auto-restart after 2 seconds
+    // Don't restart while player is typing in the leaderboard name input
+    const isTypingName = document.activeElement?.id === "lb-name-input";
     const shouldRestart = this.demoMode
       ? this.gameOverTimer > 2
-      : this.input.justPressed("space") || this.input.justPressed("click");
+      : !isTypingName && (this.input.justPressed("space") || this.input.justPressed("click"));
 
     if (shouldRestart) {
       this.player.group.visible = true;
