@@ -692,12 +692,12 @@ export class Game {
         this.speed,
         this.world
       );
-      // Autopilot returns world-space moveX, but player.update expects negated input
+      // Autopilot already works in world space — no negation needed
       moveX = ai.moveX;
       shatterInput = ai.shatter;
     } else {
       const move = this.input.getMovement();
-      moveX = move.x;
+      moveX = -move.x; // negate: camera faces +Z so screen-right is world -X
       shatterInput = this.input.isDown("space") || this.input.isDown("click");
     }
 
