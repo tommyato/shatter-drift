@@ -391,9 +391,10 @@ export class World {
       if (dz > 2) continue; // Too far in Z
 
       if (obs.isGate) {
-        // Gate: player must be in the gap
+        // Gate: player must be in the gap (small forgiveness margin so it doesn't feel unfair)
         const dx = Math.abs(playerX - obs.gapX);
-        if (dx > obs.gapHalfWidth - playerRadius) {
+        const forgiveness = 0.15;
+        if (dx > obs.gapHalfWidth - playerRadius + forgiveness) {
           // Outside the gap = collision
           return obs;
         }

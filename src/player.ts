@@ -2,7 +2,7 @@ import * as THREE from "three";
 
 const FRAGMENT_COUNT = 20; // icosahedron faces
 const SHATTER_SPREAD = 2.5;
-const RECOMBINE_SPEED = 12;
+const RECOMBINE_SPEED = 28;
 const PLAYER_COLOR = 0x00ffcc;
 const SHATTER_COLOR = 0xff44ff;
 const GHOST_OPACITY = 0.25;
@@ -25,7 +25,7 @@ export class Player {
   /** Smoothed X for rendering */
   private renderX = 0;
   /** How far shatter animation has progressed (0=whole, 1=fully shattered) */
-  private shatterT = 0;
+  shatterT = 0;
   /** Particle trail emitter position */
   trailPosition = new THREE.Vector3();
 
@@ -141,8 +141,8 @@ export class Player {
     this.shatterT = THREE.MathUtils.lerp(this.shatterT, targetT, 1 - Math.exp(-speed * dt));
 
     // Update fragment positions
-    const isFullyWhole = this.shatterT < 0.05;
-    const isPartiallyShattered = this.shatterT > 0.01;
+    const isFullyWhole = this.shatterT < 0.1;
+    const isPartiallyShattered = this.shatterT > 0.02;
 
     this.crystalMesh.visible = !isPartiallyShattered;
 
@@ -178,7 +178,7 @@ export class Player {
 
   /** Get collision radius (smaller when shattered = more forgiving) */
   getCollisionRadius(): number {
-    return this.shattered ? 0.15 : 0.5;
+    return this.shattered ? 0.15 : 0.35;
   }
 
   /** Check if player can collect (must be whole) */

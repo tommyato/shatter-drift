@@ -257,9 +257,10 @@ export class Game {
       this.player.shattered ? 1.5 : 0.3
     );
 
-    // Collision detection
-    if (!this.player.shattered) {
-      // Check obstacle collision (only when solid)
+    // Collision detection — grace period: don't collide until recombine animation is mostly done
+    const isPhasing = this.player.shattered || this.player.shatterT > 0.15;
+    if (!isPhasing) {
+      // Check obstacle collision (only when solid and visually recombined)
       const hit = this.world.checkObstacleCollision(
         this.player.group.position.x,
         this.playerZ,
