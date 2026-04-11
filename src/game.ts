@@ -435,9 +435,8 @@ export class Game {
     this.camera.fov = this.currentFOV;
     this.camera.updateProjectionMatrix();
 
-    // Camera roll interpolation
+    // Camera roll interpolation (applied via camera.up in updatePlaying/updateTitle)
     this.cameraRoll = THREE.MathUtils.lerp(this.cameraRoll, this.targetCameraRoll, 1 - Math.exp(-5 * dt));
-    this.camera.rotation.z = this.cameraRoll;
 
     // Update PostFX
     this.postfx.update(dt);
@@ -462,6 +461,7 @@ export class Game {
     // Camera orbits slowly
     const t = performance.now() * 0.0003;
     this.camera.position.set(Math.sin(t) * 5, 3, Math.cos(t) * 5);
+    this.camera.up.set(0, 1, 0);
     this.camera.lookAt(0, 0, 0);
 
     if (this.input.justPressed("space") || this.input.justPressed("click")) {
@@ -1031,6 +1031,8 @@ export class Game {
       this.playerZ + this.cameraOffset.z
     );
     this.camera.position.lerp(targetCamPos, 1 - Math.exp(-5 * dt));
+    // Apply roll via up vector (avoids Euler decomposition ambiguity with rotation.z)
+    this.camera.up.set(-Math.sin(this.cameraRoll), Math.cos(this.cameraRoll), 0);
     this.camera.lookAt(
       this.player.group.position.x * 0.5,
       0.5,
