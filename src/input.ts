@@ -96,6 +96,7 @@ export class Input {
   private touchCurrentX = 0;
   private touching = false;
   private touchMoveX = 0;
+  private touchRecenterTimer = 0;
 
   private initTouch(canvas: HTMLCanvasElement) {
     canvas.addEventListener("touchstart", (e) => {
@@ -104,6 +105,7 @@ export class Input {
       this.touchStartX = touch.clientX;
       this.touchCurrentX = touch.clientX;
       this.touching = true;
+      this.touchRecenterTimer = 0;
       // Touch = shatter (like holding click)
       this.keys.add("click");
     }, { passive: false });
@@ -112,10 +114,17 @@ export class Input {
       e.preventDefault();
       if (!this.touching) return;
       const touch = e.touches[0];
+      const prevX = this.touchCurrentX;
       this.touchCurrentX = touch.clientX;
-      // Map horizontal drag to movement: 80px = full input
-      this.touchMoveX = (this.touchCurrentX - this.touchStartX) / 80;
-      this.touchMoveX = Math.max(-1, Math.min(1, this.touchMoveX));
+
+      // Velocity-based input: blend absolute position with finger velocity
+      // This makes quick flicks responsive while sustained drags feel smooth
+      const velocity = (this.touchCurrentX - prevX) * 0.15;
+      const position = (this.touchCurrentX - this.touchStartX) / 60;
+      this.touchMoveX = Math.max(-1, Math.min(1, position + velocity));
+
+      // Gradually recenter the anchor toward the finger to prevent drift
+      this.touchStartX += (this.touchCurrentX - this.touchStartX) * 0.02;
     }, { passive: false });
 
     canvas.addEventListener("touchend", (e) => {

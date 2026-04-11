@@ -396,6 +396,13 @@
       to { opacity: 1; transform: translateY(0); }
     }
 
+    /* Show desktop/mobile controls based on device */
+    .controls-mobile, .prompt-mobile { display: none; }
+    @media (hover: none) and (pointer: coarse) {
+      .controls-desktop, .prompt-desktop { display: none; }
+      .controls-mobile, .prompt-mobile { display: block; }
+    }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -424,13 +431,19 @@
     <div id="title-overlay">
       <h1>SHATTER DRIFT</h1>
       <div class="tagline">BREAK TO SURVIVE</div>
-      <div class="controls">
+      <div class="controls controls-desktop">
         <span>A/D</span> or <span>LEFT/RIGHT</span> &mdash; DODGE<br>
         HOLD <span>SPACE</span> or <span>CLICK</span> &mdash; SHATTER THROUGH OBSTACLES<br>
         RELEASE &mdash; RECOMBINE &amp; COLLECT ORBS<br>
         <span>PHASE STREAKS</span> = BONUS POINTS
       </div>
-      <div class="prompt">PRESS SPACE OR CLICK</div>
+      <div class="controls controls-mobile">
+        <span>TOUCH + DRAG</span> &mdash; STEER &amp; SHATTER<br>
+        <span>LIFT FINGER</span> &mdash; RECOMBINE &amp; COLLECT ORBS<br>
+        <span>PHASE STREAKS</span> = BONUS POINTS
+      </div>
+      <div class="prompt prompt-desktop">PRESS SPACE OR CLICK</div>
+      <div class="prompt prompt-mobile">TAP TO PLAY</div>
       <div class="high-score" id="title-high-score"></div>
       <div class="customize-btn" id="customize-btn">CUSTOMIZE</div>
     </div>
