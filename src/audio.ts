@@ -400,6 +400,103 @@ export function playShieldBreak() {
   osc.stop(t + 0.26);
 }
 
+/** Speed gate boost — whooshing acceleration sound */
+export function playSpeedBoost() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  // Rising sweep
+  const osc = ctx.createOscillator();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(100, t);
+  osc.frequency.exponentialRampToValueAtTime(800, t + 0.3);
+  osc.frequency.exponentialRampToValueAtTime(200, t + 0.8);
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(500, t);
+  filter.frequency.linearRampToValueAtTime(4000, t + 0.3);
+  filter.frequency.linearRampToValueAtTime(800, t + 0.8);
+  filter.Q.value = 5;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0, t);
+  gain.gain.linearRampToValueAtTime(0.15, t + 0.05);
+  gain.gain.setValueAtTime(0.15, t + 0.3);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+  osc.start(t);
+  osc.stop(t + 1);
+
+  // White noise burst
+  const noiseDur = 0.5;
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * noiseDur, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.setValueAtTime(0.08, t);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t + noiseDur);
+  src.connect(noiseGain);
+  noiseGain.connect(masterGain);
+  src.start(t);
+  src.stop(t + noiseDur + 0.01);
+}
+
+/** Challenge complete — triumphant fanfare */
+export function playChallengeComplete() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  // Triumphant chord (C major) with rising brightness
+  const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+  for (let i = 0; i < notes.length; i++) {
+    const osc = ctx.createOscillator();
+    osc.type = i < 2 ? "triangle" : "sine";
+    osc.frequency.setValueAtTime(notes[i], t + i * 0.06);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, t + i * 0.06);
+    gain.gain.linearRampToValueAtTime(0.1, t + i * 0.06 + 0.03);
+    gain.gain.setValueAtTime(0.1, t + i * 0.06 + 0.2);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(t + i * 0.06);
+    osc.stop(t + 0.85);
+  }
+}
+
+/** World event trigger — atmospheric swell */
+export function playWorldEvent() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  // Low rumble + rising pad
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(60, t);
+  osc.frequency.linearRampToValueAtTime(120, t + 1.5);
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0, t);
+  gain.gain.linearRampToValueAtTime(0.08, t + 0.5);
+  gain.gain.setValueAtTime(0.08, t + 1.0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
+
+  osc.connect(gain);
+  gain.connect(masterGain);
+  osc.start(t);
+  osc.stop(t + 2.1);
+}
+
 /** Stop all audio (cleanup) */
 export function stopAudio() {
   if (!ctx) return;

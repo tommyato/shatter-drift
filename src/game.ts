@@ -5,7 +5,7 @@ import { Input } from "./input";
 import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, stopAudio, startMusic, updateMusic, fadeOutMusic } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, stopAudio, startMusic, updateMusic, fadeOutMusic } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { clamp, ScreenShake } from "./utils";
@@ -18,6 +18,10 @@ import { ShockwaveEffect } from "./shockwave";
 import { EnvironmentParticles } from "./environment";
 import { SkyboxManager } from "./skybox";
 import { Tutorial } from "./tutorial";
+import { SpeedGateManager } from "./speedgates";
+import { ChallengeManager } from "./challenges";
+import { WorldEventManager } from "./events";
+import { UnlockManager } from "./unlocks";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -147,6 +151,10 @@ export class Game {
   private envParticles!: EnvironmentParticles;
   private skybox!: SkyboxManager;
   private tutorial!: Tutorial;
+  private speedGates!: SpeedGateManager;
+  private challenges!: ChallengeManager;
+  private worldEvents!: WorldEventManager;
+  private unlocks!: UnlockManager;
 
   // Lights (for biome transitions)
   private ambientLight!: THREE.AmbientLight;
@@ -294,6 +302,10 @@ export class Game {
     this.envParticles = new EnvironmentParticles(this.scene, this.biomes);
     this.skybox = new SkyboxManager(this.scene);
     this.tutorial = new Tutorial();
+    this.speedGates = new SpeedGateManager(this.scene, this.biomes);
+    this.challenges = new ChallengeManager();
+    this.worldEvents = new WorldEventManager(this.scene, this.biomes);
+    this.unlocks = new UnlockManager();
 
     // Cache HUD elements
     this.hudScore = document.getElementById("hud-score")!;
@@ -317,6 +329,8 @@ export class Game {
       if (this.bestGrade) statsText += ` | BEST: ${this.bestGrade}`;
       if (this.bestDistance > 0) statsText += ` | ${this.bestDistance.toLocaleString()}m`;
       if (this.totalRuns > 0) statsText += ` | RUNS: ${this.totalRuns}`;
+      const cStats = this.challenges.getStats();
+      if (cStats.completed > 0) statsText += ` | ★ ${cStats.completed}/${cStats.total}`;
       this.titleHighScore.textContent = statsText;
     }
 
@@ -357,7 +371,7 @@ export class Game {
         break;
     }
 
-    // Always update effects
+    // Always update effects (even on title/game over for visual continuity)
     this.trail.update(dt);
     this.explosion.update(dt);
     this.collectFlash.update(dt);
@@ -441,6 +455,9 @@ export class Game {
     this.powerups.reset();
     this.milestones.reset();
     this.bossWaves.reset();
+    this.speedGates.reset();
+    this.worldEvents.reset();
+    this.challenges.resetRun();
 
     // Reset scene to first biome
     this.applyBiomeColors();
@@ -547,6 +564,78 @@ export class Game {
     // Update boss waves
     this.bossWaves.update(dt, this.playerZ);
 
+    // Update speed gates
+    const gateResult = this.speedGates.update(dt, this.playerZ, this.player.group.position.x);
+    if (gateResult.justCollected) {
+      this.speedGates.applyBoost(gateResult.boostAmount);
+      playSpeedBoost();
+      this.shake.trigger(0.6);
+      this.screenFlash.trigger(0x00ffff, 0.2);
+      // Dramatic shockwave at gate position
+      if (gateResult.gatePosition) {
+        this.shockwave.trigger(gateResult.gatePosition, 0x00ffff, 8, 0.7);
+      }
+      // Score bonus
+      const boostScore = Math.floor(gateResult.boostAmount * 50);
+      this.score += boostScore;
+      this.popups.showAt3D(
+        `BOOST +${boostScore}`, this.player.group.position.x, this.playerZ, this.camera,
+        "#00ffff", 24
+      );
+      this.milestones.showPowerUpAnnouncement("SPEED BOOST");
+    }
+
+    // Apply speed gate boost
+    const gateBoost = this.speedGates.getBoostSpeed();
+    if (gateBoost > 0) {
+      this.speed = Math.min(MAX_SPEED + 15, this.speed + gateBoost); // can exceed MAX temporarily
+    }
+
+    // Update world events
+    const eventResult = this.worldEvents.update(dt, this.playerZ);
+    if (eventResult.eventName) {
+      playWorldEvent();
+      // Announce event
+      const eventNames: Record<string, string> = {
+        cosmic_ripple: "COSMIC RIPPLE",
+        crystal_rain: "CRYSTAL RAIN",
+        data_storm: "DATA STORM",
+        meteor_shower: "METEOR SHOWER",
+        aurora_burst: "AURORA BURST",
+      };
+      const name = eventNames[eventResult.eventName] || eventResult.eventName;
+      this.popups.showCenter(name, "", "#ffffff");
+    }
+
+    // Apply event effects to bloom and FOV
+    this.bloomPass.strength = this.biomes.colors.bloomStrength + this.worldEvents.getBloomBoost();
+    this.targetFOV += this.worldEvents.getFOVPulse();
+
+    // Update challenges
+    this.challenges.updateRun({
+      distance: this.distance,
+      score: this.score,
+      phaseStreak: this.phaseStreak,
+      maxCombo: this.maxCombo,
+      closeCallCount: this.closeCallCount,
+      biomeIndex: this.biomes.biomeIndex,
+      speed: this.speed,
+      isPhasing: this.player.shattered,
+    });
+
+    // Check for newly completed challenges
+    const completions = this.challenges.popCompletions();
+    for (const challenge of completions) {
+      playChallengeComplete();
+      this.screenFlash.trigger(0xffcc00, 0.3);
+      this.shake.trigger(0.5);
+      this.popups.showCenter(
+        "CHALLENGE COMPLETE",
+        challenge.name,
+        "#ffcc00"
+      );
+    }
+
     // Boss warning display
     if (this.bossWaves.warningActive) {
       this.hudBossWarning.textContent = this.bossWaves.warningText;
@@ -562,20 +651,34 @@ export class Game {
     const speedNorm = this.speed / MAX_SPEED;
     const comboFOVBoost = Math.min(this.combo, COMBO_MAX) * 0.5; // combo widens FOV slightly
     const phaseNarrow = this.player.shattered ? -3 : 0; // tighter FOV while phasing = focus effect
-    this.targetFOV = this.baseFOV + speedNorm * 15 + comboFOVBoost + phaseNarrow;
+    const boostFOV = this.speedGates.isBoosting() ? 8 : 0; // extra wide during boost
+    this.targetFOV = this.baseFOV + speedNorm * 15 + comboFOVBoost + phaseNarrow + boostFOV;
 
     // Camera roll on lateral movement (subtle)
     this.targetCameraRoll = -moveX * 0.03;
 
-    // Trail particles
+    // Trail particles — use unlocked trail or biome default
+    const time = performance.now() * 0.001;
+    const unlockTrailColor = this.unlocks.getTrailColor(time);
     const biomeTrailColor = this.biomes.colors.playerTrail;
-    const trailColor = this.player.shattered ? 0xff44ff : biomeTrailColor;
+    const baseTrailColor = unlockTrailColor !== 0x00ffcc ? unlockTrailColor : biomeTrailColor;
+    const trailColor = this.player.shattered ? 0xff44ff : baseTrailColor;
+    const trailSize = this.unlocks.getTrailSize();
     this.trail.setColor(trailColor);
     this.trail.emit(
       new THREE.Vector3(this.player.group.position.x, 0, this.playerZ - 0.5),
-      this.player.shattered ? 3 : 1,
-      this.player.shattered ? 1.5 : 0.3
+      (this.player.shattered ? 3 : 1) * trailSize,
+      (this.player.shattered ? 1.5 : 0.3) * trailSize
     );
+
+    // Extra trail during speed boost
+    if (this.speedGates.isBoosting()) {
+      this.trail.emit(
+        new THREE.Vector3(this.player.group.position.x + (Math.random() - 0.5) * 0.5, 0.5, this.playerZ - 1),
+        4,
+        2.0
+      );
+    }
 
     // Vignette — stronger at high speed and during transitions
     const vignetteTarget = speedNorm * 0.4 + (this.biomes.isTransitioning ? 0.3 : 0);
@@ -922,6 +1025,11 @@ export class Game {
 
     // Performance grade — drives replayability ("I can get S rank!")
     const grade = this.calculateGrade();
+    const gotSRank = grade.label === "S RANK";
+
+    // Finalize challenges for this run
+    this.challenges.endRun(this.totalRuns, gotSRank);
+    const challengeStats = this.challenges.getStats();
 
     // Save best grade
     const gradeRanks = ["E RANK", "D RANK", "C RANK", "B RANK", "A RANK", "S RANK"];
@@ -943,6 +1051,7 @@ export class Game {
       Max Combo: x${this.maxCombo}<br>
       Close Calls: ${this.closeCallCount}<br>
       Zone: ${this.biomes.currentBiome.displayName}<br>
+      <span style="color:#ffcc00;font-size:12px">Challenges: ${challengeStats.completed}/${challengeStats.total}</span><br>
       ${isNewHighScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore.toLocaleString()}`}
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
