@@ -24,6 +24,7 @@ import { ChallengeManager } from "./challenges";
 import { WorldEventManager } from "./events";
 import { UnlockManager } from "./unlocks";
 import { AfterimageTrail } from "./afterimage";
+import { RibbonTrail } from "./ribbon";
 import { RunHistoryTracker } from "./stats";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
@@ -145,6 +146,7 @@ export class Game {
   private screenFlash!: ScreenFlash;
   private postfx!: PostFXPass;
   private afterimage!: AfterimageTrail;
+  private ribbon!: RibbonTrail;
   private runHistory!: RunHistoryTracker;
 
   // New systems
@@ -318,6 +320,7 @@ export class Game {
     this.worldEvents = new WorldEventManager(this.scene, this.biomes);
     this.unlocks = new UnlockManager();
     this.afterimage = new AfterimageTrail(this.scene);
+    this.ribbon = new RibbonTrail(this.scene);
     this.runHistory = new RunHistoryTracker();
 
     // Cache HUD elements
@@ -737,6 +740,16 @@ export class Game {
       (this.player.shattered ? 3 : 1) * trailSize,
       (this.player.shattered ? 1.5 : 0.3) * trailSize
     );
+
+    // Ribbon trail — smooth flowing ribbon behind player
+    const ribbonWidth = this.player.shattered ? 0.5 : 0.2 + speedNorm * 0.3;
+    this.ribbon.setColor(trailColor);
+    this.ribbon.setOpacity(this.player.shattered ? 0.6 : 0.35 + speedNorm * 0.15);
+    this.ribbon.addPoint(
+      new THREE.Vector3(this.player.group.position.x, 0.3, this.playerZ - 0.3),
+      ribbonWidth
+    );
+    this.ribbon.update(dt);
 
     // Afterimage trail — ghostly copies at high speed
     this.afterimage.setIntensity(this.speed / MAX_SPEED);
