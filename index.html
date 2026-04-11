@@ -82,6 +82,18 @@
     #hud-state-indicator.whole { color: #00ffcc; }
     #hud-state-indicator.shattered { color: #ff44ff; }
 
+    #hud-powerup {
+      position: absolute;
+      top: 48px;
+      left: 28px;
+      font-size: 12px;
+      color: #aa88ff;
+      text-shadow: 0 0 10px rgba(170,136,255,0.4);
+      letter-spacing: 2px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
     /* Center message */
     #center-message {
       position: absolute;
@@ -196,6 +208,7 @@
       <div id="hud-distance">0m</div>
       <div id="hud-speed"></div>
       <div id="hud-combo"></div>
+      <div id="hud-powerup"></div>
       <div id="hud-state-indicator" class="whole">SOLID</div>
       <div id="center-message">
         <h2 id="center-title"></h2>

@@ -6,6 +6,7 @@ const RECOMBINE_SPEED = 28;
 const PLAYER_COLOR = 0x00ffcc;
 const SHATTER_COLOR = 0xff44ff;
 const GHOST_OPACITY = 0.25;
+const SHIELD_COLOR = 0x44aaff;
 
 export class Player {
   group = new THREE.Group();
@@ -32,10 +33,15 @@ export class Player {
   // Glow ring (visual indicator of state)
   private glowRing!: THREE.Mesh;
 
+  // Shield visual
+  private shieldBubble!: THREE.Mesh;
+  private shieldActive = false;
+
   constructor() {
     this.buildCrystal();
     this.buildFragments();
     this.buildGlowRing();
+    this.buildShieldBubble();
   }
 
   private buildCrystal() {
@@ -122,6 +128,27 @@ export class Player {
     this.group.add(this.glowRing);
   }
 
+  private buildShieldBubble() {
+    const geo = new THREE.SphereGeometry(1.2, 24, 16);
+    const mat = new THREE.MeshStandardMaterial({
+      color: SHIELD_COLOR,
+      emissive: SHIELD_COLOR,
+      emissiveIntensity: 0.3,
+      metalness: 0.1,
+      roughness: 0.1,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      wireframe: true,
+    });
+    this.shieldBubble = new THREE.Mesh(geo, mat);
+    this.group.add(this.shieldBubble);
+  }
+
+  setShieldActive(active: boolean) {
+    this.shieldActive = active;
+  }
+
   update(dt: number, moveInput: number) {
     // Horizontal movement
     const moveSpeed = 8;
@@ -172,6 +199,18 @@ export class Player {
     this.glowRing.scale.setScalar(1 + this.shatterT * 0.5);
     this.glowRing.rotation.z += dt * 0.5;
 
+    // Shield bubble animation
+    const shieldMat = this.shieldBubble.material as THREE.MeshStandardMaterial;
+    if (this.shieldActive) {
+      shieldMat.opacity = THREE.MathUtils.lerp(shieldMat.opacity, 0.15, 1 - Math.exp(-5 * dt));
+      this.shieldBubble.rotation.y += dt * 1.5;
+      this.shieldBubble.rotation.x += dt * 0.7;
+      const pulse = 1 + Math.sin(performance.now() * 0.005) * 0.05;
+      this.shieldBubble.scale.setScalar(pulse);
+    } else {
+      shieldMat.opacity = THREE.MathUtils.lerp(shieldMat.opacity, 0, 1 - Math.exp(-8 * dt));
+    }
+
     // Trail position (world space)
     this.trailPosition.copy(this.group.position);
   }
@@ -195,5 +234,7 @@ export class Player {
     }
     this.glowRing.geometry.dispose();
     (this.glowRing.material as THREE.Material).dispose();
+    this.shieldBubble.geometry.dispose();
+    (this.shieldBubble.material as THREE.Material).dispose();
   }
 }

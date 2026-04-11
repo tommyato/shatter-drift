@@ -1,13 +1,17 @@
 import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { Input } from "./input";
 import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash } from "./effects";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, stopAudio, startMusic, updateMusic, fadeOutMusic } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, stopAudio, startMusic, updateMusic, fadeOutMusic } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { clamp, ScreenShake } from "./utils";
+import { BiomeManager } from "./biomes";
+import { PowerUpManager, PowerUpType } from "./powerups";
+import { MilestoneTracker } from "./milestones";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -23,12 +27,69 @@ class SpeedLines {
     document.body.appendChild(this.el);
   }
 
-  update(speedNorm: number) {
+  update(speedNorm: number, color: number = 0x00ffcc) {
     // Start showing at 60% speed, full at 100%
     const t = clamp((speedNorm - 0.6) / 0.4, 0, 1);
     const alpha = t * 0.12;
-    this.el.style.background = `radial-gradient(ellipse at center, transparent 20%, rgba(0,255,204,${alpha}) 100%)`;
+    const r = (color >> 16) & 0xff;
+    const g = (color >> 8) & 0xff;
+    const b = color & 0xff;
+    this.el.style.background = `radial-gradient(ellipse at center, transparent 20%, rgba(${r},${g},${b},${alpha}) 100%)`;
     this.el.style.opacity = t > 0.01 ? "1" : "0";
+  }
+}
+
+/** Vignette overlay for dramatic moments */
+class Vignette {
+  private el: HTMLElement;
+  private intensity = 0;
+
+  constructor() {
+    this.el = document.createElement("div");
+    this.el.style.cssText = `
+      position: fixed; inset: 0; pointer-events: none; z-index: 9;
+      background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.8) 100%);
+      opacity: 0; transition: opacity 0.5s;
+    `;
+    document.body.appendChild(this.el);
+  }
+
+  setIntensity(v: number) {
+    this.intensity = clamp(v, 0, 1);
+    this.el.style.opacity = String(this.intensity);
+  }
+}
+
+/** Flash overlay for power-up collection */
+class ScreenFlash {
+  private el: HTMLElement;
+  private timer = 0;
+
+  constructor() {
+    this.el = document.createElement("div");
+    this.el.style.cssText = `
+      position: fixed; inset: 0; pointer-events: none; z-index: 25;
+      opacity: 0; transition: opacity 0.1s;
+    `;
+    document.body.appendChild(this.el);
+  }
+
+  trigger(color: number, duration: number = 0.15) {
+    const r = (color >> 16) & 0xff;
+    const g = (color >> 8) & 0xff;
+    const b = color & 0xff;
+    this.el.style.background = `rgba(${r},${g},${b},0.3)`;
+    this.el.style.opacity = "1";
+    this.timer = duration;
+  }
+
+  update(dt: number) {
+    if (this.timer > 0) {
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.el.style.opacity = "0";
+      }
+    }
   }
 }
 
@@ -52,6 +113,7 @@ export class Game {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private composer!: EffectComposer;
+  private bloomPass!: UnrealBloomPass;
   private clock = new THREE.Clock();
 
   // Game objects
@@ -65,6 +127,18 @@ export class Game {
   private collectFlash!: CollectFlash;
   private shake = new ScreenShake();
   private speedLines!: SpeedLines;
+  private vignette!: Vignette;
+  private screenFlash!: ScreenFlash;
+
+  // New systems
+  private biomes!: BiomeManager;
+  private powerups!: PowerUpManager;
+  private milestones!: MilestoneTracker;
+
+  // Lights (for biome transitions)
+  private ambientLight!: THREE.AmbientLight;
+  private directionalLight!: THREE.DirectionalLight;
+  private rimLight!: THREE.PointLight;
 
   // State
   private state = GameState.Title;
@@ -73,10 +147,21 @@ export class Game {
   private distance = 0;
   private speed = INITIAL_SPEED;
   private combo = 0;
+  private maxCombo = 0;
   private playerZ = 0;
   private playTime = 0;
   private lastCloseCall = -10;
   private wasShattered = false;
+  private closeCallCount = 0;
+
+  // Camera juice
+  private baseFOV = 70;
+  private targetFOV = 70;
+  private currentFOV = 70;
+  private cameraRoll = 0;
+  private targetCameraRoll = 0;
+  private slowMoFactor = 1; // visual slow-mo for close calls
+  private slowMoTimer = 0;
 
   // HUD elements
   private hudScore!: HTMLElement;
@@ -91,6 +176,7 @@ export class Game {
   private centerStats!: HTMLElement;
   private centerRetry!: HTMLElement;
   private titleHighScore!: HTMLElement;
+  private hudPowerUp!: HTMLElement;
 
   // Autopilot & recording
   private autopilot: Autopilot | null = null;
@@ -131,20 +217,22 @@ export class Game {
     );
 
     // Lighting — minimal, let emissives and bloom do the work
-    const ambient = new THREE.AmbientLight(0x222244, 0.3);
-    this.scene.add(ambient);
+    this.ambientLight = new THREE.AmbientLight(0x222244, 0.3);
+    this.scene.add(this.ambientLight);
 
-    const mainLight = new THREE.DirectionalLight(0x4466aa, 0.5);
-    mainLight.position.set(5, 10, 10);
-    this.scene.add(mainLight);
+    this.directionalLight = new THREE.DirectionalLight(0x4466aa, 0.5);
+    this.directionalLight.position.set(5, 10, 10);
+    this.scene.add(this.directionalLight);
 
     // Rim light for player (from behind)
-    const rimLight = new THREE.PointLight(0x00ffcc, 1, 20);
-    rimLight.position.set(0, 2, -3);
-    this.scene.add(rimLight);
+    this.rimLight = new THREE.PointLight(0x00ffcc, 1, 20);
+    this.rimLight.position.set(0, 2, -3);
+    this.scene.add(this.rimLight);
 
     // Post-processing (bloom)
-    this.composer = createComposer(this.renderer, this.scene, this.camera);
+    const { composer, bloom } = createComposer(this.renderer, this.scene, this.camera);
+    this.composer = composer;
+    this.bloomPass = bloom;
 
     // Input
     this.input.init(this.renderer.domElement);
@@ -153,14 +241,25 @@ export class Game {
     this.player = new Player();
     this.scene.add(this.player.group);
 
+    // Biome manager
+    this.biomes = new BiomeManager();
+
     // World
-    this.world = new World(this.scene);
+    this.world = new World(this.scene, this.biomes);
+
+    // Power-ups
+    this.powerups = new PowerUpManager(this.scene);
+
+    // Milestones
+    this.milestones = new MilestoneTracker();
 
     // Effects
     this.trail = new ParticleTrail(this.scene, 0x00ffcc);
     this.explosion = new ExplosionEffect(this.scene);
     this.collectFlash = new CollectFlash(this.scene);
     this.speedLines = new SpeedLines();
+    this.vignette = new Vignette();
+    this.screenFlash = new ScreenFlash();
 
     // Cache HUD elements
     this.hudScore = document.getElementById("hud-score")!;
@@ -175,6 +274,7 @@ export class Game {
     this.centerStats = document.getElementById("center-stats")!;
     this.centerRetry = document.getElementById("center-retry")!;
     this.titleHighScore = document.getElementById("title-high-score")!;
+    this.hudPowerUp = document.getElementById("hud-powerup")!;
 
     // Show high score on title
     if (this.highScore > 0) {
@@ -189,7 +289,21 @@ export class Game {
   }
 
   private loop() {
-    const dt = Math.min(this.clock.getDelta(), 0.05);
+    let dt = Math.min(this.clock.getDelta(), 0.05);
+
+    // Apply slow-mo from power-ups
+    if (this.state === GameState.Playing) {
+      const puTimeScale = this.powerups.getTimeScale();
+      dt *= puTimeScale;
+    }
+
+    // Apply close-call slow-mo (brief dramatic pause)
+    if (this.slowMoTimer > 0) {
+      this.slowMoTimer -= dt;
+      this.slowMoFactor = THREE.MathUtils.lerp(this.slowMoFactor, 1, 0.05);
+      dt *= this.slowMoFactor;
+    }
+
     this.input.update();
 
     switch (this.state) {
@@ -208,6 +322,17 @@ export class Game {
     this.trail.update(dt);
     this.explosion.update(dt);
     this.collectFlash.update(dt);
+    this.screenFlash.update(dt);
+    this.milestones.update(dt);
+
+    // Camera FOV interpolation
+    this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, this.targetFOV, 1 - Math.exp(-3 * dt));
+    this.camera.fov = this.currentFOV;
+    this.camera.updateProjectionMatrix();
+
+    // Camera roll interpolation
+    this.cameraRoll = THREE.MathUtils.lerp(this.cameraRoll, this.targetCameraRoll, 1 - Math.exp(-5 * dt));
+    this.camera.rotation.z = this.cameraRoll;
 
     // Render with bloom
     this.composer.render();
@@ -246,13 +371,27 @@ export class Game {
     this.distance = 0;
     this.speed = INITIAL_SPEED;
     this.combo = 0;
+    this.maxCombo = 0;
     this.playerZ = 0;
     this.playTime = 0;
+    this.closeCallCount = 0;
     this.player.laneX = 0;
     this.player.shattered = false;
+    this.slowMoFactor = 1;
+    this.slowMoTimer = 0;
+    this.targetFOV = this.baseFOV;
+    this.currentFOV = this.baseFOV;
+    this.targetCameraRoll = 0;
+    this.cameraRoll = 0;
 
-    // Reset world
+    // Reset systems
     this.world.reset();
+    this.biomes.reset();
+    this.powerups.reset();
+    this.milestones.reset();
+
+    // Reset scene to first biome
+    this.applyBiomeColors();
 
     // Show HUD, hide title
     this.hud.classList.remove("hidden");
@@ -301,7 +440,15 @@ export class Game {
       shatterInput = this.input.isDown("space") || this.input.isDown("click");
     }
 
+    // HyperPhase power-up: always phasing without input
+    if (this.powerups.hasActivePowerUp(PowerUpType.HyperPhase)) {
+      // Player can ALSO phase manually; hyperphase means combo doesn't break
+    }
+
     this.player.shattered = shatterInput;
+
+    // Shield visual indicator
+    this.player.setShieldActive(this.powerups.hasActivePowerUp(PowerUpType.Shield));
 
     // Shatter/recombine audio triggers
     if (shatterInput && !this.wasShattered) playShatter();
@@ -318,14 +465,41 @@ export class Game {
     // Update world
     this.world.update(dt, this.playerZ, this.speed);
 
+    // Update biomes
+    const biomeChanged = this.biomes.update(this.distance);
+    if (biomeChanged) {
+      this.milestones.showBiomeAnnouncement(this.biomes.currentBiome.displayName);
+      playBiomeTransition();
+      this.shake.trigger(0.3);
+    }
+    this.applyBiomeColors();
+
+    // Update power-ups
+    this.powerups.update(dt, this.playerZ, this.player.group.position.x);
+
+    // Check milestones
+    this.milestones.check(this.distance, this.score, this.combo, this.speed);
+
+    // Camera FOV — increases with speed for rush feeling
+    const speedNorm = this.speed / MAX_SPEED;
+    this.targetFOV = this.baseFOV + speedNorm * 15; // 70 → 85 FOV
+
+    // Camera roll on lateral movement (subtle)
+    this.targetCameraRoll = -moveX * 0.03;
+
     // Trail particles
-    const trailColor = this.player.shattered ? 0xff44ff : 0x00ffcc;
+    const biomeTrailColor = this.biomes.colors.playerTrail;
+    const trailColor = this.player.shattered ? 0xff44ff : biomeTrailColor;
     this.trail.setColor(trailColor);
     this.trail.emit(
       new THREE.Vector3(this.player.group.position.x, 0, this.playerZ - 0.5),
       this.player.shattered ? 3 : 1,
       this.player.shattered ? 1.5 : 0.3
     );
+
+    // Vignette — stronger at high speed and during transitions
+    const vignetteTarget = speedNorm * 0.4 + (this.biomes.isTransitioning ? 0.3 : 0);
+    this.vignette.setIntensity(vignetteTarget);
 
     // Vibeverse portal check (always active, even when phasing)
     if (!this.demoMode) {
@@ -339,6 +513,27 @@ export class Game {
       }
     }
 
+    // Power-up collection (works in any state)
+    const collectedPU = this.powerups.checkCollection(
+      this.player.group.position.x,
+      this.playerZ,
+      0.8
+    );
+    if (collectedPU) {
+      this.powerups.activatePowerUp(collectedPU.type);
+      const config = this.powerups.getConfig(collectedPU.type);
+      this.screenFlash.trigger(config.color, 0.2);
+      playPowerUp();
+      this.milestones.showPowerUpAnnouncement(
+        collectedPU.type.toUpperCase()
+      );
+    }
+
+    // Magnet effect — attract orbs when magnet is active
+    if (this.powerups.hasActivePowerUp(PowerUpType.Magnet)) {
+      this.world.attractOrbs(this.player.group.position.x, this.playerZ, 6, dt);
+    }
+
     // Collision detection — grace period: don't collide until recombine animation is mostly done
     const isPhasing = this.player.shattered || this.player.shatterT > 0.15;
     if (!isPhasing) {
@@ -349,8 +544,19 @@ export class Game {
         this.player.getCollisionRadius()
       );
       if (hit) {
-        this.die();
-        return;
+        // Shield absorbs one hit
+        if (this.powerups.consumeShield()) {
+          this.shake.trigger(0.8);
+          this.screenFlash.trigger(0x44aaff, 0.3);
+          playShieldBreak();
+          this.player.setShieldActive(false);
+          // Remove the obstacle that was hit
+          hit.active = false;
+          hit.mesh.visible = false;
+        } else {
+          this.die();
+          return;
+        }
       }
 
       // Check orb collection (only when solid)
@@ -361,8 +567,10 @@ export class Game {
       );
       for (const orb of collected) {
         this.combo++;
+        if (this.combo > this.maxCombo) this.maxCombo = this.combo;
         const multiplier = Math.min(this.combo, COMBO_MAX);
-        this.score += ORB_SCORE * multiplier;
+        const puMultiplier = this.powerups.getScoreMultiplier();
+        this.score += ORB_SCORE * multiplier * puMultiplier;
         playCollect(this.combo);
         this.collectFlash.trigger(
           new THREE.Vector3(orb.x, orb.y, orb.z)
@@ -372,17 +580,27 @@ export class Game {
       // Check close calls while shattered
       if (this.world.checkCloseCall(this.player.group.position.x, this.playerZ)) {
         if (this.playerZ - this.lastCloseCall > 3) {
-          this.score += CLOSE_CALL_SCORE;
+          const puMultiplier = this.powerups.getScoreMultiplier();
+          this.score += CLOSE_CALL_SCORE * puMultiplier;
           this.lastCloseCall = this.playerZ;
+          this.closeCallCount++;
           playCloseCall();
+          this.milestones.registerCloseCall();
+
+          // Brief slow-mo on close calls for dramatic effect
+          this.slowMoFactor = 0.3;
+          this.slowMoTimer = 0.15;
         }
       }
-      // Shattering breaks combo
-      this.combo = 0;
+      // Shattering breaks combo (unless HyperPhase is active)
+      if (!this.powerups.hasActivePowerUp(PowerUpType.HyperPhase)) {
+        this.combo = 0;
+      }
     }
 
-    // Distance score
-    this.score += Math.floor(this.speed * dt);
+    // Distance score with power-up multiplier
+    const puMultiplier = this.powerups.getScoreMultiplier();
+    this.score += Math.floor(this.speed * dt * puMultiplier);
 
     // Camera follows player
     const targetCamPos = new THREE.Vector3(
@@ -400,8 +618,8 @@ export class Game {
     // Screen shake
     this.shake.apply(this.camera, dt);
 
-    // Speed lines
-    this.speedLines.update(this.speed / MAX_SPEED);
+    // Speed lines with biome color
+    this.speedLines.update(this.speed / MAX_SPEED, this.biomes.colors.playerTrail);
 
     // Update HUD
     this.hudScore.textContent = String(this.score);
@@ -414,6 +632,9 @@ export class Game {
     } else {
       this.hudCombo.style.opacity = "0";
     }
+
+    // Power-up HUD
+    this.updatePowerUpHUD();
 
     // Update ambient audio + music
     updateAmbient(this.speed, true);
@@ -429,6 +650,44 @@ export class Game {
     }
   }
 
+  private updatePowerUpHUD() {
+    const active = this.powerups.activePowerUps;
+    if (active.length === 0) {
+      this.hudPowerUp.style.opacity = "0";
+      return;
+    }
+
+    this.hudPowerUp.style.opacity = "1";
+    const labels = active.map(ap => {
+      if (ap.type === PowerUpType.Shield) return "🛡 SHIELD";
+      const pct = ap.duration === Infinity ? 100 : Math.ceil((ap.remaining / ap.duration) * 100);
+      const name = ap.type.toUpperCase();
+      return `${name} ${pct}%`;
+    });
+    this.hudPowerUp.textContent = labels.join(" | ");
+  }
+
+  private applyBiomeColors() {
+    const c = this.biomes.colors;
+
+    // Scene background and fog
+    (this.scene.background as THREE.Color).setHex(c.background);
+    (this.scene.fog as THREE.FogExp2).color.setHex(c.fog);
+    (this.scene.fog as THREE.FogExp2).density = c.fogDensity;
+
+    // Lighting
+    this.ambientLight.color.setHex(c.ambientLight);
+    this.ambientLight.intensity = c.ambientIntensity;
+    this.directionalLight.color.setHex(c.directionalLight);
+    this.directionalLight.intensity = c.directionalIntensity;
+
+    // Bloom
+    this.bloomPass.strength = c.bloomStrength;
+    this.bloomPass.threshold = c.bloomThreshold;
+
+    // World will read biome colors directly for new obstacles
+  }
+
   private die() {
     // Death sound + stop ambient + fade music
     playDeath();
@@ -439,8 +698,10 @@ export class Game {
     this.shake.trigger(1.5);
     this.explosion.trigger(this.player.group.position.clone());
 
-    // Reset speed lines
+    // Reset speed lines + vignette
     this.speedLines.update(0);
+    this.vignette.setIntensity(0);
+    this.targetCameraRoll = 0;
 
     // Save high score
     if (this.score > this.highScore) {
@@ -448,14 +709,17 @@ export class Game {
       localStorage.setItem("shatterDriftHighScore", String(this.highScore));
     }
 
-    // Show game over
+    // Show game over with more stats
     this.state = GameState.GameOver;
     this.centerTitle!.textContent = "SHATTERED";
     this.centerStats!.innerHTML = `
-      Score: <span class="highlight">${this.score}</span><br>
-      Distance: ${this.distance}m<br>
+      Score: <span class="highlight">${this.score.toLocaleString()}</span><br>
+      Distance: ${this.distance.toLocaleString()}m<br>
       Top Speed: ${Math.floor(this.speed)} m/s<br>
-      ${this.score >= this.highScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore}`}
+      Max Combo: x${this.maxCombo}<br>
+      Close Calls: ${this.closeCallCount}<br>
+      Zone: ${this.biomes.currentBiome.displayName}<br>
+      ${this.score >= this.highScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore.toLocaleString()}`}
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
     this.centerMessage.style.opacity = "1";

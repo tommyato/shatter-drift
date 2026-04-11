@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { BiomeManager } from "./biomes";
 
 // --- Obstacle types ---
 
@@ -30,11 +31,6 @@ export interface EnergyOrb {
   collected: boolean;
 }
 
-// --- Colors ---
-const OBSTACLE_COLOR = 0x220033;
-const OBSTACLE_EDGE_COLOR = 0x9933ff;
-const ORB_COLOR = 0xffcc00;
-
 // --- Vibeverse portal ---
 
 export interface VibeversePortal {
@@ -61,31 +57,43 @@ export class World {
   portals: VibeversePortal[] = [];
 
   private scene: THREE.Scene;
+  private biomes: BiomeManager;
   private nextObstacleZ = 30;
   private nextOrbZ = 15;
   private nextPortalZ = PORTAL_INTERVAL;
   private difficulty = 0; // 0-1, increases over time
 
-  // Object pools
-  private obstaclePool: Obstacle[] = [];
-  private orbPool: EnergyOrb[] = [];
-
   // Starfield
   private starfield!: THREE.Points;
+  private starColors!: Float32Array;
+  private starBaseColors!: Float32Array;
 
   // Ground grid lines for motion perception
   private gridLines: THREE.LineSegments[] = [];
+  private gridMats: THREE.LineBasicMaterial[] = [];
 
-  constructor(scene: THREE.Scene) {
+  // Tunnel walls for depth perception
+  private tunnelWalls: THREE.Mesh[] = [];
+  private tunnelWallMats: THREE.MeshStandardMaterial[] = [];
+
+  // Floor panels
+  private floorPanels: THREE.Mesh[] = [];
+  private floorMats: THREE.MeshStandardMaterial[] = [];
+
+  constructor(scene: THREE.Scene, biomes: BiomeManager) {
     this.scene = scene;
+    this.biomes = biomes;
     this.createStarfield();
     this.createGridLines();
+    this.createTunnelWalls();
+    this.createFloorPanels();
   }
 
   private createStarfield() {
     const count = 2000;
     const positions = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
+    this.starBaseColors = new Float32Array(count * 3);
+    this.starColors = new Float32Array(count * 3);
 
     for (let i = 0; i < count; i++) {
       positions[i * 3] = (Math.random() - 0.5) * 200;
@@ -93,15 +101,17 @@ export class World {
       positions[i * 3 + 2] = (Math.random() - 0.5) * 200;
 
       const brightness = 0.3 + Math.random() * 0.7;
-      // Slight color variation (blue/white/cyan)
-      colors[i * 3] = brightness * (0.7 + Math.random() * 0.3);
-      colors[i * 3 + 1] = brightness * (0.8 + Math.random() * 0.2);
-      colors[i * 3 + 2] = brightness;
+      this.starBaseColors[i * 3] = brightness;
+      this.starBaseColors[i * 3 + 1] = brightness;
+      this.starBaseColors[i * 3 + 2] = brightness;
+      this.starColors[i * 3] = brightness;
+      this.starColors[i * 3 + 1] = brightness;
+      this.starColors[i * 3 + 2] = brightness;
     }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(this.starColors, 3));
 
     const mat = new THREE.PointsMaterial({
       size: 0.15,
@@ -134,7 +144,56 @@ export class World {
       const line = new THREE.LineSegments(geo, mat);
       this.scene.add(line);
       this.gridLines.push(line);
+      this.gridMats.push(mat);
     }
+  }
+
+  private createTunnelWalls() {
+    // Side walls that frame the play area — creates a tunnel/corridor feeling
+    const wallHeight = 8;
+    const wallLength = 300;
+    const wallDistance = LANE_WIDTH / 2 + 1.5;
+    const wallGeo = new THREE.PlaneGeometry(wallLength, wallHeight, 30, 4);
+
+    for (const side of [-1, 1]) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x050510,
+        emissive: 0x110022,
+        emissiveIntensity: 0.1,
+        metalness: 0.9,
+        roughness: 0.3,
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide,
+      });
+
+      const wall = new THREE.Mesh(wallGeo, mat);
+      wall.position.set(side * wallDistance, wallHeight / 2 - 1.5, 0);
+      wall.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+      this.scene.add(wall);
+      this.tunnelWalls.push(wall);
+      this.tunnelWallMats.push(mat);
+    }
+  }
+
+  private createFloorPanels() {
+    // Subtle floor panels for depth
+    const panelGeo = new THREE.PlaneGeometry(LANE_WIDTH * 2, 300, 1, 1);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x030308,
+      emissive: 0x060610,
+      emissiveIntensity: 0.05,
+      metalness: 0.9,
+      roughness: 0.5,
+      transparent: true,
+      opacity: 0.5,
+    });
+    const floor = new THREE.Mesh(panelGeo, mat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -1.5;
+    this.scene.add(floor);
+    this.floorPanels.push(floor);
+    this.floorMats.push(mat);
   }
 
   setDifficulty(d: number) {
@@ -205,12 +264,43 @@ export class World {
       }
     }
 
-    // Update grid lines to create scrolling effect
-    for (const line of this.gridLines) {
-      // Keep grid lines relative to player position
-      const baseZ = Math.floor(playerZ / 4) * 4;
-      const offset = line.position.z;
-      // wrap around
+    // Move tunnel walls and floor with player
+    for (const wall of this.tunnelWalls) {
+      wall.position.z = playerZ;
+    }
+    for (const floor of this.floorPanels) {
+      floor.position.z = playerZ;
+    }
+
+    // Move starfield with player (parallax)
+    this.starfield.position.z = playerZ * 0.3;
+
+    // Update biome-reactive colors
+    this.updateBiomeVisuals();
+  }
+
+  private updateBiomeVisuals() {
+    const c = this.biomes.colors;
+
+    // Star tint
+    const tint = c.starTint;
+    for (let i = 0; i < this.starBaseColors.length / 3; i++) {
+      this.starColors[i * 3] = this.starBaseColors[i * 3] * tint[0];
+      this.starColors[i * 3 + 1] = this.starBaseColors[i * 3 + 1] * tint[1];
+      this.starColors[i * 3 + 2] = this.starBaseColors[i * 3 + 2] * tint[2];
+    }
+    (this.starfield.geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+
+    // Grid lines
+    for (const mat of this.gridMats) {
+      mat.color.setHex(c.gridColor);
+      mat.opacity = c.gridOpacity;
+    }
+
+    // Tunnel walls — tint with biome edge color
+    for (const mat of this.tunnelWallMats) {
+      mat.emissive.setHex(c.obstacleEdge);
+      mat.emissiveIntensity = 0.05 + c.obstacleEmissiveIntensity * 0.15;
     }
   }
 
@@ -374,11 +464,12 @@ export class World {
     x: number,
     y: number
   ): THREE.Mesh {
+    const c = this.biomes.colors;
     const geo = new THREE.BoxGeometry(w, h, d);
     const mat = new THREE.MeshStandardMaterial({
-      color: OBSTACLE_COLOR,
-      emissive: OBSTACLE_EDGE_COLOR,
-      emissiveIntensity: 0.15,
+      color: c.obstacleBase,
+      emissive: c.obstacleEdge,
+      emissiveIntensity: c.obstacleEmissiveIntensity,
       metalness: 0.9,
       roughness: 0.3,
     });
@@ -388,7 +479,7 @@ export class World {
     // Add edge glow wireframe
     const edgeGeo = new THREE.EdgesGeometry(geo);
     const edgeMat = new THREE.LineBasicMaterial({
-      color: OBSTACLE_EDGE_COLOR,
+      color: c.obstacleEdge,
       transparent: true,
       opacity: 0.6,
     });
@@ -568,10 +659,11 @@ export class World {
   }
 
   private spawnOrb(z: number, x: number) {
+    const c = this.biomes.colors;
     const geo = new THREE.OctahedronGeometry(0.25, 0);
     const mat = new THREE.MeshStandardMaterial({
-      color: ORB_COLOR,
-      emissive: ORB_COLOR,
+      color: c.orbColor,
+      emissive: c.orbColor,
       emissiveIntensity: 0.8,
       metalness: 0.5,
       roughness: 0.2,
@@ -588,6 +680,23 @@ export class World {
       active: true,
       collected: false,
     });
+  }
+
+  /** Magnet: attract orbs toward player */
+  attractOrbs(playerX: number, playerZ: number, radius: number, dt: number) {
+    for (const orb of this.orbs) {
+      if (!orb.active || orb.collected) continue;
+      const dx = playerX - orb.x;
+      const dz = playerZ - orb.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < radius && dist > 0.1) {
+        const strength = (1 - dist / radius) * 15 * dt;
+        orb.x += (dx / dist) * strength;
+        orb.z += (dz / dist) * strength;
+        orb.mesh.position.x = orb.x;
+        orb.mesh.position.z = orb.z;
+      }
+    }
   }
 
   /** Check collision between player and obstacles */
@@ -745,6 +854,16 @@ export class World {
       this.scene.remove(line);
       line.geometry.dispose();
       (line.material as THREE.Material).dispose();
+    }
+    for (const wall of this.tunnelWalls) {
+      this.scene.remove(wall);
+      wall.geometry.dispose();
+      (wall.material as THREE.Material).dispose();
+    }
+    for (const floor of this.floorPanels) {
+      this.scene.remove(floor);
+      floor.geometry.dispose();
+      (floor.material as THREE.Material).dispose();
     }
   }
 }

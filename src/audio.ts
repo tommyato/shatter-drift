@@ -270,6 +270,136 @@ export function playDeath() {
   src.stop(t + dur + 0.05);
 }
 
+/** Power-up collect — dramatic rising arpeggio */
+export function playPowerUp() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  // Three-note ascending arpeggio
+  const notes = [400, 600, 900];
+  for (let i = 0; i < notes.length; i++) {
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(notes[i], t + i * 0.08);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, t + i * 0.08);
+    gain.gain.linearRampToValueAtTime(0.12, t + i * 0.08 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.15);
+
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(t + i * 0.08);
+    osc.stop(t + i * 0.08 + 0.16);
+  }
+
+  // Shimmer
+  const shimmer = ctx.createOscillator();
+  shimmer.type = "triangle";
+  shimmer.frequency.setValueAtTime(1200, t);
+  shimmer.frequency.exponentialRampToValueAtTime(2400, t + 0.3);
+  const shimmerGain = ctx.createGain();
+  shimmerGain.gain.setValueAtTime(0.04, t);
+  shimmerGain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+  shimmer.connect(shimmerGain);
+  shimmerGain.connect(masterGain);
+  shimmer.start(t);
+  shimmer.stop(t + 0.36);
+}
+
+/** Biome transition — sweeping resonant filter */
+export function playBiomeTransition() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  // Rising filtered noise sweep
+  const dur = 1.5;
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const env = Math.sin((i / data.length) * Math.PI);
+    data[i] = (Math.random() * 2 - 1) * env * 0.5;
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(200, t);
+  filter.frequency.exponentialRampToValueAtTime(3000, t + dur * 0.7);
+  filter.frequency.exponentialRampToValueAtTime(500, t + dur);
+  filter.Q.value = 4;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.08, t);
+  gain.gain.setTargetAtTime(0.001, t + dur * 0.8, 0.1);
+
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+  src.start(t);
+  src.stop(t + dur + 0.1);
+
+  // Deep impact
+  const impact = ctx.createOscillator();
+  impact.type = "sine";
+  impact.frequency.setValueAtTime(80, t + 0.1);
+  impact.frequency.exponentialRampToValueAtTime(40, t + 0.8);
+  const impactGain = ctx.createGain();
+  impactGain.gain.setValueAtTime(0.15, t + 0.1);
+  impactGain.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+  impact.connect(impactGain);
+  impactGain.connect(masterGain);
+  impact.start(t + 0.1);
+  impact.stop(t + 1.0);
+}
+
+/** Shield break — glass shatter */
+export function playShieldBreak() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  // Multiple short noise bursts
+  for (let i = 0; i < 3; i++) {
+    const dur = 0.06;
+    const buffer = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let j = 0; j < data.length; j++) {
+      const env = 1 - j / data.length;
+      data[j] = (Math.random() * 2 - 1) * env;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = "highpass";
+    filter.frequency.value = 3000 + i * 1000;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.15, t + i * 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.04 + dur);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(masterGain);
+    src.start(t + i * 0.04);
+    src.stop(t + i * 0.04 + dur + 0.01);
+  }
+
+  // Descending tone
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(1200, t);
+  osc.frequency.exponentialRampToValueAtTime(300, t + 0.2);
+  const oscGain = ctx.createGain();
+  oscGain.gain.setValueAtTime(0.1, t);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+  osc.connect(oscGain);
+  oscGain.connect(masterGain);
+  osc.start(t);
+  osc.stop(t + 0.26);
+}
+
 /** Stop all audio (cleanup) */
 export function stopAudio() {
   if (!ctx) return;

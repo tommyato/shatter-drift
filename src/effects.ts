@@ -9,7 +9,7 @@ export function createComposer(
   renderer: THREE.WebGLRenderer,
   scene: THREE.Scene,
   camera: THREE.Camera
-): EffectComposer {
+): { composer: EffectComposer; bloom: UnrealBloomPass } {
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
 
@@ -21,7 +21,7 @@ export function createComposer(
   );
   composer.addPass(bloom);
 
-  return composer;
+  return { composer, bloom };
 }
 
 // --- Particle trail system ---
