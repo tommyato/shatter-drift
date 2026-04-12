@@ -6,7 +6,7 @@ import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
 import { PostFXPass } from "./postfx";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { clamp, ScreenShake } from "./utils";
@@ -58,20 +58,40 @@ class SpeedLines {
 class Vignette {
   private el: HTMLElement;
   private intensity = 0;
+  private bright = false;
+  private color = 0x000000;
+  private edgeAlpha = 0.8;
 
   constructor() {
     this.el = document.createElement("div");
     this.el.style.cssText = `
       position: fixed; inset: 0; pointer-events: none; z-index: 9;
-      background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.8) 100%);
       opacity: 0; transition: opacity 0.5s;
     `;
     document.body.appendChild(this.el);
+    this.updateBackground();
   }
 
   setIntensity(v: number) {
     this.intensity = clamp(v, 0, 1);
     this.el.style.opacity = String(this.intensity);
+  }
+
+  setStyle(color: number, bright: boolean, edgeAlpha: number = 0.8) {
+    this.color = color;
+    this.bright = bright;
+    this.edgeAlpha = edgeAlpha;
+    this.updateBackground();
+  }
+
+  private updateBackground() {
+    const r = (this.color >> 16) & 0xff;
+    const g = (this.color >> 8) & 0xff;
+    const b = this.color & 0xff;
+    const innerStop = this.bright ? 64 : 50;
+    const outerStop = this.bright ? 96 : 100;
+    this.el.style.background = `radial-gradient(ellipse at center, transparent ${innerStop}%, rgba(${r},${g},${b},${this.edgeAlpha}) ${outerStop}%)`;
+    this.el.style.mixBlendMode = this.bright ? "screen" : "normal";
   }
 }
 
@@ -169,6 +189,7 @@ export class Game {
   private ambientLight!: THREE.AmbientLight;
   private directionalLight!: THREE.DirectionalLight;
   private rimLight!: THREE.PointLight;
+  private tunnelLight!: THREE.PointLight;
 
   // State
   private state = GameState.Title;
@@ -188,13 +209,21 @@ export class Game {
   private deathSlowMoTimer = 0;
 
   // Camera juice
-  private baseFOV = 70;
-  private targetFOV = 70;
-  private currentFOV = 70;
+  private baseFOV = 75;
+  private targetFOV = 75;
+  private currentFOV = 75;
   private cameraRoll = 0;
   private targetCameraRoll = 0;
   private slowMoFactor = 1; // visual slow-mo for close calls
   private slowMoTimer = 0;
+  private fovBoost = 0;
+  private skillFactor = 1;
+  private personalBestTarget = 0;
+  private personalBestStage = 0;
+  private personalBestTriggered = false;
+  private phaseTimeAccum = 0;
+  private phaseBonusFlashTimer = 0;
+  private phaseBonusFlashValue = 1;
 
   // HUD elements
   private hudScore!: HTMLElement;
@@ -255,17 +284,17 @@ export class Game {
     this.scene.fog = new THREE.FogExp2(0x020208, 0.015);
 
     this.camera = new THREE.PerspectiveCamera(
-      70,
+      this.baseFOV,
       window.innerWidth / window.innerHeight,
       0.1,
       300
     );
 
-    // Lighting — enough to see walls, emissives and bloom add the punch
-    this.ambientLight = new THREE.AmbientLight(0x222244, 0.5);
+    // Lighting — bright enough to see walls clearly, emissives and bloom add the punch
+    this.ambientLight = new THREE.AmbientLight(0x334466, 0.6);
     this.scene.add(this.ambientLight);
 
-    this.directionalLight = new THREE.DirectionalLight(0x4466aa, 0.5);
+    this.directionalLight = new THREE.DirectionalLight(0x5577bb, 0.7);
     this.directionalLight.position.set(5, 10, 10);
     this.scene.add(this.directionalLight);
 
@@ -273,6 +302,11 @@ export class Game {
     this.rimLight = new THREE.PointLight(0x00ffcc, 1, 20);
     this.rimLight.position.set(0, 2, -3);
     this.scene.add(this.rimLight);
+
+    // Forward tunnel light — illuminates walls and obstacles ahead
+    this.tunnelLight = new THREE.PointLight(0x4444aa, 0.8, 35);
+    this.tunnelLight.position.set(0, 3, 15);
+    this.scene.add(this.tunnelLight);
 
     // Post-processing (bloom + custom PostFX)
     const { composer, bloom } = createComposer(this.renderer, this.scene, this.camera);
@@ -511,8 +545,8 @@ export class Game {
       const deathTimescale = 0.2 * (1 - deathProgress * 0.7);
       dt *= deathTimescale;
 
-      // Camera zooms in during death slow-mo
-      this.targetFOV = this.baseFOV - 15 * deathProgress;
+      // Hold the snapped narrow FOV during death slow-mo
+      this.targetFOV = 60;
 
       // Bloom intensifies
       this.bloomPass.strength = 2.0 - deathProgress * 0.5;
@@ -565,7 +599,7 @@ export class Game {
     );
 
     // Camera FOV interpolation
-    this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, this.targetFOV, 1 - Math.exp(-3 * dt));
+    this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, this.targetFOV, 3 * dt);
     this.camera.fov = this.currentFOV;
     this.camera.updateProjectionMatrix();
 
@@ -618,14 +652,22 @@ export class Game {
     this.playTime = 0;
     this.closeCallCount = 0;
     this.phaseStreak = 0;
+    this.phaseTimeAccum = 0;
+    this.phaseBonusFlashTimer = 0;
+    this.phaseBonusFlashValue = 1;
     this.player.laneX = 0;
     this.player.shattered = false;
     this.slowMoFactor = 1;
     this.slowMoTimer = 0;
+    this.fovBoost = 0;
     this.targetFOV = this.baseFOV;
     this.currentFOV = this.baseFOV;
     this.targetCameraRoll = 0;
     this.cameraRoll = 0;
+    this.skillFactor = this.runHistory.getSkillFactor();
+    this.personalBestTarget = Math.max(this.bestDistance, this.runHistory.getBestDistance());
+    this.personalBestStage = 0;
+    this.personalBestTriggered = false;
 
     // Reset systems
     this.world.reset();
@@ -661,6 +703,8 @@ export class Game {
     // Position camera behind player
     this.camera.position.set(0, 3, -6);
     this.camera.up.set(0, 1, 0);
+    this.camera.fov = this.baseFOV;
+    this.camera.updateProjectionMatrix();
     this.camera.lookAt(0, 0, 10);
 
     // Start recording if in record mode (slight delay to skip title transition)
@@ -673,6 +717,9 @@ export class Game {
 
   private updatePlaying(dt: number) {
     this.playTime += dt;
+    if (this.phaseBonusFlashTimer > 0) {
+      this.phaseBonusFlashTimer -= dt;
+    }
 
     // Piecewise speed ramp — gentle in early biomes, punishing in later ones
     this.speed = this.computeSpeed(this.distance);
@@ -722,11 +769,24 @@ export class Game {
       );
     }
     if (!shatterInput && this.wasShattered) {
-      playRecombine();
+      const phaseMultiplier = this.getPhaseMultiplier();
+      playRecombine(phaseMultiplier);
       // Snap-back effect on recombining
       this.postfx.triggerDistort(0.2);
       // Reset phase streak when recombining
-      if (this.phaseStreak > 0) this.phaseStreak = 0;
+      if (this.phaseStreak > 0) {
+        this.phaseStreak = 0;
+      }
+      if (phaseMultiplier > 1.05) {
+        this.phaseBonusFlashValue = phaseMultiplier;
+        this.phaseBonusFlashTimer = 1.1;
+        this.popups.showCenter(
+          `${phaseMultiplier.toFixed(1)}x PHASE BONUS`,
+          "LOCKED IN",
+          "#ff88ff"
+        );
+      }
+      this.phaseTimeAccum = 0;
     }
     this.wasShattered = shatterInput;
 
@@ -777,6 +837,7 @@ export class Game {
     const gateResult = this.speedGates.update(dt, this.playerZ, this.player.group.position.x);
     if (gateResult.justCollected) {
       this.speedGates.applyBoost(gateResult.boostAmount);
+      this.fovBoost = Math.max(this.fovBoost, 8);
       playSpeedBoost();
       this.shake.trigger(0.6);
       this.screenFlash.trigger(0x00ffff, 0.2);
@@ -799,6 +860,9 @@ export class Game {
     const gateBoost = this.speedGates.getBoostSpeed();
     if (gateBoost > 0) {
       this.speed = Math.min(MAX_SPEED + 15, this.speed + gateBoost); // can exceed MAX temporarily
+    }
+    if (this.fovBoost > 0) {
+      this.fovBoost = Math.max(0, this.fovBoost - 16 * dt);
     }
 
     // Update world events
@@ -860,11 +924,11 @@ export class Game {
     this.milestones.check(this.distance, this.score, this.combo, this.speed);
 
     // Camera FOV — increases with speed for rush feeling
-    const speedNorm = this.speed / MAX_SPEED;
+    const speedNorm = Math.min(this.speed / MAX_SPEED, 1);
     const comboFOVBoost = Math.min(this.combo, COMBO_MAX) * 0.5; // combo widens FOV slightly
     const phaseNarrow = this.player.shattered ? -3 : 0; // tighter FOV while phasing = focus effect
-    const boostFOV = this.speedGates.isBoosting() ? 8 : 0; // extra wide during boost
-    this.targetFOV = this.baseFOV + speedNorm * 15 + comboFOVBoost + phaseNarrow + boostFOV;
+    const speedFOV = this.baseFOV + speedNorm * 18;
+    this.targetFOV = speedFOV + comboFOVBoost + phaseNarrow + this.fovBoost;
 
     // Camera roll on lateral movement (subtle)
     this.targetCameraRoll = -moveX * 0.03;
@@ -930,9 +994,24 @@ export class Game {
       );
     }
 
+    if (this.player.shattered) {
+      this.phaseTimeAccum += dt;
+    }
+
+    this.updatePersonalBestDrama();
+
     // Vignette — stronger at high speed and during transitions
     const vignetteTarget = speedNorm * 0.4 + (this.biomes.isTransitioning ? 0.3 : 0);
-    this.vignette.setIntensity(vignetteTarget);
+    if (this.personalBestStage >= 4) {
+      this.vignette.setStyle(0xc8f6ff, true, 0.8);
+      this.vignette.setIntensity(0.28);
+    } else if (this.personalBestStage >= 2) {
+      this.vignette.setStyle(0xf4f6ff, true, 0.65);
+      this.vignette.setIntensity(0.16 + (this.personalBestStage - 2) * 0.05);
+    } else {
+      this.vignette.setStyle(0x000000, false, 0.8);
+      this.vignette.setIntensity(vignetteTarget);
+    }
 
     // Vibeverse portal check (always active, even when phasing)
     if (!this.demoMode) {
@@ -1091,7 +1170,8 @@ export class Game {
           this.phaseStreak++;
           const streakBonus = Math.min(this.phaseStreak, 5); // up to 5x streak
           const puMultiplier = this.powerups.getScoreMultiplier();
-          const closeCallPoints = CLOSE_CALL_SCORE * streakBonus * puMultiplier;
+          const phaseMultiplier = this.getPhaseMultiplier();
+          const closeCallPoints = Math.round(CLOSE_CALL_SCORE * streakBonus * puMultiplier * phaseMultiplier);
           this.score += closeCallPoints;
           this.lastCloseCall = this.playerZ;
           this.closeCallCount++;
@@ -1099,8 +1179,9 @@ export class Game {
           this.milestones.registerCloseCall();
 
           // Near-miss bonus: +25 score with popup and distortion flash
-          this.score += 25;
-          this.popups.showAt3D("+25 NEAR MISS!", this.player.group.position.x, this.playerZ, this.camera, "#88ccff", 20);
+          const nearMissPoints = Math.round(25 * phaseMultiplier);
+          this.score += nearMissPoints;
+          this.popups.showAt3D(`+${nearMissPoints} NEAR MISS!`, this.player.group.position.x, this.playerZ, this.camera, "#88ccff", 20);
           this.postfx.triggerDistort(0.3);
 
           // Brief slow-mo on close calls for dramatic effect
@@ -1133,7 +1214,7 @@ export class Game {
           const streakLabel = this.phaseStreak > 1 ? ` STREAK x${this.phaseStreak}` : "";
           const popupColor = this.phaseStreak >= 4 ? "#ff44ff" : this.phaseStreak >= 2 ? "#aa88ff" : "#88ccff";
           this.popups.showAt3D(
-            `+${closeCallPoints} PHASE${streakLabel}`,
+            `+${closeCallPoints} PHASE x${phaseMultiplier.toFixed(1)}${streakLabel}`,
             this.player.group.position.x, this.playerZ, this.camera,
             popupColor, 16 + streakBonus * 2
           );
@@ -1187,6 +1268,11 @@ export class Game {
       this.camera.rotateZ(this.cameraRoll);
     }
 
+    // Move tunnel and rim lights with player
+    this.rimLight.position.set(this.player.group.position.x, 2, this.playerZ - 3);
+    this.tunnelLight.position.set(this.player.group.position.x * 0.5, 3, this.playerZ + 15);
+    this.tunnelLight.color.setHex(this.biomes.colors.directionalLight);
+
     // Screen shake
     this.shake.apply(this.camera, dt);
 
@@ -1226,11 +1312,46 @@ export class Game {
 
     // State indicator
     if (this.player.shattered) {
-      this.hudState.textContent = "PHASE";
+      const phaseMultiplier = this.getPhaseMultiplier();
+      this.hudState.textContent = phaseMultiplier > 1.02 ? `PHASE x${phaseMultiplier.toFixed(1)}` : "PHASE";
       this.hudState.className = "shattered";
+      this.hudState.style.color = "#ff44ff";
+      this.hudState.style.opacity = phaseMultiplier > 1.02 ? "0.95" : "0.75";
+      this.hudState.style.textShadow = phaseMultiplier > 1.02
+        ? "0 0 18px rgba(255,136,255,0.65)"
+        : "0 0 10px rgba(255,68,255,0.35)";
+    } else if (this.phaseBonusFlashTimer > 0) {
+      this.hudState.textContent = `${this.phaseBonusFlashValue.toFixed(1)}x PHASE BONUS`;
+      this.hudState.className = "shattered";
+      this.hudState.style.color = "#ff88ff";
+      this.hudState.style.opacity = "1";
+      this.hudState.style.textShadow = "0 0 24px rgba(255,136,255,0.8)";
+    } else if (this.personalBestStage >= 4) {
+      this.hudState.textContent = "IN UNCHARTED TERRITORY";
+      this.hudState.className = "whole";
+      this.hudState.style.opacity = "1";
+      this.hudState.style.color = "#dffcff";
+      this.hudState.style.textShadow = "0 0 22px rgba(200,246,255,0.75)";
+    } else if (this.personalBestStage >= 2) {
+      this.hudState.textContent = this.personalBestStage >= 3 ? "NEW RECORD!" : "APPROACHING BEST";
+      this.hudState.className = "whole";
+      this.hudState.style.opacity = this.personalBestStage >= 3 ? "1" : "0.95";
+      this.hudState.style.color = this.personalBestStage >= 3 ? "#ffdc7a" : "#f4f6ff";
+      this.hudState.style.textShadow = this.personalBestStage >= 3
+        ? "0 0 26px rgba(255,220,122,0.8)"
+        : "0 0 18px rgba(244,246,255,0.6)";
+    } else if (this.personalBestStage >= 1) {
+      this.hudState.textContent = "APPROACHING BEST";
+      this.hudState.className = "whole";
+      this.hudState.style.opacity = "0.65";
+      this.hudState.style.color = "#9ca7b4";
+      this.hudState.style.textShadow = "0 0 10px rgba(156,167,180,0.25)";
     } else {
       this.hudState.textContent = "SOLID";
       this.hudState.className = "whole";
+      this.hudState.style.opacity = "0.6";
+      this.hudState.style.color = "";
+      this.hudState.style.textShadow = "";
     }
 
     // Tutorial
@@ -1242,22 +1363,58 @@ export class Game {
    * Distances match biome boundaries in biomes.ts.
    */
   private computeSpeed(distance: number): number {
+    const speedFactor = this.skillFactor;
     if (distance < 300) {
       // THE VOID: 12 → 20 (gentle warm-up)
-      return 12 + (distance / 300) * 8;
+      return (12 + (distance / 300) * 8) * speedFactor;
     } else if (distance < 700) {
       // CRYSTAL CAVES: 20 → 30 (moderate ramp)
-      return 20 + ((distance - 300) / 400) * 10;
+      return (20 + ((distance - 300) / 400) * 10) * speedFactor;
     } else if (distance < 1200) {
       // NEON DISTRICT: 30 → 38 (full speed ramp)
-      return 30 + ((distance - 700) / 500) * 8;
+      return (30 + ((distance - 700) / 500) * 8) * speedFactor;
     } else if (distance < 1800) {
       // SOLAR STORM: 38 → 43 (dense and fast)
-      return 38 + ((distance - 1200) / 600) * 5;
+      return (38 + ((distance - 1200) / 600) * 5) * speedFactor;
     } else {
       // COSMIC RIFT: 43 → 45 (maximum challenge)
-      return Math.min(MAX_SPEED, 43 + ((distance - 1800) / 500) * 2);
+      return Math.min(MAX_SPEED, 43 + ((distance - 1800) / 500) * 2) * speedFactor;
     }
+  }
+
+  private getPhaseMultiplier(): number {
+    return 1 + Math.min(this.phaseTimeAccum * 0.15, 1.5);
+  }
+
+  private updatePersonalBestDrama() {
+    if (this.personalBestTarget <= 0) {
+      this.personalBestStage = 0;
+      return;
+    }
+
+    const distanceRatio = this.distance / this.personalBestTarget;
+    let nextStage = 0;
+
+    if (distanceRatio >= 1.1) {
+      nextStage = 4;
+    } else if (distanceRatio >= 1) {
+      nextStage = 3;
+    } else if (distanceRatio >= 0.9) {
+      nextStage = 2;
+    } else if (distanceRatio >= 0.8) {
+      nextStage = 1;
+    }
+
+    if (!this.personalBestTriggered && nextStage >= 3) {
+      this.personalBestTriggered = true;
+      this.screenFlash.trigger(0xfff1a6, 0.25);
+      this.postfx.triggerDistort(1.25);
+      this.shake.trigger(0.45);
+      playPersonalBest();
+      this.popups.showCenter("NEW RECORD!", `${this.distance.toLocaleString()}m`, "#ffdc7a");
+    }
+
+    this.personalBestStage = nextStage;
   }
 
   private updatePowerUpHUD() {
@@ -1302,6 +1459,10 @@ export class Game {
     // Start death slow-mo sequence — brief time dilation before game over
     this.deathSlowMo = true;
     this.deathSlowMoTimer = 0.6; // 0.6s of dramatic slow-mo
+    this.targetFOV = 60;
+    this.currentFOV = 60;
+    this.camera.fov = 60;
+    this.camera.updateProjectionMatrix();
 
     // Death sound + stop ambient + fade music
     playDeath();
@@ -1339,6 +1500,7 @@ export class Game {
     // Reset speed lines + vignette
     this.speedLines.update(0);
     this.targetCameraRoll = 0;
+    this.vignette.setStyle(0x000000, false, 0.8);
 
     // Dramatic vignette on death
     this.vignette.setIntensity(0.8);

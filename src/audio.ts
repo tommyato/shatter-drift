@@ -137,17 +137,22 @@ export function playShatter() {
 }
 
 /** Recombine sound — ascending chime */
-export function playRecombine() {
+export function playRecombine(multiplier: number = 1) {
   if (!ctx || !masterGain) return;
   const t = ctx.currentTime;
+  const clampedMultiplier = Math.max(1, multiplier);
+  const pitchBoost = Math.min((clampedMultiplier - 1) * 0.35, 0.55);
+  const startFrequency = 300 * (1 + pitchBoost * 0.35);
+  const endFrequency = 900 * (1 + pitchBoost);
+  const gainLevel = clampedMultiplier > 1.5 ? 0.15 : 0.12;
 
   const osc = ctx.createOscillator();
   osc.type = "sine";
-  osc.frequency.setValueAtTime(300, t);
-  osc.frequency.exponentialRampToValueAtTime(900, t + 0.12);
+  osc.frequency.setValueAtTime(startFrequency, t);
+  osc.frequency.exponentialRampToValueAtTime(endFrequency, t + 0.12);
 
   const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0.12, t);
+  gain.gain.setValueAtTime(gainLevel, t);
   gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
 
   osc.connect(gain);
@@ -475,6 +480,48 @@ export function playChallengeComplete() {
     osc.start(t + i * 0.06);
     osc.stop(t + 0.85);
   }
+}
+
+/** Personal best — ascending tritone chord with a bright victory tail */
+export function playPersonalBest() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+  const notes = [
+    { start: 370, end: 523.25, offset: 0 },
+    { start: 523.25, end: 739.99, offset: 0.04 },
+    { start: 739.99, end: 1046.5, offset: 0.08 },
+  ];
+
+  for (const note of notes) {
+    const osc = ctx.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(note.start, t + note.offset);
+    osc.frequency.exponentialRampToValueAtTime(note.end, t + note.offset + 0.28);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, t + note.offset);
+    gain.gain.linearRampToValueAtTime(0.11, t + note.offset + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + note.offset + 0.45);
+
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(t + note.offset);
+    osc.stop(t + note.offset + 0.5);
+  }
+
+  const shimmer = ctx.createOscillator();
+  shimmer.type = "sine";
+  shimmer.frequency.setValueAtTime(1046.5, t + 0.1);
+  shimmer.frequency.exponentialRampToValueAtTime(1567.98, t + 0.5);
+
+  const shimmerGain = ctx.createGain();
+  shimmerGain.gain.setValueAtTime(0.04, t + 0.1);
+  shimmerGain.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+
+  shimmer.connect(shimmerGain);
+  shimmerGain.connect(masterGain);
+  shimmer.start(t + 0.1);
+  shimmer.stop(t + 0.56);
 }
 
 /** World event trigger — atmospheric swell */

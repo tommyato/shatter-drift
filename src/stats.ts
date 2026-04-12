@@ -128,6 +128,31 @@ export class RunHistoryTracker {
 
     return { totalRuns: this.history.length, bestScore, bestDistance, avgScore, bestGrade, recentTrend };
   }
+
+  getBestDistance(): number {
+    if (this.history.length === 0) {
+      return 0;
+    }
+
+    return Math.max(...this.history.map((run) => run.distance));
+  }
+
+  getSkillFactor(): number {
+    const runCount = this.history.length;
+
+    if (runCount < 3) {
+      return 0.85;
+    }
+
+    if (runCount >= 10) {
+      const averageDistance = this.history.reduce((sum, run) => sum + run.distance, 0) / runCount;
+      if (averageDistance > 1200) {
+        return 1.05;
+      }
+    }
+
+    return 1;
+  }
 }
 
 export interface RunComparison {
