@@ -11,7 +11,7 @@ interface Popup {
   startY: number;
 }
 
-const MAX_POPUPS = 8;
+const MAX_POPUPS = 4;
 
 export class ScorePopups {
   private container: HTMLElement;
@@ -34,7 +34,7 @@ export class ScorePopups {
     screenY: number,
     color: string = "#ffcc00",
     size: number = 20,
-    duration: number = 0.8
+    duration: number = 0.5
   ) {
     // Recycle oldest if at limit
     if (this.popups.length >= MAX_POPUPS) {
@@ -85,7 +85,7 @@ export class ScorePopups {
     worldZ: number,
     camera: THREE.Camera,
     color: string = "#ffcc00",
-    size: number = 14
+    size: number = 12
   ) {
     // Project world position to screen
     const vec = new THREE.Vector3(worldX, 1.5, worldZ);
@@ -99,16 +99,16 @@ export class ScorePopups {
     const sx = vec.x * halfW + halfW;
     const sy = Math.min(80, 40 + Math.random() * 40);
 
-    this.show(text, sx, sy, color, size, 0.6);
+    this.show(text, sx, sy, color, size, 0.4);
   }
 
-  /** Show a centered large popup (for milestones) */
+  /** Show a centered large popup (for milestones) — positioned in upper zone to avoid obstructing gameplay */
   showCenter(text: string, subtitle: string = "", color: string = "#ffcc00") {
     const cx = window.innerWidth / 2;
-    const cy = window.innerHeight * 0.35;
-    this.show(text, cx, cy, color, 36, 1.2);
+    const cy = window.innerHeight * 0.22;
+    this.show(text, cx, cy, color, 24, 0.6);
     if (subtitle) {
-      this.show(subtitle, cx, cy + 44, "#aaccdd", 14, 1.2);
+      this.show(subtitle, cx, cy + 30, "#aaccdd", 11, 0.6);
     }
   }
 
@@ -118,7 +118,7 @@ export class ScorePopups {
       p.life -= dt;
 
       const progress = 1 - p.life / p.maxLife;
-      const floatY = p.startY - progress * 60; // float upward 60px
+      const floatY = p.startY - progress * 40; // float upward 40px
 
       // Fade out in last 30% of life
       const fadeStart = 0.7;

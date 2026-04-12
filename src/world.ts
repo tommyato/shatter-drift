@@ -186,13 +186,13 @@ export class World {
 
     for (const side of [-1, 1]) {
       const mat = new THREE.MeshStandardMaterial({
-        color: 0x1a1a40,
-        emissive: 0x553399,
-        emissiveIntensity: 0.7,
+        color: 0x0e0e20,
+        emissive: 0x332255,
+        emissiveIntensity: 0.2,
         metalness: 0.7,
         roughness: 0.3,
         transparent: true,
-        opacity: 0.6,
+        opacity: 0.3,
         side: THREE.DoubleSide,
       });
 
@@ -212,7 +212,7 @@ export class World {
       const edgeMat = new THREE.LineBasicMaterial({
         color: 0x6633cc,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.3,
       });
       const edge = new THREE.LineSegments(edgeGeo, edgeMat);
       this.scene.add(edge);
@@ -228,7 +228,7 @@ export class World {
       const upperMat = new THREE.LineBasicMaterial({
         color: 0x6633cc,
         transparent: true,
-        opacity: 0.45,
+        opacity: 0.2,
       });
       const upperEdge = new THREE.LineSegments(upperGeo, upperMat);
       this.scene.add(upperEdge);
@@ -488,10 +488,10 @@ export class World {
       mat.color.setHex(c.gridColor);
     }
 
-    // Tunnel walls — tint with biome edge color
+    // Tunnel walls — tint with biome edge color (subdued so obstacles stand out)
     for (const mat of this.tunnelWallMats) {
       mat.emissive.setHex(c.obstacleEdge);
-      mat.emissiveIntensity = 0.4 + c.obstacleEmissiveIntensity * 0.9;
+      mat.emissiveIntensity = 0.15 + c.obstacleEmissiveIntensity * 0.3;
     }
 
     // Tunnel edge lines — tint with biome colors
@@ -742,19 +742,20 @@ export class World {
     const mat = new THREE.MeshStandardMaterial({
       color: c.obstacleBase,
       emissive: c.obstacleEdge,
-      emissiveIntensity: c.obstacleEmissiveIntensity,
+      emissiveIntensity: c.obstacleEmissiveIntensity * 1.2,
       metalness: 0.9,
       roughness: 0.3,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, y + h / 2, 0);
 
-    // Add edge glow wireframe
+    // Add edge glow wireframe — bright and fully opaque so obstacles pop
     const edgeGeo = new THREE.EdgesGeometry(geo);
     const edgeMat = new THREE.LineBasicMaterial({
       color: c.obstacleEdge,
-      transparent: true,
-      opacity: 0.85,
+      transparent: false,
+      opacity: 1.0,
+      linewidth: 2,
     });
     const edges = new THREE.LineSegments(edgeGeo, edgeMat);
     edges.position.copy(mesh.position);
@@ -939,11 +940,11 @@ export class World {
 
   private spawnOrb(z: number, x: number) {
     const c = this.biomes.colors;
-    const geo = new THREE.OctahedronGeometry(0.25, 0);
+    const geo = new THREE.OctahedronGeometry(0.35, 0);
     const mat = new THREE.MeshStandardMaterial({
       color: c.orbColor,
       emissive: c.orbColor,
-      emissiveIntensity: 0.8,
+      emissiveIntensity: 1.0,
       metalness: 0.5,
       roughness: 0.2,
     });
