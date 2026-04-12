@@ -3,7 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SHATTER DRIFT</title>
+  <title>SHATTER DRIFT — Break to Survive</title>
+  <meta name="description" content="Phase through obstacles, build combos, and drift through 5 unique biomes in this procedurally-generated endless runner. How far can you go?" />
+  <meta property="og:title" content="SHATTER DRIFT — Break to Survive" />
+  <meta property="og:description" content="Phase through obstacles, build combos, and drift through 5 unique biomes. A Vibe Jam 2026 entry." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://tommyato.com/games/shatter-drift" />
+  <meta property="og:image" content="https://tommyato.com/games/shatter-drift/og.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="SHATTER DRIFT — Break to Survive" />
+  <meta name="twitter:description" content="Phase through obstacles, build combos, and drift through 5 unique biomes. A Vibe Jam 2026 entry." />
+  <meta name="twitter:image" content="https://tommyato.com/games/shatter-drift/og.png" />
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
 
@@ -85,6 +95,30 @@
 
     #hud-state-indicator.whole { color: #00ffcc; }
     #hud-state-indicator.shattered { color: #ff44ff; }
+
+    #hud-phase-meter {
+      position: absolute;
+      bottom: 56px;
+      left: 50%;
+      width: 140px;
+      height: 4px;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 16px rgba(0, 255, 204, 0.08);
+      overflow: hidden;
+      opacity: 0.2;
+      transition: opacity 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    #hud-phase-fill {
+      width: 140px;
+      height: 100%;
+      border-radius: inherit;
+      background: #00ffcc;
+      box-shadow: 0 0 10px rgba(0, 255, 204, 0.45);
+      transition: width 0.08s linear, background-color 0.15s ease, box-shadow 0.15s ease;
+    }
 
     #hud-powerup {
       position: absolute;
@@ -444,6 +478,7 @@
       <div id="hud-combo"></div>
       <div id="hud-powerup"></div>
       <div id="hud-boss-warning"></div>
+      <div id="hud-phase-meter"><div id="hud-phase-fill"></div></div>
       <div id="hud-state-indicator" class="whole">SOLID</div>
       <div id="center-message">
         <h2 id="center-title"></h2>

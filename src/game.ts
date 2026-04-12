@@ -231,6 +231,10 @@ const GRADE_THRESHOLDS = [
 ] as const;
 
 export class Game {
+  private static readonly PHASE_DRAIN_RATE = 0.25;
+  private static readonly PHASE_RECHARGE_RATE = 0.15;
+  private static readonly PHASE_MIN_THRESHOLD = 0.2;
+
   // Three.js
   private renderer!: THREE.WebGLRenderer;
   private scene!: THREE.Scene;
@@ -294,6 +298,8 @@ export class Game {
   private wasShattered = false;
   private closeCallCount = 0;
   private phaseStreak = 0; // consecutive close calls without recombining
+  private phaseEnergy = 1;
+  private phaseLocked = false;
   private deathSlowMo = false;
   private deathSlowMoTimer = 0;
 
@@ -328,6 +334,8 @@ export class Game {
   private hudCombo!: HTMLElement;
   private hudState!: HTMLElement;
   private hud!: HTMLElement;
+  private hudPhaseMeter!: HTMLElement;
+  private hudPhaseFill!: HTMLElement;
   private titleOverlay!: HTMLElement;
   private centerMessage!: HTMLElement;
   private centerTitle!: HTMLElement;
@@ -465,6 +473,8 @@ export class Game {
     this.hudCombo = document.getElementById("hud-combo")!;
     this.hudState = document.getElementById("hud-state-indicator")!;
     this.hud = document.getElementById("hud")!;
+    this.hudPhaseMeter = document.getElementById("hud-phase-meter")!;
+    this.hudPhaseFill = document.getElementById("hud-phase-fill")!;
     this.titleOverlay = document.getElementById("title-overlay")!;
     this.centerMessage = document.getElementById("center-message")!;
     this.centerTitle = document.getElementById("center-title")!;
@@ -765,6 +775,8 @@ export class Game {
     this.playTime = 0;
     this.closeCallCount = 0;
     this.phaseStreak = 0;
+    this.phaseEnergy = 1;
+    this.phaseLocked = false;
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
@@ -798,6 +810,7 @@ export class Game {
     // Apply selected cosmetics and ensure player is visible
     this.player.applySkin(this.unlocks.getSelectedCrystal());
     this.player.group.visible = true;
+    this.updatePhaseHud();
 
     // Hide title + customize immediately; HUD revealed when launch completes
     this.hud.classList.add("hidden");
@@ -829,7 +842,7 @@ export class Game {
     this.player.group.position.set(0, 0, this.playerZ);
 
     // World generates obstacles so the scene is live
-    this.world.update(dt, this.playerZ, this.speed);
+    this.world.update(dt, this.playerZ, this.speed, false);
 
     // Camera: smooth interpolation from orbit position to gameplay position
     const endCamPos = new THREE.Vector3(0, this.cameraOffset.y, this.playerZ + this.cameraOffset.z);
@@ -929,18 +942,30 @@ export class Game {
       shatterInput = this.input.isDown("space") || this.input.isDown("click");
     }
 
-    // HyperPhase power-up: always phasing without input
-    if (this.powerups.hasActivePowerUp(PowerUpType.HyperPhase)) {
-      // Player can ALSO phase manually; hyperphase means combo doesn't break
+    const wasShattered = this.wasShattered;
+    const wantsToPhase = shatterInput && !this.phaseLocked;
+    if (wantsToPhase) {
+      this.phaseEnergy = Math.max(0, this.phaseEnergy - Game.PHASE_DRAIN_RATE * dt);
+    } else {
+      this.phaseEnergy = Math.min(1, this.phaseEnergy + Game.PHASE_RECHARGE_RATE * dt);
     }
 
-    this.player.shattered = shatterInput;
+    if (this.phaseEnergy <= 0) {
+      this.phaseEnergy = 0;
+      this.phaseLocked = true;
+      this.player.shattered = false;
+    } else if (this.phaseLocked && this.phaseEnergy >= Game.PHASE_MIN_THRESHOLD) {
+      this.phaseLocked = false;
+    }
+
+    this.player.shattered = shatterInput && !this.phaseLocked && this.phaseEnergy > 0;
+    const isShattered = this.player.shattered;
 
     // Shield visual indicator
     this.player.setShieldActive(this.powerups.hasActivePowerUp(PowerUpType.Shield));
 
     // Shatter/recombine audio triggers + visual effects
-    if (shatterInput && !this.wasShattered) {
+    if (isShattered && !wasShattered) {
       playShatter();
       // Energy pulse on entering phase mode
       this.postfx.triggerDistort(0.3);
@@ -949,7 +974,7 @@ export class Game {
         0xff44ff, 3, 0.3
       );
     }
-    if (!shatterInput && this.wasShattered) {
+    if (!isShattered && wasShattered) {
       const phaseMultiplier = this.getPhaseMultiplier();
       playRecombine(phaseMultiplier);
       // Snap-back effect on recombining
@@ -958,7 +983,7 @@ export class Game {
       if (this.phaseStreak > 0) {
         this.phaseStreak = 0;
       }
-      if (phaseMultiplier > 1.05) {
+      if (phaseMultiplier > 1.05 && !this.phaseLocked) {
         this.phaseBonusFlashValue = phaseMultiplier;
         this.phaseBonusFlashTimer = 1.1;
         this.popups.showCenter(
@@ -969,7 +994,7 @@ export class Game {
       }
       this.phaseTimeAccum = 0;
     }
-    this.wasShattered = shatterInput;
+    this.wasShattered = isShattered;
 
     // Update player
     this.player.update(dt, moveX);
@@ -977,8 +1002,8 @@ export class Game {
 
     // World difficulty is now fully biome-driven (see world.ts)
 
-    // Update world
-    this.world.update(dt, this.playerZ, this.speed);
+    // Update world — pass phasing state so obstacles become transparent (peek-through effect)
+    this.world.update(dt, this.playerZ, this.speed, this.player.shattered);
 
     // Update biomes
     const biomeChanged = this.biomes.update(this.distance);
@@ -1440,6 +1465,7 @@ export class Game {
     this.hudScore.textContent = String(this.score);
     this.hudDistance.textContent = `${this.distance}m`;
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
+    this.updatePhaseHud();
 
     if (this.combo > 1) {
       const comboVal = Math.min(this.combo, COMBO_MAX);
@@ -1506,7 +1532,7 @@ export class Game {
     }
 
     // Tutorial
-    this.tutorial.update(dt, moveX, shatterInput, this.wasShattered);
+    this.tutorial.update(dt, moveX, isShattered, wasShattered);
   }
 
   /**
@@ -1583,6 +1609,32 @@ export class Game {
       return `${name} ${pct}%`;
     });
     this.hudPowerUp.textContent = labels.join(" | ");
+  }
+
+  private updatePhaseHud() {
+    const fillWidth = this.phaseEnergy * 140;
+    const isFull = this.phaseEnergy >= 0.999 && !this.player.shattered && !this.phaseLocked;
+
+    this.hudPhaseFill.style.width = `${fillWidth}px`;
+
+    if (this.phaseLocked) {
+      const flash = 0.55 + Math.sin(performance.now() * 0.025) * 0.25;
+      this.hudPhaseFill.style.background = "#ff4444";
+      this.hudPhaseFill.style.boxShadow = `0 0 10px rgba(255,68,68,${0.45 + flash * 0.35})`;
+      this.hudPhaseMeter.style.opacity = String(0.65 + flash * 0.25);
+      return;
+    }
+
+    if (this.player.shattered) {
+      this.hudPhaseFill.style.background = "#ff44ff";
+      this.hudPhaseFill.style.boxShadow = "0 0 12px rgba(255,68,255,0.7)";
+      this.hudPhaseMeter.style.opacity = "1";
+      return;
+    }
+
+    this.hudPhaseFill.style.background = "#00ffcc";
+    this.hudPhaseFill.style.boxShadow = "0 0 10px rgba(0,255,204,0.45)";
+    this.hudPhaseMeter.style.opacity = isFull ? "0.16" : "0.45";
   }
 
   private applyBiomeColors() {

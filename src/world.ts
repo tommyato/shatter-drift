@@ -186,13 +186,13 @@ export class World {
 
     for (const side of [-1, 1]) {
       const mat = new THREE.MeshStandardMaterial({
-        color: 0x0e0e20,
-        emissive: 0x332255,
-        emissiveIntensity: 0.2,
-        metalness: 0.7,
-        roughness: 0.3,
+        color: 0x060610,
+        emissive: 0x111122,
+        emissiveIntensity: 0.08,
+        metalness: 0.9,
+        roughness: 0.5,
         transparent: true,
-        opacity: 0.3,
+        opacity: 0.12,
         side: THREE.DoubleSide,
       });
 
@@ -210,9 +210,9 @@ export class World {
       ];
       const edgeGeo = new THREE.BufferGeometry().setFromPoints(edgePoints);
       const edgeMat = new THREE.LineBasicMaterial({
-        color: 0x6633cc,
+        color: 0x333355,
         transparent: true,
-        opacity: 0.3,
+        opacity: 0.15,
       });
       const edge = new THREE.LineSegments(edgeGeo, edgeMat);
       this.scene.add(edge);
@@ -226,9 +226,9 @@ export class World {
       ];
       const upperGeo = new THREE.BufferGeometry().setFromPoints(upperPoints);
       const upperMat = new THREE.LineBasicMaterial({
-        color: 0x6633cc,
+        color: 0x222244,
         transparent: true,
-        opacity: 0.2,
+        opacity: 0.1,
       });
       const upperEdge = new THREE.LineSegments(upperGeo, upperMat);
       this.scene.add(upperEdge);
@@ -322,7 +322,7 @@ export class World {
     }
   }
 
-  update(dt: number, playerZ: number, speed: number) {
+  update(dt: number, playerZ: number, speed: number, isPhasing: boolean = false) {
     // Generate obstacles ahead — spacing is biome-driven
     while (this.nextObstacleZ < playerZ + SPAWN_DISTANCE) {
       this.spawnObstacle(this.nextObstacleZ);
@@ -347,8 +347,11 @@ export class World {
       this.nextMarkerZ += 100;
     }
 
-    // Animate obstacles — pulse emissive glow
+    // Animate obstacles — pulse emissive glow + phase transparency
     const time = performance.now() * 0.001;
+    // When phasing, obstacles become semi-transparent so player can see what's behind them
+    const targetOpacity = isPhasing ? 0.25 : 1.0;
+
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
       // Distance-based pulse intensity (closer = more visible animation)
@@ -356,10 +359,18 @@ export class World {
       if (distToPlayer > 40) continue; // skip far obstacles for perf
 
       const mesh = obs.mesh;
-      // Pulse the obstacle — subtle breathing effect
+      // Pulse the obstacle — subtle breathing effect + phase transparency
       if (mesh instanceof THREE.Mesh && mesh.material instanceof THREE.MeshStandardMaterial) {
         const basePulse = this.biomes.colors.obstacleEmissiveIntensity;
         mesh.material.emissiveIntensity = basePulse + Math.sin(time * 2 + obs.z * 0.3) * 0.1;
+        // Smoothly lerp opacity for phase effect
+        mesh.material.opacity = THREE.MathUtils.lerp(mesh.material.opacity, targetOpacity, 0.15);
+        // Also fade edge wireframes
+        mesh.traverse((child) => {
+          if (child instanceof THREE.LineSegments && child.material instanceof THREE.LineBasicMaterial) {
+            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity, 0.15);
+          }
+        });
       }
       // Traverse groups (gates have children)
       if (mesh instanceof THREE.Group) {
@@ -367,6 +378,12 @@ export class World {
           if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
             const basePulse = this.biomes.colors.obstacleEmissiveIntensity;
             child.material.emissiveIntensity = basePulse + Math.sin(time * 2 + obs.z * 0.3) * 0.1;
+            // Smoothly lerp opacity for phase effect
+            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity, 0.15);
+          }
+          // Also fade edge wireframes
+          if (child instanceof THREE.LineSegments && child.material instanceof THREE.LineBasicMaterial) {
+            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity, 0.15);
           }
         });
       }
@@ -488,15 +505,17 @@ export class World {
       mat.color.setHex(c.gridColor);
     }
 
-    // Tunnel walls — tint with biome edge color (subdued so obstacles stand out)
+    // Tunnel walls — very subtle background tint, NOT obstacle color
+    // Walls are spatial reference only; obstacles must visually dominate
+    const wallTint = this.darkenHex(c.background, 1.6);
     for (const mat of this.tunnelWallMats) {
-      mat.emissive.setHex(c.obstacleEdge);
-      mat.emissiveIntensity = 0.15 + c.obstacleEmissiveIntensity * 0.3;
+      mat.emissive.setHex(wallTint);
+      mat.emissiveIntensity = 0.06;
     }
 
-    // Tunnel edge lines — tint with biome colors
+    // Tunnel edge lines — barely visible boundary markers
     for (const mat of this.tunnelEdgeMats) {
-      mat.color.setHex(c.obstacleEdge);
+      mat.color.setHex(this.darkenHex(c.gridColor, 0.5));
     }
   }
 
@@ -509,8 +528,8 @@ export class World {
     if (idx === 0) return 18 + Math.random() * 6;   // THE VOID: 18–24, wide open
     if (idx === 1) return 13 + Math.random() * 5;   // CRYSTAL CAVES: 13–18
     if (idx === 2) return 9 + Math.random() * 4;    // NEON DISTRICT: 9–13
-    if (idx === 3) return 6 + Math.random() * 4;    // SOLAR STORM: 6–10, dense
-    return 4 + Math.random() * 4;                   // COSMIC RIFT: 4–8, brutal
+    if (idx === 3) return 7 + Math.random() * 4;    // SOLAR STORM: 7–11, dense
+    return 5 + Math.random() * 4;                   // COSMIC RIFT: 5–9, still tough but fairer
   }
 
   /**
@@ -612,7 +631,7 @@ export class World {
   private spawnGate(z: number) {
     const gapX = (Math.random() - 0.5) * 5;
     // Gap narrows with each biome — more forgiving early, punishing late
-    const biomeGapWidths = [4.5, 4.0, 3.5, 3.0, 2.5];
+    const biomeGapWidths = [4.5, 4.2, 3.8, 3.4, 3.0];
     const gapWidth = biomeGapWidths[Math.min(this.biomes.biomeIndex, 4)];
     const wallHeight = 3;
     const wallThickness = 0.6;
@@ -742,9 +761,11 @@ export class World {
     const mat = new THREE.MeshStandardMaterial({
       color: c.obstacleBase,
       emissive: c.obstacleEdge,
-      emissiveIntensity: c.obstacleEmissiveIntensity * 1.2,
-      metalness: 0.9,
-      roughness: 0.3,
+      emissiveIntensity: c.obstacleEmissiveIntensity * 1.5,
+      metalness: 0.8,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 1.0,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, y + h / 2, 0);
@@ -753,7 +774,7 @@ export class World {
     const edgeGeo = new THREE.EdgesGeometry(geo);
     const edgeMat = new THREE.LineBasicMaterial({
       color: c.obstacleEdge,
-      transparent: false,
+      transparent: true,
       opacity: 1.0,
       linewidth: 2,
     });
@@ -849,7 +870,7 @@ export class World {
   private spawnZigzagCorridor(z: number) {
     // Faster gate rhythm and tighter gaps in later biomes
     const biomeGateSpacing = [5.5, 5.0, 4.5, 4.0, 3.5];
-    const biomeZigzagGap = [3.5, 3.2, 3.0, 2.8, 2.5];
+    const biomeZigzagGap = [3.8, 3.5, 3.2, 3.0, 2.8];
     const gateSpacing = biomeGateSpacing[Math.min(this.biomes.biomeIndex, 4)];
 
     for (let i = 0; i < 3; i++) {
@@ -1193,5 +1214,13 @@ export class World {
       floor.geometry.dispose();
       (floor.material as THREE.Material).dispose();
     }
+  }
+
+  /** Scale a hex color's brightness (multiplier > 1 brightens, < 1 darkens) */
+  private darkenHex(hex: number, multiplier: number): number {
+    const r = Math.min(255, Math.max(0, ((hex >> 16) & 0xff) * multiplier)) | 0;
+    const g = Math.min(255, Math.max(0, ((hex >> 8) & 0xff) * multiplier)) | 0;
+    const b = Math.min(255, Math.max(0, (hex & 0xff) * multiplier)) | 0;
+    return (r << 16) | (g << 8) | b;
   }
 }
