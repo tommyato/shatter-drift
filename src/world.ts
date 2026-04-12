@@ -75,6 +75,10 @@ export class World {
   private tunnelWalls: THREE.Mesh[] = [];
   private tunnelWallMats: THREE.MeshStandardMaterial[] = [];
 
+  // Tunnel edge highlight lines
+  private tunnelEdges: THREE.LineSegments[] = [];
+  private tunnelEdgeMats: THREE.LineBasicMaterial[] = [];
+
   // Floor panels
   private floorPanels: THREE.Mesh[] = [];
   private floorMats: THREE.MeshStandardMaterial[] = [];
@@ -141,9 +145,9 @@ export class World {
       ];
       const geo = new THREE.BufferGeometry().setFromPoints(points);
       const mat = new THREE.LineBasicMaterial({
-        color: 0x112233,
+        color: 0x1a3355,
         transparent: true,
-        opacity: 0.3,
+        opacity: 0.4,
       });
       const line = new THREE.LineSegments(geo, mat);
       this.scene.add(line);
@@ -162,9 +166,9 @@ export class World {
       ];
       const geo = new THREE.BufferGeometry().setFromPoints(points);
       const mat = new THREE.LineBasicMaterial({
-        color: 0x112233,
+        color: 0x1a3355,
         transparent: true,
-        opacity: 0.15,
+        opacity: 0.25,
       });
       const line = new THREE.LineSegments(geo, mat);
       this.scene.add(line);
@@ -182,13 +186,13 @@ export class World {
 
     for (const side of [-1, 1]) {
       const mat = new THREE.MeshStandardMaterial({
-        color: 0x0a0a20,
-        emissive: 0x221144,
-        emissiveIntensity: 0.3,
-        metalness: 0.8,
+        color: 0x1a1a40,
+        emissive: 0x553399,
+        emissiveIntensity: 0.7,
+        metalness: 0.7,
         roughness: 0.3,
         transparent: true,
-        opacity: 0.45,
+        opacity: 0.6,
         side: THREE.DoubleSide,
       });
 
@@ -198,6 +202,38 @@ export class World {
       this.scene.add(wall);
       this.tunnelWalls.push(wall);
       this.tunnelWallMats.push(mat);
+
+      // Edge highlight line along the bottom of each wall for depth perception
+      const edgePoints = [
+        new THREE.Vector3(side * wallDistance, -1.5, -wallLength / 2),
+        new THREE.Vector3(side * wallDistance, -1.5, wallLength / 2),
+      ];
+      const edgeGeo = new THREE.BufferGeometry().setFromPoints(edgePoints);
+      const edgeMat = new THREE.LineBasicMaterial({
+        color: 0x6633cc,
+        transparent: true,
+        opacity: 0.65,
+      });
+      const edge = new THREE.LineSegments(edgeGeo, edgeMat);
+      this.scene.add(edge);
+      this.tunnelEdges.push(edge);
+      this.tunnelEdgeMats.push(edgeMat);
+
+      // Upper edge highlight
+      const upperPoints = [
+        new THREE.Vector3(side * wallDistance, wallHeight - 1.5, -wallLength / 2),
+        new THREE.Vector3(side * wallDistance, wallHeight - 1.5, wallLength / 2),
+      ];
+      const upperGeo = new THREE.BufferGeometry().setFromPoints(upperPoints);
+      const upperMat = new THREE.LineBasicMaterial({
+        color: 0x6633cc,
+        transparent: true,
+        opacity: 0.45,
+      });
+      const upperEdge = new THREE.LineSegments(upperGeo, upperMat);
+      this.scene.add(upperEdge);
+      this.tunnelEdges.push(upperEdge);
+      this.tunnelEdgeMats.push(upperMat);
     }
   }
 
@@ -205,13 +241,13 @@ export class World {
     // Subtle floor panels for depth
     const panelGeo = new THREE.PlaneGeometry(LANE_WIDTH * 2, 300, 1, 1);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x060612,
-      emissive: 0x0c0c22,
-      emissiveIntensity: 0.15,
-      metalness: 0.8,
+      color: 0x0e0e28,
+      emissive: 0x1a1a40,
+      emissiveIntensity: 0.35,
+      metalness: 0.7,
       roughness: 0.5,
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.75,
     });
     const floor = new THREE.Mesh(panelGeo, mat);
     floor.rotation.x = -Math.PI / 2;
@@ -389,9 +425,12 @@ export class World {
       this.cleanupInactive();
     }
 
-    // Move tunnel walls and floor with player
+    // Move tunnel walls, edges, and floor with player
     for (const wall of this.tunnelWalls) {
       wall.position.z = playerZ;
+    }
+    for (const edge of this.tunnelEdges) {
+      edge.position.z = playerZ;
     }
     for (const floor of this.floorPanels) {
       floor.position.z = playerZ;
@@ -452,7 +491,12 @@ export class World {
     // Tunnel walls — tint with biome edge color
     for (const mat of this.tunnelWallMats) {
       mat.emissive.setHex(c.obstacleEdge);
-      mat.emissiveIntensity = 0.15 + c.obstacleEmissiveIntensity * 0.4;
+      mat.emissiveIntensity = 0.4 + c.obstacleEmissiveIntensity * 0.9;
+    }
+
+    // Tunnel edge lines — tint with biome colors
+    for (const mat of this.tunnelEdgeMats) {
+      mat.color.setHex(c.obstacleEdge);
     }
   }
 
@@ -710,7 +754,7 @@ export class World {
     const edgeMat = new THREE.LineBasicMaterial({
       color: c.obstacleEdge,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.85,
     });
     const edges = new THREE.LineSegments(edgeGeo, edgeMat);
     edges.position.copy(mesh.position);
@@ -1137,6 +1181,11 @@ export class World {
       this.scene.remove(wall);
       wall.geometry.dispose();
       (wall.material as THREE.Material).dispose();
+    }
+    for (const edge of this.tunnelEdges) {
+      this.scene.remove(edge);
+      edge.geometry.dispose();
+      (edge.material as THREE.Material).dispose();
     }
     for (const floor of this.floorPanels) {
       this.scene.remove(floor);
