@@ -6,10 +6,10 @@ import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
 import { PostFXPass } from "./postfx";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
-import { clamp, ScreenShake } from "./utils";
+import { clamp, ease, ScreenShake } from "./utils";
 import { BiomeManager } from "./biomes";
 import { PowerUpManager, PowerUpType } from "./powerups";
 import { MilestoneTracker } from "./milestones";
@@ -130,6 +130,7 @@ class ScreenFlash {
 
 enum GameState {
   Title,
+  Launching,
   Playing,
   Paused,
   GameOver,
@@ -224,6 +225,13 @@ export class Game {
   private phaseTimeAccum = 0;
   private phaseBonusFlashTimer = 0;
   private phaseBonusFlashValue = 1;
+
+  // Launch sequence
+  private launchTimer = 0;
+  private readonly launchDuration = 1.5;
+  private launchStartCamPos = new THREE.Vector3();
+  private launchStartLookAt = new THREE.Vector3();
+  private launchDistortTriggered = false;
 
   // HUD elements
   private hudScore!: HTMLElement;
@@ -569,6 +577,9 @@ export class Game {
       case GameState.Title:
         this.updateTitle(dt);
         break;
+      case GameState.Launching:
+        this.updateLaunching(dt);
+        break;
       case GameState.Playing:
         this.updatePlaying(dt);
         break;
@@ -621,16 +632,16 @@ export class Game {
   // --- Title ---
 
   private updateTitle(dt: number) {
-    // Rotate player crystal on title screen
-    this.player.group.position.set(0, 0, 0);
+    // Crystal sits below center so it doesn't overlap instruction text
+    this.player.group.position.set(0, -1.5, 0);
     this.player.crystalMesh.rotation.y += dt * 0.5;
     this.player.crystalMesh.rotation.x = Math.sin(performance.now() * 0.001) * 0.3;
 
-    // Camera orbits slowly
+    // Camera orbits slowly around the crystal
     const t = performance.now() * 0.0003;
-    this.camera.position.set(Math.sin(t) * 5, 3, Math.cos(t) * 5);
+    this.camera.position.set(Math.sin(t) * 5, 1.5, Math.cos(t) * 5);
     this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(0, 0, 0);
+    this.camera.lookAt(0, -1.5, 0);
 
     if (!this.customizeOpen && (this.input.justPressed("space") || this.input.justPressed("click"))) {
       this.startGame();
@@ -640,9 +651,21 @@ export class Game {
   // --- Playing ---
 
   private startGame() {
+    // Capture current camera state for the launch transition
+    this.launchStartCamPos.copy(this.camera.position);
+    const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    this.launchStartLookAt.copy(this.camera.position).addScaledVector(camFwd, 10);
+
+    // Audio starts at launch so music fades in during the cinematic transition
     initAudio();
     startMusic();
-    this.state = GameState.Playing;
+    playLaunch();
+
+    // Transition to launch state
+    this.state = GameState.Launching;
+    this.launchTimer = 0;
+    this.launchDistortTriggered = false;
+
     this.score = 0;
     this.distance = 0;
     this.speed = INITIAL_SPEED;
@@ -660,8 +683,8 @@ export class Game {
     this.slowMoFactor = 1;
     this.slowMoTimer = 0;
     this.fovBoost = 0;
-    this.targetFOV = this.baseFOV;
-    this.currentFOV = this.baseFOV;
+    this.targetFOV = 60; // launch starts narrow
+    this.currentFOV = 60;
     this.targetCameraRoll = 0;
     this.cameraRoll = 0;
     this.skillFactor = this.runHistory.getSkillFactor();
@@ -682,11 +705,12 @@ export class Game {
     // Reset scene to first biome
     this.applyBiomeColors();
 
-    // Apply selected cosmetics
+    // Apply selected cosmetics and ensure player is visible
     this.player.applySkin(this.unlocks.getSelectedCrystal());
+    this.player.group.visible = true;
 
-    // Show HUD, hide title + customize
-    this.hud.classList.remove("hidden");
+    // Hide title + customize immediately; HUD revealed when launch completes
+    this.hud.classList.add("hidden");
     this.titleOverlay.classList.add("hidden");
     this.customizePanel.classList.add("hidden");
     this.customizeOpen = false;
@@ -695,23 +719,90 @@ export class Game {
     const lbSection = document.getElementById("leaderboard-section");
     if (lbSection) lbSection.innerHTML = "";
 
-    // Tutorial for first-time players
-    if (!this.demoMode) {
-      this.tutorial.startIfNeeded();
-    }
-
-    // Position camera behind player
-    this.camera.position.set(0, 3, -6);
-    this.camera.up.set(0, 1, 0);
-    this.camera.fov = this.baseFOV;
-    this.camera.updateProjectionMatrix();
-    this.camera.lookAt(0, 0, 10);
-
-    // Start recording if in record mode (slight delay to skip title transition)
+    // Start recording after launch completes
     if (this.recorder && !this.recorder.isRecording) {
       setTimeout(() => {
         this.recorder?.start(this.renderer.domElement);
-      }, 500);
+      }, 2000);
+    }
+  }
+
+  private updateLaunching(dt: number) {
+    this.launchTimer += dt;
+    const rawT = Math.min(this.launchTimer / this.launchDuration, 1);
+    const easedT = ease.inOutCubic(rawT);
+
+    // Player moves forward at initial speed — no lateral input
+    this.playerZ += this.speed * dt;
+    this.distance = Math.floor(this.playerZ);
+    this.player.update(dt, 0);
+    this.player.group.position.set(0, 0, this.playerZ);
+
+    // World generates obstacles so the scene is live
+    this.world.update(dt, this.playerZ, this.speed);
+
+    // Camera: smooth interpolation from orbit position to gameplay position
+    const endCamPos = new THREE.Vector3(0, this.cameraOffset.y, this.playerZ + this.cameraOffset.z);
+    const endLookAt = new THREE.Vector3(0, 0.5, this.playerZ + 15);
+
+    this.camera.position.lerpVectors(this.launchStartCamPos, endCamPos, easedT);
+    const lookAt = new THREE.Vector3().lerpVectors(this.launchStartLookAt, endLookAt, easedT);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(lookAt);
+
+    // FOV: widen from 60 → 75 in first 70%, then snap back to baseFOV in last 30%
+    let launchFOV: number;
+    if (rawT <= 0.7) {
+      launchFOV = 60 + (rawT / 0.7) * 15;
+    } else {
+      launchFOV = 75 - ((rawT - 0.7) / 0.3) * (75 - this.baseFOV);
+    }
+    // Bypass the normal FOV lerp by pinning both target and current
+    this.targetFOV = launchFOV;
+    this.currentFOV = launchFOV;
+
+    // Speed lines ramp from 0 → full (mapped so they start appearing partway through)
+    this.speedLines.update(0.6 + rawT * 0.4, 0x00ffcc);
+
+    // Bloom builds up during launch
+    this.bloomPass.strength = 1.0 + rawT * 0.8;
+
+    // Move lights with player
+    this.rimLight.position.set(0, 2, this.playerZ - 3);
+    this.tunnelLight.position.set(0, 3, this.playerZ + 15);
+
+    // Distort at midpoint — warp effect
+    if (!this.launchDistortTriggered && rawT >= 0.5) {
+      this.launchDistortTriggered = true;
+      this.postfx.triggerDistort(0.5);
+    }
+
+    // Music and ambient during launch
+    updateAmbient(this.speed, true);
+    updateMusic(dt, this.speed, false);
+
+    // Launch complete
+    if (rawT >= 1.0) {
+      // Screen flash white/cyan + bloom surge
+      this.screenFlash.trigger(0x88ffff, 0.3);
+      this.bloomPass.strength = 2.5;
+
+      // Snap camera to exact gameplay position for clean handoff to updatePlaying
+      this.camera.position.set(0, this.cameraOffset.y, this.playerZ + this.cameraOffset.z);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(0, 0.5, this.playerZ + 15);
+      this.targetFOV = this.baseFOV;
+      this.currentFOV = this.baseFOV;
+
+      // Reveal HUD
+      this.hud.classList.remove("hidden");
+
+      // Tutorial for first-time players
+      if (!this.demoMode) {
+        this.tutorial.startIfNeeded();
+      }
+
+      this.state = GameState.Playing;
     }
   }
 
@@ -1111,17 +1202,7 @@ export class Game {
           new THREE.Vector3(orb.x, orb.y, orb.z)
         );
 
-        // Floating score popup
-        const comboLabel = this.combo > 1 ? ` x${Math.min(this.combo, COMBO_MAX)}` : "";
-        const popupColor = this.combo >= 8 ? "#ff4444" : this.combo >= 5 ? "#ffaa00" : "#ffcc00";
-        const popupSize = Math.min(14 + this.combo * 2, 30);
-        this.popups.showAt3D(
-          `+${orbPoints}${comboLabel}`,
-          orb.x, orb.z, this.camera,
-          popupColor, popupSize
-        );
-
-        // Score flash effect on big combos
+        // Score flash effect on big combos (no per-crystal popup — too noisy)
         if (this.combo >= 5) {
           this.hudScore.style.transform = "scale(1.2)";
           setTimeout(() => { this.hudScore.style.transform = "scale(1)"; }, 100);
@@ -1129,22 +1210,14 @@ export class Game {
           this.postfx.triggerDistort(0.2 + Math.min(this.combo, COMBO_MAX) * 0.03);
         }
 
-        // Shockwave ring at combo milestones
+        // Shockwave ring at combo milestones — only x5 and x10
         if (this.combo === 5) {
           this.shockwave.trigger(
             new THREE.Vector3(orb.x, 0, orb.z),
             0xffcc00, 5, 0.5
           );
           this.screenFlash.trigger(0xffaa00, 0.1);
-          this.popups.showCenter("COMBO x5", "ON FIRE", "#ffaa00");
-        } else if (this.combo === 8) {
-          this.shockwave.trigger(
-            new THREE.Vector3(orb.x, 0, orb.z),
-            0xff6600, 7, 0.6
-          );
-          this.screenFlash.trigger(0xff6600, 0.15);
-          this.shake.trigger(0.3);
-          this.popups.showCenter("COMBO x8", "BLAZING", "#ff6600");
+          this.popups.showCenter("COMBO x5", "", "#ffaa00");
         } else if (this.combo === 10) {
           // Max combo — huge celebration
           this.shockwave.trigger(
@@ -1178,10 +1251,9 @@ export class Game {
           playCloseCall();
           this.milestones.registerCloseCall();
 
-          // Near-miss bonus: +25 score with popup and distortion flash
+          // Near-miss bonus: +25 score (visual flash is enough feedback, no popup)
           const nearMissPoints = Math.round(25 * phaseMultiplier);
           this.score += nearMissPoints;
-          this.popups.showAt3D(`+${nearMissPoints} NEAR MISS!`, this.player.group.position.x, this.playerZ, this.camera, "#88ccff", 20);
           this.postfx.triggerDistort(0.3);
 
           // Brief slow-mo on close calls for dramatic effect
@@ -1210,24 +1282,12 @@ export class Game {
             debrisColor, 8 + streakBonus * 3
           );
 
-          // Score popup with streak indicator
-          const streakLabel = this.phaseStreak > 1 ? ` STREAK x${this.phaseStreak}` : "";
-          const popupColor = this.phaseStreak >= 4 ? "#ff44ff" : this.phaseStreak >= 2 ? "#aa88ff" : "#88ccff";
-          this.popups.showAt3D(
-            `+${closeCallPoints} PHASE x${phaseMultiplier.toFixed(1)}${streakLabel}`,
-            this.player.group.position.x, this.playerZ, this.camera,
-            popupColor, 16 + streakBonus * 2
-          );
-
-          // Dramatic announcements at streak milestones
-          if (this.phaseStreak === 3) {
-            this.popups.showCenter("PHANTOM", "", "#aa88ff");
-            this.screenFlash.trigger(0xaa44ff, 0.15);
-          } else if (this.phaseStreak === 5) {
+          // Dramatic announcements at streak milestones — only x5 and x10
+          if (this.phaseStreak === 5) {
             this.popups.showCenter("UNSTOPPABLE", "", "#ff44ff");
             this.screenFlash.trigger(0xff44ff, 0.2);
             this.shake.trigger(0.4);
-          } else if (this.phaseStreak === 8) {
+          } else if (this.phaseStreak === 10) {
             this.popups.showCenter("TRANSCENDENT", "", "#ff88ff");
             this.screenFlash.trigger(0xff88ff, 0.25);
             this.shake.trigger(0.6);

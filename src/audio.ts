@@ -524,6 +524,92 @@ export function playPersonalBest() {
   shimmer.stop(t + 0.56);
 }
 
+/** Launch sting — ascending synth sweep at game start */
+export function playLaunch() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  // Main ascending sweep — sawtooth through resonant filter
+  const osc = ctx.createOscillator();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(80, t);
+  osc.frequency.exponentialRampToValueAtTime(1200, t + 1.2);
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(300, t);
+  filter.frequency.exponentialRampToValueAtTime(6000, t + 1.0);
+  filter.Q.value = 3;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0, t);
+  gain.gain.linearRampToValueAtTime(0.18, t + 0.08);
+  gain.gain.setValueAtTime(0.18, t + 0.9);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 1.5);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+  osc.start(t);
+  osc.stop(t + 1.6);
+
+  // Harmonic layer — triangle an octave up
+  const osc2 = ctx.createOscillator();
+  osc2.type = "triangle";
+  osc2.frequency.setValueAtTime(160, t);
+  osc2.frequency.exponentialRampToValueAtTime(2400, t + 1.2);
+
+  const gain2 = ctx.createGain();
+  gain2.gain.setValueAtTime(0, t);
+  gain2.gain.linearRampToValueAtTime(0.07, t + 0.15);
+  gain2.gain.exponentialRampToValueAtTime(0.001, t + 1.3);
+
+  osc2.connect(gain2);
+  gain2.connect(masterGain);
+  osc2.start(t);
+  osc2.stop(t + 1.4);
+
+  // Sub boom at launch
+  const sub = ctx.createOscillator();
+  sub.type = "sine";
+  sub.frequency.setValueAtTime(55, t);
+  sub.frequency.exponentialRampToValueAtTime(30, t + 0.5);
+
+  const subGain = ctx.createGain();
+  subGain.gain.setValueAtTime(0.3, t);
+  subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+
+  sub.connect(subGain);
+  subGain.connect(masterGain);
+  sub.start(t);
+  sub.stop(t + 0.65);
+
+  // White noise whoosh
+  const noiseDur = 0.8;
+  const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * noiseDur, ctx.sampleRate);
+  const noiseData = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < noiseData.length; i++) {
+    noiseData[i] = Math.random() * 2 - 1;
+  }
+  const noiseSrc = ctx.createBufferSource();
+  noiseSrc.buffer = noiseBuffer;
+
+  const noiseFilter = ctx.createBiquadFilter();
+  noiseFilter.type = "highpass";
+  noiseFilter.frequency.setValueAtTime(500, t);
+  noiseFilter.frequency.exponentialRampToValueAtTime(4000, t + 0.6);
+
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.setValueAtTime(0.12, t);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t + noiseDur);
+
+  noiseSrc.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(masterGain);
+  noiseSrc.start(t);
+  noiseSrc.stop(t + noiseDur + 0.05);
+}
+
 /** World event trigger — atmospheric swell */
 export function playWorldEvent() {
   if (!ctx || !masterGain) return;
