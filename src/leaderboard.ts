@@ -3,7 +3,7 @@
  * Scores stored on tommyato's droplet.
  */
 
-const API_URL = "http://67.205.167.181:3847";
+const API_URL = "https://api.tommyato.com";
 
 export interface LeaderboardEntry {
   name: string;
