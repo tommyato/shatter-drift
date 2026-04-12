@@ -349,14 +349,17 @@ export class World {
 
     // Animate obstacles — pulse emissive glow + phase transparency
     const time = performance.now() * 0.001;
-    // When phasing, obstacles become semi-transparent so player can see what's behind them
-    const targetOpacity = isPhasing ? 0.25 : 1.0;
 
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
       // Distance-based pulse intensity (closer = more visible animation)
       const distToPlayer = Math.abs(obs.z - playerZ);
       if (distToPlayer > 40) continue; // skip far obstacles for perf
+
+      // Phase transparency: only fade obstacles BEHIND or VERY CLOSE to the player
+      // Obstacles ahead stay fully visible so you can see what's coming
+      const obsBehindOrClose = obs.z < playerZ + 3; // within 3 units ahead or behind
+      const targetOpacity = (isPhasing && obsBehindOrClose) ? 0.25 : 1.0;
 
       const mesh = obs.mesh;
       // Pulse the obstacle — subtle breathing effect + phase transparency

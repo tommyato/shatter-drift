@@ -50,7 +50,7 @@ export class MilestoneTracker {
   private displayQueue: Milestone[] = [];
   private currentDisplay: Milestone | null = null;
   private displayTimer = 0;
-  private displayDuration = 2.0;
+  private displayDuration = 1.2;
 
   // HUD elements
   private container: HTMLElement | null = null;
@@ -75,7 +75,7 @@ export class MilestoneTracker {
     this.container.id = "milestone-display";
     this.container.style.cssText = `
       position: fixed;
-      top: 35%;
+      top: 12%;
       left: 50%;
       transform: translate(-50%, -50%);
       text-align: center;

@@ -106,9 +106,9 @@ export class ScorePopups {
   showCenter(text: string, subtitle: string = "", color: string = "#ffcc00") {
     const cx = window.innerWidth / 2;
     const cy = window.innerHeight * 0.22;
-    this.show(text, cx, cy, color, 24, 0.6);
+    this.show(text, cx, cy, color, 18, 0.4);
     if (subtitle) {
-      this.show(subtitle, cx, cy + 30, "#aaccdd", 11, 0.6);
+      this.show(subtitle, cx, cy + 26, "#aaccdd", 10, 0.4);
     }
   }
 
