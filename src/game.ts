@@ -1456,6 +1456,9 @@ export class Game {
   }
 
   private die() {
+    // Hide tutorial immediately on death
+    this.tutorial.reset();
+
     // Start death slow-mo sequence — brief time dilation before game over
     this.deathSlowMo = true;
     this.deathSlowMoTimer = 0.6; // 0.6s of dramatic slow-mo
@@ -1572,44 +1575,16 @@ export class Game {
       ? `<div style="color:#ffcc00;font-size:11px;margin:6px 0;letter-spacing:1px">${pbIndicators.join(" • ")}</div>`
       : "";
 
-    // Improvement/comparison line
-    let compLine = "";
-    if (!comparison.isFirstRun && comparison.previousBest !== null) {
-      if (comparison.newBestScore && comparison.improvementPct > 0) {
-        compLine = `<div style="color:#00ff88;font-size:11px">↑ ${comparison.improvementPct}% improvement!</div>`;
-      } else if (comparison.averageScore > 0) {
-        const vsAvg = this.score >= comparison.averageScore ? "above" : "below";
-        const diff = Math.abs(this.score - comparison.averageScore);
-        compLine = `<div style="color:#8888aa;font-size:10px">${diff.toLocaleString()} ${vsAvg} your average</div>`;
-      }
-    }
-
-    // Streak line
-    let streakLine = "";
-    if (comparison.bestStreak >= 2) {
-      streakLine = `<div style="color:#ff88ff;font-size:11px">🔥 ${comparison.bestStreak} run improvement streak!</div>`;
-    }
-
-    // Run count line
-    const runLine = `<div style="color:#666688;font-size:10px;margin-top:4px">Run #${comparison.runNumber}</div>`;
-
     // Show game over with more stats
     this.state = GameState.GameOver;
     this.centerTitle!.textContent = "SHATTERED";
     this.centerStats!.innerHTML = `
       <div style="font-size:40px;margin-bottom:12px;color:${grade.color};text-shadow:0 0 20px ${grade.color}88;letter-spacing:4px">${grade.label}</div>
-      Score: <span class="highlight">${this.score.toLocaleString()}</span><br>
-      Distance: ${this.distance.toLocaleString()}m<br>
-      Top Speed: ${Math.floor(this.speed)} m/s<br>
-      Max Combo: x${this.maxCombo}<br>
-      Close Calls: ${this.closeCallCount}<br>
+      <div style="font-size:32px;margin:8px 0"><span class="highlight">${this.score.toLocaleString()}</span></div>
+      <div style="font-size:13px;color:#8899aa;margin:4px 0">${this.distance.toLocaleString()}m · ${Math.floor(this.speed)} m/s · x${this.maxCombo}</div>
       Zone: ${this.biomes.currentBiome.displayName}<br>
-      <span style="color:#ffcc00;font-size:12px">Challenges: ${challengeStats.completed}/${challengeStats.total}</span><br>
       ${pbLine}
-      ${compLine}
-      ${streakLine}
       ${isNewHighScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore.toLocaleString()}`}
-      ${runLine}
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
     this.centerMessage.style.opacity = "1";
