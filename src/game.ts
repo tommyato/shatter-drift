@@ -95,6 +95,78 @@ class Vignette {
   }
 }
 
+/** Combo border glow overlay — screen-edge feedback for growing combos */
+class ComboBorderGlow {
+  private el: HTMLElement;
+  private previousCombo = 0;
+  private breakFlashTimer = 0;
+  private pulseTime = 0;
+
+  constructor() {
+    this.el = document.createElement("div");
+    this.el.style.cssText = `
+      position: fixed; inset: 0; pointer-events: none; z-index: 11;
+      opacity: 0; transition: opacity 0.12s linear;
+      will-change: opacity, box-shadow, filter;
+    `;
+    document.body.appendChild(this.el);
+  }
+
+  update(dt: number, combo: number) {
+    this.pulseTime += dt;
+
+    if (this.previousCombo >= 3 && combo === 0) {
+      this.breakFlashTimer = 0.3;
+    }
+
+    if (this.breakFlashTimer > 0) {
+      this.breakFlashTimer = Math.max(0, this.breakFlashTimer - dt);
+      const fade = this.breakFlashTimer / 0.3;
+      const alpha = 0.7 * fade;
+      const spread = 18 + fade * 30;
+      this.el.style.opacity = String(fade);
+      this.el.style.filter = "none";
+      this.el.style.boxShadow = `inset 0 0 ${spread}px rgba(255,120,64,${alpha}), inset 0 0 ${spread * 3}px rgba(255,40,0,${alpha * 0.7})`;
+      this.previousCombo = combo;
+      return;
+    }
+
+    if (combo < 3) {
+      this.el.style.opacity = "0";
+      this.el.style.boxShadow = "none";
+      this.el.style.filter = "none";
+      this.previousCombo = combo;
+      return;
+    }
+
+    const pulse = 0.5 + 0.5 * Math.sin(this.pulseTime * (combo >= 10 ? 10 : combo >= 8 ? 7 : combo >= 5 ? 4.5 : 0));
+    let opacity = 1;
+    let shadow = "";
+    let filter = "none";
+
+    if (combo >= 10) {
+      const hueA = (this.pulseTime * 180) % 360;
+      const hueB = (hueA + 70) % 360;
+      const innerColor = `hsla(${hueA}, 100%, 60%, ${0.38 + pulse * 0.16})`;
+      const outerColor = `hsla(${hueB}, 100%, 55%, ${0.26 + pulse * 0.16})`;
+      shadow = `inset 0 0 20px ${innerColor}, inset 0 0 56px ${outerColor}, inset 0 0 96px rgba(255,255,255,${0.08 + pulse * 0.08})`;
+      filter = `saturate(${1.2 + pulse * 0.35})`;
+    } else if (combo >= 8) {
+      shadow = `inset 0 0 18px rgba(255,120,40,${0.34 + pulse * 0.16}), inset 0 0 54px rgba(255,50,0,${0.24 + pulse * 0.18})`;
+    } else if (combo >= 5) {
+      shadow = `inset 0 0 14px rgba(255,180,60,${0.18 + pulse * 0.1}), inset 0 0 36px rgba(255,110,0,${0.14 + pulse * 0.1})`;
+    } else {
+      opacity = 0.75;
+      shadow = `inset 0 0 12px rgba(255,196,80,${0.12 + pulse * 0.05}), inset 0 0 24px rgba(255,156,40,${0.08 + pulse * 0.04})`;
+    }
+
+    this.el.style.opacity = String(opacity);
+    this.el.style.boxShadow = shadow;
+    this.el.style.filter = filter;
+    this.previousCombo = combo;
+  }
+}
+
 /** Flash overlay for power-up collection */
 class ScreenFlash {
   private el: HTMLElement;
@@ -142,6 +214,21 @@ const MAX_SPEED = 45;
 const ORB_SCORE = 100;
 const CLOSE_CALL_SCORE = 50;
 const COMBO_MAX = 10;
+const BIOME_MILESTONES = [
+  { name: "THE VOID", startDistance: 0 },
+  { name: "CRYSTAL CAVES", startDistance: 300 },
+  { name: "NEON DISTRICT", startDistance: 700 },
+  { name: "SOLAR STORM", startDistance: 1200 },
+  { name: "COSMIC RIFT", startDistance: 1800 },
+] as const;
+const GRADE_THRESHOLDS = [
+  { label: "S RANK", minScore: 90, color: "#ffcc00" },
+  { label: "A RANK", minScore: 75, color: "#00ffcc" },
+  { label: "B RANK", minScore: 55, color: "#44aaff" },
+  { label: "C RANK", minScore: 35, color: "#aa88ff" },
+  { label: "D RANK", minScore: 15, color: "#ff88aa" },
+  { label: "E RANK", minScore: 0, color: "#666688" },
+] as const;
 
 export class Game {
   // Three.js
@@ -165,6 +252,7 @@ export class Game {
   private shake = new ScreenShake();
   private speedLines!: SpeedLines;
   private vignette!: Vignette;
+  private comboBorderGlow!: ComboBorderGlow;
   private screenFlash!: ScreenFlash;
   private postfx!: PostFXPass;
   private afterimage!: AfterimageTrail;
@@ -355,6 +443,7 @@ export class Game {
     this.debris = new DebrisBurst(this.scene);
     this.speedLines = new SpeedLines();
     this.vignette = new Vignette();
+    this.comboBorderGlow = new ComboBorderGlow();
     this.screenFlash = new ScreenFlash();
     this.popups = new ScorePopups();
     this.shockwave = new ShockwaveEffect(this.scene);
@@ -671,6 +760,7 @@ export class Game {
     this.speed = INITIAL_SPEED;
     this.combo = 0;
     this.maxCombo = 0;
+    this.comboBorderGlow.update(0, 0);
     this.playerZ = 0;
     this.playTime = 0;
     this.closeCallCount = 0;
@@ -1338,6 +1428,7 @@ export class Game {
 
     // Speed lines with biome color
     this.speedLines.update(this.speed / MAX_SPEED, this.biomes.colors.playerTrail);
+    this.comboBorderGlow.update(dt, Math.min(this.combo, COMBO_MAX));
 
     // PostFX: drive chromatic aberration from speed, vignette from speed
     this.postfx.setSpeed(this.speed / MAX_SPEED);
@@ -1516,6 +1607,8 @@ export class Game {
   }
 
   private die() {
+    const previousBestDistance = Math.max(this.bestDistance, this.runHistory.getBestDistance());
+
     // Hide tutorial immediately on death
     this.tutorial.reset();
 
@@ -1562,6 +1655,7 @@ export class Game {
 
     // Reset speed lines + vignette
     this.speedLines.update(0);
+    this.comboBorderGlow.update(0, 0);
     this.targetCameraRoll = 0;
     this.vignette.setStyle(0x000000, false, 0.8);
 
@@ -1596,6 +1690,7 @@ export class Game {
     // Performance grade — drives replayability ("I can get S rank!")
     const grade = this.calculateGrade();
     const gotSRank = grade.label === "S RANK";
+    const nextGoal = this.getNextGoal(grade, previousBestDistance);
 
     // Finalize challenges for this run
     this.challenges.endRun(this.totalRuns, gotSRank);
@@ -1645,9 +1740,30 @@ export class Game {
       Zone: ${this.biomes.currentBiome.displayName}<br>
       ${pbLine}
       ${isNewHighScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore.toLocaleString()}`}
+      <div id="next-run-goal" style="margin-top:16px;padding-top:12px;border-top:1px solid #223344">
+        <div style="font-size:11px;color:#668899;letter-spacing:2px;margin-bottom:6px">NEXT RUN</div>
+        <div style="font-size:18px;color:${nextGoal.color};letter-spacing:1px;text-shadow:0 0 14px ${nextGoal.color}55">${nextGoal.text}</div>
+        <div style="font-size:11px;color:#7f92a6;margin-top:4px">${nextGoal.subtext}</div>
+      </div>
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
     this.centerMessage.style.opacity = "1";
+
+    const nextRunGoal = document.getElementById("next-run-goal");
+    if (nextRunGoal) {
+      nextRunGoal.animate(
+        [
+          { opacity: 0.55 },
+          { opacity: 1 },
+          { opacity: 0.55 },
+        ],
+        {
+          duration: 1600,
+          iterations: Infinity,
+          easing: "ease-in-out",
+        }
+      );
+    }
 
     // Leaderboard — submit score and show top 10
     this.showLeaderboard(this.score, Math.floor(this.distance), grade.label, this.biomes.currentBiome.displayName);
@@ -1775,20 +1891,94 @@ export class Game {
   }
 
   private calculateGrade(): { label: string; color: string } {
+    const total = this.getGradeScore();
+    for (const grade of GRADE_THRESHOLDS) {
+      if (total >= grade.minScore) {
+        return { label: grade.label, color: grade.color };
+      }
+    }
+
+    return { label: "E RANK", color: "#666688" };
+  }
+
+  private getGradeScore(): number {
     // Grade based on weighted performance metrics
     const scorePoints = Math.min(this.score / 50000, 1) * 30;
     const distPoints = Math.min(this.distance / 2000, 1) * 25;
     const comboPoints = Math.min(this.maxCombo / 10, 1) * 20;
     const closeCallPoints = Math.min(this.closeCallCount / 15, 1) * 15;
     const biomePoints = Math.min(this.biomes.biomeIndex / 4, 1) * 10;
-    const total = scorePoints + distPoints + comboPoints + closeCallPoints + biomePoints;
+    return scorePoints + distPoints + comboPoints + closeCallPoints + biomePoints;
+  }
 
-    if (total >= 90) return { label: "S RANK", color: "#ffcc00" };
-    if (total >= 75) return { label: "A RANK", color: "#00ffcc" };
-    if (total >= 55) return { label: "B RANK", color: "#44aaff" };
-    if (total >= 35) return { label: "C RANK", color: "#aa88ff" };
-    if (total >= 15) return { label: "D RANK", color: "#ff88aa" };
-    return { label: "E RANK", color: "#666688" };
+  private getNextGoal(
+    grade: { label: string; color: string },
+    previousBestDistance: number
+  ): { text: string; subtext: string; color: string } {
+    const nextBiome = BIOME_MILESTONES.find((biome) => biome.startDistance > this.distance);
+    const currentBiomeIndex = Math.max(
+      0,
+      BIOME_MILESTONES.findIndex((biome, index) => {
+        const next = BIOME_MILESTONES[index + 1];
+        return this.distance >= biome.startDistance && (!next || this.distance < next.startDistance);
+      })
+    );
+    const currentBiomeStart = BIOME_MILESTONES[currentBiomeIndex]?.startDistance ?? 0;
+
+    if (nextBiome) {
+      const segmentLength = nextBiome.startDistance - currentBiomeStart;
+      const segmentProgress = segmentLength > 0 ? (this.distance - currentBiomeStart) / segmentLength : 0;
+      if (segmentProgress >= 0.8) {
+        const distanceLeft = Math.max(1, nextBiome.startDistance - this.distance);
+        return {
+          text: `You were ${distanceLeft}m from ${nextBiome.name}!`,
+          subtext: "One cleaner line gets you over the boundary.",
+          color: "#7ce8ff",
+        };
+      }
+    }
+
+    if (grade.label !== "S RANK") {
+      const currentGradeIndex = GRADE_THRESHOLDS.findIndex((candidate) => candidate.label === grade.label);
+      const nextGrade = GRADE_THRESHOLDS[currentGradeIndex - 1];
+      if (nextGrade) {
+        const weightedGap = Math.max(0, nextGrade.minScore - this.getGradeScore());
+        const scoreGap = Math.max(1, Math.ceil((weightedGap / 30) * 50000));
+        return {
+          text: `${scoreGap.toLocaleString()} more points for ${nextGrade.label}`,
+          subtext: "A longer combo chain would likely get you there.",
+          color: nextGrade.color,
+        };
+      }
+    }
+
+    if (previousBestDistance > this.distance) {
+      const bestDistanceGap = previousBestDistance - this.distance;
+      if (bestDistanceGap <= 120 || this.distance >= previousBestDistance * 0.85) {
+        return {
+          text: `Only ${bestDistanceGap}m from your best!`,
+          subtext: "Stay alive a little longer and the record falls.",
+          color: "#ffdc7a",
+        };
+      }
+    }
+
+    const furthestDistance = Math.max(this.distance, previousBestDistance);
+    const nextUnvisitedBiome = BIOME_MILESTONES.find((biome) => biome.startDistance > furthestDistance);
+    if (nextUnvisitedBiome) {
+      const distanceLeft = Math.max(1, nextUnvisitedBiome.startDistance - this.distance);
+      return {
+        text: `Can you reach ${nextUnvisitedBiome.name}?`,
+        subtext: `${distanceLeft}m to go on the next push.`,
+        color: "#00ffcc",
+      };
+    }
+
+    return {
+      text: "Can you own the COSMIC RIFT?",
+      subtext: "There is still more speed to squeeze out of this run.",
+      color: "#ff88ff",
+    };
   }
 
   // --- Vibeverse ---
