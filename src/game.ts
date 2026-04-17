@@ -26,7 +26,8 @@ import { UnlockManager, TRAIL_STYLES, CRYSTAL_SKINS, type TrailStyle, type Cryst
 import { AfterimageTrail } from "./afterimage";
 import { RibbonTrail } from "./ribbon";
 import { RunHistoryTracker } from "./stats";
-import { fetchLeaderboard, submitScore, getPlayerName, setPlayerName, type LeaderboardEntry } from "./leaderboard";
+import { fetchLeaderboard, submitScore, getPlayerName, setPlayerName, fetchGhosts, submitGhost, fetchGhostUploadThreshold, type LeaderboardEntry } from "./leaderboard";
+import { GhostRecorder, GhostManager } from "./ghost";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -359,6 +360,12 @@ export class Game {
   private demoMode = false;
   private portalRefUrl = "";
 
+  // Ghost racing — async multiplayer playback
+  private ghostRecorder = new GhostRecorder();
+  private ghostManager!: GhostManager;
+  private ghostUploadThreshold = 0;
+  private ghostToggle = true;
+
   // Camera offset
   private cameraOffset = new THREE.Vector3(0, 3, -6);
 
@@ -466,6 +473,13 @@ export class Game {
     this.ribbon = new RibbonTrail(this.scene);
     this.runHistory = new RunHistoryTracker();
 
+    // Ghost racing — load persisted toggle and kick off async fetch
+    const storedGhostToggle = localStorage.getItem("shatterDriftGhostToggle");
+    this.ghostToggle = storedGhostToggle === null ? true : storedGhostToggle === "1";
+    this.ghostManager = new GhostManager(this.scene);
+    this.ghostManager.setEnabled(this.ghostToggle);
+    this.loadGhostsAsync();
+
     // Cache HUD elements
     this.hudScore = document.getElementById("hud-score")!;
     this.hudDistance = document.getElementById("hud-distance")!;
@@ -517,6 +531,34 @@ export class Game {
     this.handlePortalArrival();
   }
 
+  /** Fetch ghost recordings + upload threshold in parallel. Fire-and-forget. */
+  private async loadGhostsAsync() {
+    try {
+      const [ghosts, threshold] = await Promise.all([
+        fetchGhosts(3),
+        fetchGhostUploadThreshold(),
+      ]);
+      this.ghostUploadThreshold = threshold;
+      this.ghostManager.loadGhosts(ghosts);
+      this.updateTitleGhostLine();
+    } catch {
+      // Silent — ghost racing is optional polish.
+    }
+  }
+
+  /** Update the "Racing against N ghosts" line on the title screen. */
+  private updateTitleGhostLine() {
+    const el = document.getElementById("title-ghost-line");
+    if (!el) return;
+    const n = this.ghostManager?.ghostCount ?? 0;
+    if (n > 0 && this.ghostToggle) {
+      el.textContent = `👻 Racing against ${n} ghost${n === 1 ? "" : "s"}`;
+      el.style.display = "";
+    } else {
+      el.style.display = "none";
+    }
+  }
+
   private initPauseMenu() {
     const volumeSlider = document.getElementById("pause-volume") as HTMLInputElement;
     const resumeBtn = document.getElementById("pause-resume")!;
@@ -532,6 +574,25 @@ export class Game {
       e.stopPropagation();
       this.resumeGame();
     });
+
+    // Ghost toggle — persisted and applied live
+    const ghostBtn = document.getElementById("pause-ghost-toggle");
+    if (ghostBtn) {
+      const paint = () => {
+        ghostBtn.textContent = `GHOST: ${this.ghostToggle ? "ON" : "OFF"}`;
+        ghostBtn.style.color = this.ghostToggle ? "#00ffcc" : "#668899";
+        ghostBtn.style.borderColor = this.ghostToggle ? "#00ffcc" : "#334455";
+      };
+      paint();
+      ghostBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.ghostToggle = !this.ghostToggle;
+        localStorage.setItem("shatterDriftGhostToggle", this.ghostToggle ? "1" : "0");
+        this.ghostManager.setEnabled(this.ghostToggle);
+        this.updateTitleGhostLine();
+        paint();
+      });
+    }
 
     // ESC to pause/resume
     window.addEventListener("keydown", (e) => {
@@ -828,6 +889,10 @@ export class Game {
         this.recorder?.start(this.renderer.domElement);
       }, 2000);
     }
+
+    // Ghost racing — reset playback clock and start recording this run
+    this.ghostManager.startRun();
+    this.ghostRecorder.start();
   }
 
   private updateLaunching(dt: number) {
@@ -999,6 +1064,15 @@ export class Game {
     // Update player
     this.player.update(dt, moveX);
     this.player.group.position.z = this.playerZ;
+
+    // Ghost racing — sample player state and advance ghost playback
+    this.ghostRecorder.sample(
+      this.player.group.position.x,
+      this.playerZ,
+      this.speed,
+      this.player.shattered
+    );
+    this.ghostManager.update(dt);
 
     // World difficulty is now fully biome-driven (see world.ts)
 
@@ -1661,6 +1735,9 @@ export class Game {
   private die() {
     const previousBestDistance = Math.max(this.bestDistance, this.runHistory.getBestDistance());
 
+    // Ghost racing — stop recording immediately so we capture a clean set of frames
+    this.ghostRecorder.stop();
+
     // Hide tutorial immediately on death
     this.tutorial.reset();
 
@@ -1869,6 +1946,38 @@ export class Game {
 
     // Hide player
     this.player.group.visible = false;
+
+    // Ghost racing — announce outlasted ghosts, hide meshes, upload run
+    this.announceBeatenGhosts();
+    this.ghostManager.hideAll();
+    this.uploadGhostIfQualified(grade.label);
+  }
+
+  /** Show "You beat X's ghost!" for each ghost the player outlasted this run. */
+  private announceBeatenGhosts() {
+    const beaten = this.ghostManager.getBeatenNames();
+    if (beaten.length === 0) return;
+    // Stagger messages so multiple beats don't overlap.
+    beaten.forEach((name, i) => {
+      setTimeout(() => {
+        this.popups.showCenter(`You beat ${name}'s ghost!`, "👻 OUTLASTED", "#ffcc66");
+      }, 1200 + i * 900);
+    });
+  }
+
+  /** Upload this run's recording if score is in top half of leaderboard. Fire-and-forget. */
+  private uploadGhostIfQualified(gradeLabel: string) {
+    const frames = this.ghostRecorder.getFrames();
+    if (frames.length < 10) return; // too short to be useful
+    if (this.score < this.ghostUploadThreshold) return;
+    const name = getPlayerName() || "ANON";
+    submitGhost({
+      name,
+      score: this.score,
+      distance: Math.floor(this.distance),
+      grade: gradeLabel,
+      frames,
+    }).catch(() => { /* silent */ });
   }
 
   private async showLeaderboard(score: number, distance: number, grade: string, biome: string) {
