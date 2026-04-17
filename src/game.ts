@@ -9,7 +9,7 @@ import { PostFXPass } from "./postfx";
 import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
-import { clamp, ease, ScreenShake } from "./utils";
+import { clamp, ease, ScreenShake, seededRandom } from "./utils";
 import { BiomeManager } from "./biomes";
 import { PowerUpManager, PowerUpType } from "./powerups";
 import { MilestoneTracker } from "./milestones";
@@ -366,6 +366,12 @@ export class Game {
   private ghostUploadThreshold = 0;
   private ghostToggle = true;
 
+  // Daily Challenge mode
+  private isDailyMode = false;
+  private dailyDateKey = ""; // YYYYMMDD
+  private dailyChallengeQueued = false;
+  private dailyBanner: HTMLElement | null = null;
+
   // Camera offset
   private cameraOffset = new THREE.Vector3(0, 3, -6);
 
@@ -500,11 +506,17 @@ export class Game {
     this.customizePanel = document.getElementById("customize-panel")!;
     this.pauseMenu = document.getElementById("pause-menu")!;
 
+    // Cache daily banner
+    this.dailyBanner = document.getElementById("daily-banner");
+
     // Pause menu
     this.initPauseMenu();
 
     // Customize UI
     this.initCustomizePanel();
+
+    // Daily Challenge button
+    this.initDailyButton();
 
     // Show stats on title
     const summary = this.runHistory.getSummary();
@@ -696,6 +708,39 @@ export class Game {
     this.player.applySkin(this.unlocks.getSelectedCrystal());
   }
 
+  private initDailyButton() {
+    const dailyBtn = document.getElementById("daily-btn");
+    if (!dailyBtn) return;
+    dailyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.dailyChallengeQueued = true;
+    });
+    dailyBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+  }
+
+  // --- Date helpers ---
+
+  private getDailyDateKey(): string {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}${m}${day}`;
+  }
+
+  private formatDailyDate(dateKey: string): string {
+    const months = ["January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December"];
+    const year = parseInt(dateKey.slice(0, 4));
+    const month = parseInt(dateKey.slice(4, 6)) - 1;
+    const day = parseInt(dateKey.slice(6, 8));
+    return `${months[month]} ${day}, ${year}`;
+  }
+
+  private getDailyApiDate(dateKey: string): string {
+    return `${dateKey.slice(0, 4)}-${dateKey.slice(4, 6)}-${dateKey.slice(6, 8)}`;
+  }
+
   private loop() {
     let dt = Math.min(this.clock.getDelta(), 0.05);
 
@@ -803,14 +848,26 @@ export class Game {
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(0, -1.5, 0);
 
-    if (!this.customizeOpen && (this.input.justPressed("space") || this.input.justPressed("click"))) {
-      this.startGame();
+    if (this.dailyChallengeQueued) {
+      this.dailyChallengeQueued = false;
+      this.startGame(true);
+    } else if (!this.customizeOpen && (this.input.justPressed("space") || this.input.justPressed("click"))) {
+      this.startGame(false);
     }
   }
 
   // --- Playing ---
 
-  private startGame() {
+  private startGame(daily = false) {
+    // --- Daily Challenge mode setup ---
+    this.isDailyMode = daily;
+    if (daily) {
+      this.dailyDateKey = this.getDailyDateKey();
+      this.world.setRandom(seededRandom(parseInt(this.dailyDateKey, 10)));
+    } else {
+      this.world.setRandom(Math.random);
+    }
+
     // Capture current camera state for the launch transition
     this.launchStartCamPos.copy(this.camera.position);
     const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
@@ -964,6 +1021,16 @@ export class Game {
 
       // Reveal HUD
       this.hud.classList.remove("hidden");
+
+      // Daily banner
+      if (this.dailyBanner) {
+        if (this.isDailyMode) {
+          this.dailyBanner.textContent = `DAILY CHALLENGE — ${this.formatDailyDate(this.dailyDateKey)}`;
+          this.dailyBanner.classList.remove("hidden");
+        } else {
+          this.dailyBanner.classList.add("hidden");
+        }
+      }
 
       // Tutorial for first-time players
       if (!this.demoMode) {
@@ -1859,21 +1926,56 @@ export class Game {
       ? `<div style="color:#ffcc00;font-size:11px;margin:6px 0;letter-spacing:1px">${pbIndicators.join(" • ")}</div>`
       : "";
 
+    // Daily best tracking
+    let isNewDailyBest = false;
+    let prevDailyBest = 0;
+    if (this.isDailyMode) {
+      const dailyKey = `shatterDriftDaily_${this.dailyDateKey}`;
+      prevDailyBest = parseInt(localStorage.getItem(dailyKey) || "0", 10);
+      isNewDailyBest = this.score > prevDailyBest;
+      if (isNewDailyBest) {
+        localStorage.setItem(dailyKey, String(this.score));
+      }
+    }
+
+    // Build the best/score line — daily mode shows daily best, normal shows global best
+    const bestLine = this.isDailyMode
+      ? (isNewDailyBest
+          ? `<span class="highlight">DAILY BEST!</span>`
+          : `Daily Best: ${Math.max(prevDailyBest, this.score).toLocaleString()}`)
+      : (isNewHighScore
+          ? `<span class="highlight">NEW HIGH SCORE!</span>`
+          : `Best: ${this.highScore.toLocaleString()}`);
+
+    // Daily-specific header block
+    const dailyHeader = this.isDailyMode
+      ? `<div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,68,255,0.2)">
+           <div style="font-size:11px;color:#ff88ff;letter-spacing:4px;margin-bottom:4px">DAILY CHALLENGE</div>
+           <div style="font-size:17px;font-weight:700;color:#ff44ff;text-shadow:0 0 14px rgba(255,68,255,0.5);letter-spacing:2px">${this.formatDailyDate(this.dailyDateKey)}</div>
+         </div>`
+      : "";
+
+    // "Come back tomorrow" footer for daily mode
+    const tomorrowLine = this.isDailyMode
+      ? `<div style="margin-top:12px;font-size:11px;color:#ff88ff;letter-spacing:2px;text-shadow:0 0 8px rgba(255,68,255,0.3)">COME BACK TOMORROW FOR A NEW CHALLENGE</div>`
+      : `<div id="next-run-goal" style="margin-top:16px;padding-top:12px;border-top:1px solid #223344">
+           <div style="font-size:11px;color:#668899;letter-spacing:2px;margin-bottom:6px">NEXT RUN</div>
+           <div style="font-size:18px;color:${nextGoal.color};letter-spacing:1px;text-shadow:0 0 14px ${nextGoal.color}55">${nextGoal.text}</div>
+           <div style="font-size:11px;color:#7f92a6;margin-top:4px">${nextGoal.subtext}</div>
+         </div>`;
+
     // Show game over with more stats
     this.state = GameState.GameOver;
     this.centerTitle!.textContent = "SHATTERED";
     this.centerStats!.innerHTML = `
+      ${dailyHeader}
       <div style="font-size:40px;margin-bottom:12px;color:${grade.color};text-shadow:0 0 20px ${grade.color}88;letter-spacing:4px">${grade.label}</div>
       <div style="font-size:32px;margin:8px 0"><span class="highlight">${this.score.toLocaleString()}</span></div>
       <div style="font-size:13px;color:#8899aa;margin:4px 0">${this.distance.toLocaleString()}m · ${Math.floor(this.speed)} m/s · x${this.maxCombo}</div>
       Zone: ${this.biomes.currentBiome.displayName}<br>
       ${pbLine}
-      ${isNewHighScore ? '<span class="highlight">NEW HIGH SCORE!</span>' : `Best: ${this.highScore.toLocaleString()}`}
-      <div id="next-run-goal" style="margin-top:16px;padding-top:12px;border-top:1px solid #223344">
-        <div style="font-size:11px;color:#668899;letter-spacing:2px;margin-bottom:6px">NEXT RUN</div>
-        <div style="font-size:18px;color:${nextGoal.color};letter-spacing:1px;text-shadow:0 0 14px ${nextGoal.color}55">${nextGoal.text}</div>
-        <div style="font-size:11px;color:#7f92a6;margin-top:4px">${nextGoal.subtext}</div>
-      </div>
+      ${bestLine}
+      ${tomorrowLine}
       <button id="share-x-btn" style="
         margin-top:14px;padding:8px 22px;
         font-family:'Orbitron',monospace;font-size:11px;letter-spacing:2px;
@@ -1926,11 +2028,18 @@ export class Game {
       );
     }
 
-    // Leaderboard — submit score and show top 10
-    this.showLeaderboard(this.score, Math.floor(this.distance), grade.label, this.biomes.currentBiome.displayName);
+    // Leaderboard — submit score and show top 10 (daily mode uses separate endpoint)
+    const dailyOptions = this.isDailyMode
+      ? { mode: "daily" as const, date: this.getDailyApiDate(this.dailyDateKey) }
+      : undefined;
+    this.showLeaderboard(this.score, Math.floor(this.distance), grade.label, this.biomes.currentBiome.displayName, dailyOptions);
 
     // Death popup — show the most exciting achievement
-    if (isNewHighScore) {
+    if (this.isDailyMode && isNewDailyBest) {
+      setTimeout(() => {
+        this.popups.showCenter("DAILY BEST!", this.score.toLocaleString(), "#ff44ff");
+      }, 500);
+    } else if (isNewHighScore) {
       setTimeout(() => {
         this.popups.showCenter("NEW HIGH SCORE!", this.score.toLocaleString(), "#ffcc00");
       }, 500);
@@ -1980,9 +2089,19 @@ export class Game {
     }).catch(() => { /* silent */ });
   }
 
-  private async showLeaderboard(score: number, distance: number, grade: string, biome: string) {
+  private async showLeaderboard(
+    score: number,
+    distance: number,
+    grade: string,
+    biome: string,
+    dailyOptions?: { mode: "daily"; date: string }
+  ) {
     const lbContainer = document.getElementById("leaderboard-section");
     if (!lbContainer) return;
+
+    const isDaily = !!dailyOptions;
+    const lbLabel = isDaily ? "TODAY'S LEADERBOARD" : "GLOBAL LEADERBOARD";
+    const rankColor = isDaily ? "#ff88ff" : "#00ffcc";
 
     // Show loading state
     lbContainer.innerHTML = '<div style="color:#445566;font-size:11px;text-align:center;margin-top:12px">Loading leaderboard...</div>';
@@ -1996,16 +2115,19 @@ export class Game {
 
     // Submit score + fetch leaderboard in parallel
     const [submitResult, topScores] = await Promise.all([
-      submitScore({ name: playerName, score, distance, grade, biome }),
-      fetchLeaderboard(10),
+      submitScore({ name: playerName, score, distance, grade, biome }, dailyOptions),
+      fetchLeaderboard(10, dailyOptions),
     ]);
 
     // Build leaderboard HTML
-    let html = `<div style="margin-top:16px;border-top:1px solid #223344;padding-top:12px">`;
-    html += `<div style="font-family:'Orbitron',monospace;font-size:12px;color:#668899;letter-spacing:3px;text-align:center;margin-bottom:8px">GLOBAL LEADERBOARD</div>`;
+    let html = `<div style="margin-top:16px;border-top:1px solid ${isDaily ? "rgba(255,68,255,0.2)" : "#223344"};padding-top:12px">`;
+    html += `<div style="font-family:'Orbitron',monospace;font-size:12px;color:${isDaily ? "#ff88ff" : "#668899"};letter-spacing:3px;text-align:center;margin-bottom:8px">${lbLabel}</div>`;
 
     if (submitResult) {
-      html += `<div style="color:#00ffcc;font-size:11px;text-align:center;margin-bottom:8px">You ranked #${submitResult.rank} of ${submitResult.total}</div>`;
+      const rankText = isDaily
+        ? `You placed #${submitResult.rank} today!`
+        : `You ranked #${submitResult.rank} of ${submitResult.total}`;
+      html += `<div style="color:${rankColor};font-size:11px;text-align:center;margin-bottom:8px">${rankText}</div>`;
     }
 
     // Name edit row
@@ -2023,8 +2145,9 @@ export class Game {
       for (let i = 0; i < topScores.length; i++) {
         const s = topScores[i];
         const isYou = submitResult && s.score === score && s.name === playerName;
-        const rowColor = isYou ? "#00ffcc" : (i < 3 ? "#ffcc00" : "#8899aa");
-        const bg = isYou ? "rgba(0,255,204,0.05)" : "transparent";
+        const youColor = isDaily ? "#ff88ff" : "#00ffcc";
+        const rowColor = isYou ? youColor : (i < 3 ? "#ffcc00" : "#8899aa");
+        const bg = isYou ? (isDaily ? "rgba(255,68,255,0.05)" : "rgba(0,255,204,0.05)") : "transparent";
         html += `<tr style="color:${rowColor};background:${bg}">`;
         html += `<td style="padding:2px 6px">${i + 1}</td>`;
         html += `<td>${s.name}</td>`;
@@ -2034,7 +2157,7 @@ export class Game {
       }
       html += `</table>`;
     } else {
-      html += `<div style="color:#445566;font-size:11px;text-align:center">No scores yet — you're first!</div>`;
+      html += `<div style="color:#445566;font-size:11px;text-align:center">No scores yet — be first!</div>`;
     }
 
     html += `</div>`;
@@ -2079,7 +2202,8 @@ export class Game {
       this.player.group.visible = true;
       this.centerMessage.style.opacity = "0";
       this.gameOverTimer = 0;
-      this.startGame();
+      // Retry in the same mode (daily stays daily)
+      this.startGame(this.isDailyMode);
     }
   }
 

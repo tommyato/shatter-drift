@@ -130,6 +130,17 @@ export const ease = {
   },
 };
 
+/** Seeded PRNG using mulberry32. Returns a function yielding values in [0, 1). */
+export function seededRandom(seed: number): () => number {
+  let s = seed >>> 0;
+  return function () {
+    s += 0x6D2B79F5;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = t + Math.imul(t ^ (t >>> 7), 61 | t) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /** Screen shake helper — call each frame, applies to camera */
 export class ScreenShake {
   intensity = 0;

@@ -56,6 +56,8 @@ export class World {
 
   private scene: THREE.Scene;
   private biomes: BiomeManager;
+  /** Seeded PRNG for deterministic world generation. Defaults to Math.random (normal mode). */
+  private random: () => number = Math.random;
   private nextObstacleZ = 30;
   private nextOrbZ = 15;
   private nextPortalZ = PORTAL_INTERVAL;
@@ -85,6 +87,12 @@ export class World {
 
   // Distance markers
   private markers: { group: THREE.Group; z: number; active: boolean }[] = [];
+
+  /** Replace the PRNG used for world generation. Call before each game start.
+   *  Pass Math.random for normal mode, seededRandom(seed) for daily challenge. */
+  setRandom(fn: () => number) {
+    this.random = fn;
+  }
 
   constructor(scene: THREE.Scene, biomes: BiomeManager) {
     this.scene = scene;
@@ -332,7 +340,7 @@ export class World {
     // Generate orbs
     while (this.nextOrbZ < playerZ + SPAWN_DISTANCE) {
       this.spawnOrbCluster(this.nextOrbZ);
-      this.nextOrbZ += ORB_SPACING + Math.random() * 5;
+      this.nextOrbZ += ORB_SPACING + this.random() * 5;
     }
 
     // Generate Vibeverse portals
@@ -528,11 +536,11 @@ export class World {
    */
   private getBiomeSpacing(): number {
     const idx = this.biomes.biomeIndex;
-    if (idx === 0) return 18 + Math.random() * 6;   // THE VOID: 18–24, wide open
-    if (idx === 1) return 13 + Math.random() * 5;   // CRYSTAL CAVES: 13–18
-    if (idx === 2) return 9 + Math.random() * 4;    // NEON DISTRICT: 9–13
-    if (idx === 3) return 7 + Math.random() * 4;    // SOLAR STORM: 7–11, dense
-    return 5 + Math.random() * 4;                   // COSMIC RIFT: 5–9, still tough but fairer
+    if (idx === 0) return 18 + this.random() * 6;   // THE VOID: 18–24, wide open
+    if (idx === 1) return 13 + this.random() * 5;   // CRYSTAL CAVES: 13–18
+    if (idx === 2) return 9 + this.random() * 4;    // NEON DISTRICT: 9–13
+    if (idx === 3) return 7 + this.random() * 4;    // SOLAR STORM: 7–11, dense
+    return 5 + this.random() * 4;                   // COSMIC RIFT: 5–9, still tough but fairer
   }
 
   /**
@@ -540,7 +548,7 @@ export class World {
    * obstacles only, later biomes unlock complex multi-piece formations.
    */
   private spawnObstacle(z: number) {
-    const type = Math.random();
+    const type = this.random();
     const biome = this.biomes.biomeIndex;
 
     if (biome === 0) {
@@ -632,7 +640,7 @@ export class World {
   }
 
   private spawnGate(z: number) {
-    const gapX = (Math.random() - 0.5) * 5;
+    const gapX = (this.random() - 0.5) * 5;
     // Gap narrows with each biome — more forgiving early, punishing late
     const biomeGapWidths = [4.5, 4.2, 3.8, 3.4, 3.0];
     const gapWidth = biomeGapWidths[Math.min(this.biomes.biomeIndex, 4)];
@@ -673,9 +681,9 @@ export class World {
   }
 
   private spawnPillar(z: number) {
-    const x = (Math.random() - 0.5) * 6;
-    const width = 1 + Math.random() * 1.5;
-    const height = 2 + Math.random() * 2;
+    const x = (this.random() - 0.5) * 6;
+    const width = 1 + this.random() * 1.5;
+    const height = 2 + this.random() * 2;
 
     const mesh = this.createObstacleMesh(width, height, 0.8, 0, 0);
     mesh.position.set(x, 0, z);
@@ -695,17 +703,17 @@ export class World {
   }
 
   private spawnDoublePillar(z: number) {
-    const spread = 2 + Math.random() * 2;
-    const offset = (Math.random() - 0.5) * 2;
+    const spread = 2 + this.random() * 2;
+    const offset = (this.random() - 0.5) * 2;
 
     // Left pillar
-    this.spawnPillarAt(z, offset - spread, 1 + Math.random());
+    this.spawnPillarAt(z, offset - spread, 1 + this.random());
     // Right pillar
-    this.spawnPillarAt(z, offset + spread, 1 + Math.random());
+    this.spawnPillarAt(z, offset + spread, 1 + this.random());
   }
 
   private spawnPillarAt(z: number, x: number, width: number) {
-    const height = 2 + Math.random() * 2;
+    const height = 2 + this.random() * 2;
     const mesh = this.createObstacleMesh(width, height, 0.8, 0, 0);
     mesh.position.set(x, 0, z);
     this.scene.add(mesh);
@@ -724,8 +732,8 @@ export class World {
   }
 
   private spawnWideBar(z: number) {
-    const gapSide = Math.random() < 0.5 ? -1 : 1;
-    const gapX = gapSide * (2 + Math.random() * 2);
+    const gapSide = this.random() < 0.5 ? -1 : 1;
+    const gapX = gapSide * (2 + this.random() * 2);
 
     const width = LANE_WIDTH * 2;
     const height = 1.5;
@@ -796,13 +804,13 @@ export class World {
   private spawnWeave(z: number) {
     // Later biomes add a 4th pillar to the weave
     const count = 3 + (this.biomes.biomeIndex >= 3 ? 1 : 0);
-    const startSide = Math.random() < 0.5 ? -1 : 1;
+    const startSide = this.random() < 0.5 ? -1 : 1;
 
     for (let i = 0; i < count; i++) {
       const side = startSide * (i % 2 === 0 ? 1 : -1);
-      const x = side * (1.5 + Math.random() * 1.5);
-      const width = 2 + Math.random();
-      const height = 2 + Math.random() * 1.5;
+      const x = side * (1.5 + this.random() * 1.5);
+      const width = 2 + this.random();
+      const height = 2 + this.random() * 1.5;
       const mesh = this.createObstacleMesh(width, height, 0.8, 0, 0);
       const pz = z + i * 3.5;
       mesh.position.set(x, 0, pz);
@@ -830,12 +838,12 @@ export class World {
    * Gap is in the center — player threads the needle.
    */
   private spawnDiamond(z: number) {
-    const cx = (Math.random() - 0.5) * 3;
+    const cx = (this.random() - 0.5) * 3;
     // Tighter diamond in later biomes — less room to thread the needle
     const biomeSpread = [4.0, 3.5, 3.0, 2.5, 2.0];
     const spread = biomeSpread[Math.min(this.biomes.biomeIndex, 4)];
-    const pillarW = 0.8 + Math.random() * 0.6;
-    const pillarH = 2 + Math.random();
+    const pillarW = 0.8 + this.random() * 0.6;
+    const pillarH = 2 + this.random();
 
     // Top, Bottom, Left, Right relative to center
     const offsets = [
@@ -877,7 +885,7 @@ export class World {
     const gateSpacing = biomeGateSpacing[Math.min(this.biomes.biomeIndex, 4)];
 
     for (let i = 0; i < 3; i++) {
-      const gapX = (i % 2 === 0 ? -1 : 1) * (1.5 + Math.random() * 1.5);
+      const gapX = (i % 2 === 0 ? -1 : 1) * (1.5 + this.random() * 1.5);
       const gapWidth = biomeZigzagGap[Math.min(this.biomes.biomeIndex, 4)];
       const wallHeight = 3;
       const wallThickness = 0.6;
@@ -924,14 +932,14 @@ export class World {
    * Creates a debris field requiring constant micro-dodging or sustained shatter.
    */
   private spawnScatterField(z: number) {
-    const count = 5 + Math.floor(Math.random() * 3);
+    const count = 5 + Math.floor(this.random() * 3);
     const fieldDepth = 10;
 
     for (let i = 0; i < count; i++) {
-      const x = (Math.random() - 0.5) * 7;
-      const pz = z + Math.random() * fieldDepth;
-      const w = 0.6 + Math.random() * 0.8;
-      const h = 1 + Math.random() * 2;
+      const x = (this.random() - 0.5) * 7;
+      const pz = z + this.random() * fieldDepth;
+      const w = 0.6 + this.random() * 0.8;
+      const h = 1 + this.random() * 2;
       const mesh = this.createObstacleMesh(w, h, w, 0, 0);
       mesh.position.set(x, 0, pz);
       this.scene.add(mesh);
@@ -953,8 +961,8 @@ export class World {
   }
 
   private spawnOrbCluster(z: number) {
-    const count = 1 + Math.floor(Math.random() * 3);
-    const baseX = (Math.random() - 0.5) * 6;
+    const count = 1 + Math.floor(this.random() * 3);
+    const baseX = (this.random() - 0.5) * 6;
 
     for (let i = 0; i < count; i++) {
       const x = baseX + (i - (count - 1) / 2) * 1.5;
@@ -973,7 +981,7 @@ export class World {
       roughness: 0.2,
     });
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(x, 0.5 + Math.random() * 0.5, z);
+    mesh.position.set(x, 0.5 + this.random() * 0.5, z);
     this.scene.add(mesh);
 
     this.orbs.push({
@@ -1091,7 +1099,7 @@ export class World {
 
   private spawnPortal(z: number) {
     const group = new THREE.Group();
-    const x = (Math.random() < 0.5 ? -1 : 1) * (2 + Math.random() * 1.5);
+    const x = (this.random() < 0.5 ? -1 : 1) * (2 + this.random() * 1.5);
 
     // Torus ring
     const torusGeo = new THREE.TorusGeometry(1.5, 0.15, 16, 32);

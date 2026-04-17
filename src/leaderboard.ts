@@ -34,15 +34,18 @@ export function setPlayerName(name: string) {
   localStorage.setItem("shatterDriftName", name.slice(0, 16));
 }
 
-/** Fetch top scores. Pass options for daily mode: { mode: "daily", date: "YYYY-MM-DD" } */
+/** Fetch top scores.
+ *  - Normal:       GET /scores?limit=N
+ *  - Daily mode:   GET /daily-scores?date=YYYY-MM-DD&limit=N */
 export async function fetchLeaderboard(limit = 10, options?: LeaderboardOptions): Promise<LeaderboardEntry[]> {
   try {
-    let url = `${API_URL}/scores?limit=${limit}`;
-    if (options?.mode) url += `&mode=${options.mode}`;
-    if (options?.date) url += `&date=${options.date}`;
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(4000),
-    });
+    let url: string;
+    if (options?.mode === "daily" && options.date) {
+      url = `${API_URL}/daily-scores?date=${options.date}&limit=${limit}`;
+    } else {
+      url = `${API_URL}/scores?limit=${limit}`;
+    }
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
     if (!res.ok) return [];
     const data = await res.json();
     return data.scores || [];
@@ -51,7 +54,9 @@ export async function fetchLeaderboard(limit = 10, options?: LeaderboardOptions)
   }
 }
 
-/** Submit a score, returns rank or null on failure. Pass options for daily mode. */
+/** Submit a score, returns rank or null on failure.
+ *  - Normal:       POST /scores
+ *  - Daily mode:   POST /daily-scores with { date: "YYYY-MM-DD", ...entry } */
 export async function submitScore(
   entry: {
     name: string;
@@ -63,11 +68,52 @@ export async function submitScore(
   options?: LeaderboardOptions
 ): Promise<SubmitResult | null> {
   try {
-    const body = options ? { ...entry, ...options } : entry;
-    const res = await fetch(`${API_URL}/scores`, {
+    const isDaily = options?.mode === "daily" && options.date;
+    const endpoint = isDaily ? `${API_URL}/daily-scores` : `${API_URL}/scores`;
+    const body = isDaily ? { ...entry, date: options!.date } : entry;
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch daily leaderboard for a specific date. */
+export async function fetchDailyLeaderboard(dateStr: string, limit = 10): Promise<LeaderboardEntry[]> {
+  try {
+    const res = await fetch(`${API_URL}/daily-scores?date=${dateStr}&limit=${limit}`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.scores || [];
+  } catch {
+    return [];
+  }
+}
+
+/** Submit a daily challenge score for a specific date. Returns rank or null on failure. */
+export async function submitDailyScore(
+  dateStr: string,
+  entry: {
+    name: string;
+    score: number;
+    distance: number;
+    grade: string;
+    biome: string;
+  }
+): Promise<SubmitResult | null> {
+  try {
+    const res = await fetch(`${API_URL}/daily-scores`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...entry, date: dateStr }),
       signal: AbortSignal.timeout(4000),
     });
     if (!res.ok) return null;
