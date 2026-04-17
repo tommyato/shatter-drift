@@ -193,6 +193,7 @@ export class Tutorial {
 
   private showStep(idx: number) {
     const step = this.steps[idx];
+    if (!step) return;
     this.textEl.textContent = step.text;
     this.subtextEl.textContent = step.subtext;
   }
