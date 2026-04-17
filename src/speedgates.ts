@@ -21,12 +21,18 @@ export interface SpeedGate {
 export class SpeedGateManager {
   private scene: THREE.Scene;
   private biomes: BiomeManager;
+  private random: () => number = Math.random;
   private gates: SpeedGate[] = [];
   private nextGateZ = 60;
   private gateSpacing = 80; // meters between gates
   private activeBoost = 0; // remaining boost time
   private boostSpeed = 0; // current boost speed addition
   private cleanupTimer = 0;
+
+  /** Replace the PRNG used for gate spawning. Call before each game start. */
+  setRandom(fn: () => number) {
+    this.random = fn;
+  }
 
   constructor(scene: THREE.Scene, biomes: BiomeManager) {
     this.scene = scene;
@@ -45,7 +51,7 @@ export class SpeedGateManager {
     // Spawn gates ahead
     while (this.nextGateZ < playerZ + 80) {
       this.spawnGate(this.nextGateZ);
-      this.nextGateZ += this.gateSpacing + (Math.random() - 0.5) * 20;
+      this.nextGateZ += this.gateSpacing + (this.random() - 0.5) * 20;
     }
 
     // Animate gates
@@ -142,7 +148,7 @@ export class SpeedGateManager {
   }
 
   private spawnGate(z: number) {
-    const x = (Math.random() - 0.5) * 4; // centered-ish
+    const x = (this.random() - 0.5) * 4; // centered-ish
     const group = new THREE.Group();
     group.position.set(x, 1, z);
 

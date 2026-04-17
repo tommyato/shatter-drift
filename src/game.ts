@@ -863,9 +863,18 @@ export class Game {
     this.isDailyMode = daily;
     if (daily) {
       this.dailyDateKey = this.getDailyDateKey();
-      this.world.setRandom(seededRandom(parseInt(this.dailyDateKey, 10)));
+      const rng = seededRandom(parseInt(this.dailyDateKey, 10));
+      this.world.setRandom(rng);
+      this.powerups.setRandom(rng);
+      this.speedGates.setRandom(rng);
+      this.worldEvents.setRandom(rng);
+      this.bossWaves.setRandom(rng);
     } else {
       this.world.setRandom(Math.random);
+      this.powerups.setRandom(Math.random);
+      this.speedGates.setRandom(Math.random);
+      this.worldEvents.setRandom(Math.random);
+      this.bossWaves.setRandom(Math.random);
     }
 
     // Capture current camera state for the launch transition

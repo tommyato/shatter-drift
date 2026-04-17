@@ -43,6 +43,7 @@ export class BossWaveManager {
   waves: BossWave[] = [];
   private scene: THREE.Scene;
   private biomes: BiomeManager;
+  private random: () => number = Math.random;
   private nextBossZ = BOSS_INTERVAL;
   private bossCount = 0;
 
@@ -50,6 +51,11 @@ export class BossWaveManager {
   warningActive = false;
   warningText = "";
   private warningTimer = 0;
+
+  /** Replace the PRNG used for boss wave generation. Call before each game start. */
+  setRandom(fn: () => number) {
+    this.random = fn;
+  }
 
   constructor(scene: THREE.Scene, biomes: BiomeManager) {
     this.scene = scene;
@@ -267,7 +273,7 @@ export class BossWaveManager {
     // Horizontal bars that oscillate vertically (some can be ducked, some can't)
     for (let i = 0; i < 4; i++) {
       const bar = this.createBossMesh(LANE_WIDTH, 0.8, 0.5, color);
-      const x = (Math.random() - 0.5) * 4;
+      const x = (this.random() - 0.5) * 4;
       bar.position.set(x, 1.5, i * 4 - 6);
       group.add(bar);
 

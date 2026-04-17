@@ -26,6 +26,7 @@ interface WorldEvent {
 export class WorldEventManager {
   private scene: THREE.Scene;
   private biomes: BiomeManager;
+  private random: () => number = Math.random;
   private currentEvent: WorldEvent | null = null;
   private eventCooldown = 0;
   private minCooldown = 12; // seconds between events
@@ -34,6 +35,11 @@ export class WorldEventManager {
   // Reusable geometry/materials
   private meteorGeo: THREE.CylinderGeometry;
   private streakGeo: THREE.PlaneGeometry;
+
+  /** Replace the PRNG used for event spawning. Call before each game start. */
+  setRandom(fn: () => number) {
+    this.random = fn;
+  }
 
   constructor(scene: THREE.Scene, biomes: BiomeManager) {
     this.scene = scene;
@@ -120,12 +126,12 @@ export class WorldEventManager {
         const positions = new Float32Array(count * 3);
         const colors = new Float32Array(count * 3);
         for (let i = 0; i < count; i++) {
-          positions[i * 3] = (Math.random() - 0.5) * 30;
-          positions[i * 3 + 1] = Math.random() * 20 + 5;
-          positions[i * 3 + 2] = playerZ + Math.random() * 40 - 5;
+          positions[i * 3] = (this.random() - 0.5) * 30;
+          positions[i * 3 + 1] = this.random() * 20 + 5;
+          positions[i * 3 + 2] = playerZ + this.random() * 40 - 5;
           // Cyan/blue crystals
-          colors[i * 3] = 0.2 + Math.random() * 0.3;
-          colors[i * 3 + 1] = 0.7 + Math.random() * 0.3;
+          colors[i * 3] = 0.2 + this.random() * 0.3;
+          colors[i * 3 + 1] = 0.7 + this.random() * 0.3;
           colors[i * 3 + 2] = 1.0;
         }
         const geo = new THREE.BufferGeometry();
@@ -158,12 +164,12 @@ export class WorldEventManager {
           });
           const mesh = new THREE.Mesh(this.streakGeo, mat);
           mesh.position.set(
-            (Math.random() - 0.5) * 20,
-            1 + Math.random() * 8,
-            playerZ + Math.random() * 50
+            (this.random() - 0.5) * 20,
+            1 + this.random() * 8,
+            playerZ + this.random() * 50
           );
           mesh.rotation.y = Math.PI / 2;
-          mesh.userData.speed = 20 + Math.random() * 30;
+          mesh.userData.speed = 20 + this.random() * 30;
           mesh.userData.startX = mesh.position.x;
           this.scene.add(mesh);
           this.currentEvent.meshes.push(mesh);
@@ -184,16 +190,16 @@ export class WorldEventManager {
           });
           const mesh = new THREE.Mesh(this.meteorGeo, mat);
           mesh.position.set(
-            (Math.random() - 0.5) * 40,
-            15 + Math.random() * 20,
-            playerZ + 20 + Math.random() * 60
+            (this.random() - 0.5) * 40,
+            15 + this.random() * 20,
+            playerZ + 20 + this.random() * 60
           );
           // Angled trajectory
-          mesh.rotation.z = -Math.PI / 4 + (Math.random() - 0.5) * 0.5;
+          mesh.rotation.z = -Math.PI / 4 + (this.random() - 0.5) * 0.5;
           mesh.rotation.x = Math.PI / 6;
-          mesh.userData.velocityX = -15 - Math.random() * 10;
-          mesh.userData.velocityY = -20 - Math.random() * 15;
-          mesh.userData.delay = Math.random() * 4; // stagger spawns
+          mesh.userData.velocityX = -15 - this.random() * 10;
+          mesh.userData.velocityY = -20 - this.random() * 15;
+          mesh.userData.delay = this.random() * 4; // stagger spawns
           mesh.visible = false;
           this.scene.add(mesh);
           this.currentEvent.meshes.push(mesh);
@@ -340,7 +346,7 @@ export class WorldEventManager {
     }
 
     this.currentEvent = null;
-    this.eventCooldown = this.minCooldown + Math.random() * (this.maxCooldown - this.minCooldown);
+    this.eventCooldown = this.minCooldown + this.random() * (this.maxCooldown - this.minCooldown);
   }
 
   /** Get bloom boost during events (for cosmic_ripple especially) */

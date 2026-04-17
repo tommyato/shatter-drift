@@ -144,8 +144,14 @@ export class PowerUpManager {
   activePowerUps: ActivePowerUp[] = [];
 
   private scene: THREE.Scene;
+  private random: () => number = Math.random;
   private nextSpawnZ = 80;
   private spawnInterval = 60; // meters between power-up spawns
+
+  /** Replace the PRNG used for power-up spawning. Call before each game start. */
+  setRandom(fn: () => number) {
+    this.random = fn;
+  }
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -158,7 +164,7 @@ export class PowerUpManager {
     // Spawn ahead
     while (this.nextSpawnZ < playerZ + SPAWN_DISTANCE) {
       this.spawnPowerUp(this.nextSpawnZ);
-      this.nextSpawnZ += this.spawnInterval + Math.random() * 30;
+      this.nextSpawnZ += this.spawnInterval + this.random() * 30;
     }
 
     // Animate
@@ -207,8 +213,8 @@ export class PowerUpManager {
 
   spawnPowerUp(z: number) {
     const types = Object.values(PowerUpType);
-    const type = types[Math.floor(Math.random() * types.length)];
-    const x = (Math.random() - 0.5) * 7;
+    const type = types[Math.floor(this.random() * types.length)];
+    const x = (this.random() - 0.5) * 7;
 
     const mesh = createPowerUpMesh(type);
     mesh.position.set(x, 0.8, z);
@@ -221,7 +227,7 @@ export class PowerUpManager {
       type,
       active: true,
       collected: false,
-      animTime: Math.random() * 10,
+      animTime: this.random() * 10,
     });
   }
 
