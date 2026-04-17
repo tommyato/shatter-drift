@@ -1797,9 +1797,41 @@ export class Game {
         <div style="font-size:18px;color:${nextGoal.color};letter-spacing:1px;text-shadow:0 0 14px ${nextGoal.color}55">${nextGoal.text}</div>
         <div style="font-size:11px;color:#7f92a6;margin-top:4px">${nextGoal.subtext}</div>
       </div>
+      <button id="share-x-btn" style="
+        margin-top:14px;padding:8px 22px;
+        font-family:'Orbitron',monospace;font-size:11px;letter-spacing:2px;
+        color:#1da1f2;background:rgba(29,161,242,0.08);
+        border:1px solid rgba(29,161,242,0.35);border-radius:4px;
+        cursor:pointer;pointer-events:auto;
+        transition:all 0.2s;
+      " onmouseover="this.style.background='rgba(29,161,242,0.18)';this.style.borderColor='rgba(29,161,242,0.7)';this.style.textShadow='0 0 10px rgba(29,161,242,0.4)'"
+         onmouseout="this.style.background='rgba(29,161,242,0.08)';this.style.borderColor='rgba(29,161,242,0.35)';this.style.textShadow='none'"
+      >SHARE ON X</button>
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
     this.centerMessage.style.opacity = "1";
+
+    // Wire up Share to X button
+    const shareBtn = document.getElementById("share-x-btn");
+    if (shareBtn) {
+      shareBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const tweetText = [
+          `I scored ${this.score.toLocaleString()} (${grade.label}) on SHATTER DRIFT!`,
+          `Reached ${this.distance.toLocaleString()}m in the ${this.biomes.currentBiome.displayName} zone`,
+          ``,
+          `Can you beat my score?`,
+          `https://tommyato.com/games/shatter-drift/`,
+          ``,
+          `#vibejam #gamedev #threejs`,
+        ].join("\n");
+        const url = `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
+        window.open(url, "_blank", "noopener,noreferrer");
+      });
+      // Prevent space/click on button from restarting the game
+      shareBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      shareBtn.addEventListener("keydown", (e) => e.stopPropagation());
+    }
 
     const nextRunGoal = document.getElementById("next-run-goal");
     if (nextRunGoal) {
