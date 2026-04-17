@@ -371,6 +371,7 @@ export class Game {
   private dailyDateKey = ""; // YYYYMMDD
   private dailyChallengeQueued = false;
   private dailyBanner: HTMLElement | null = null;
+  private dailyTimerInterval: ReturnType<typeof setInterval> | null = null;
 
   // Camera offset
   private cameraOffset = new THREE.Vector3(0, 3, -6);
@@ -716,6 +717,38 @@ export class Game {
       this.dailyChallengeQueued = true;
     });
     dailyBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+
+    // Countdown timer to midnight UTC
+    const updateDailyUI = () => {
+      // Countdown
+      const timerEl = document.getElementById("daily-timer");
+      if (timerEl) {
+        const now = Date.now();
+        const midnight = new Date();
+        midnight.setUTCHours(24, 0, 0, 0);
+        const msLeft = midnight.getTime() - now;
+        const h = Math.floor(msLeft / 3_600_000);
+        const m = Math.floor((msLeft % 3_600_000) / 60_000);
+        const s = Math.floor((msLeft % 60_000) / 1_000);
+        timerEl.textContent = `Resets in ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+      }
+
+      // Today's best
+      const bestEl = document.getElementById("title-daily-best");
+      if (bestEl) {
+        const dateKey = this.getDailyApiDate(this.getDailyDateKey());
+        const storedBest = localStorage.getItem(`shatterDriftDailyBest_${dateKey}`);
+        if (storedBest && parseInt(storedBest, 10) > 0) {
+          bestEl.textContent = `TODAY'S BEST: ${parseInt(storedBest, 10).toLocaleString()}`;
+          bestEl.style.display = "block";
+        } else {
+          bestEl.style.display = "none";
+        }
+      }
+    };
+
+    updateDailyUI();
+    this.dailyTimerInterval = setInterval(updateDailyUI, 1000);
   }
 
   // --- Date helpers ---
@@ -863,12 +896,15 @@ export class Game {
     this.isDailyMode = daily;
     if (daily) {
       this.dailyDateKey = this.getDailyDateKey();
-      const rng = seededRandom(parseInt(this.dailyDateKey, 10));
-      this.world.setRandom(rng);
-      this.powerups.setRandom(rng);
-      this.speedGates.setRandom(rng);
-      this.worldEvents.setRandom(rng);
-      this.bossWaves.setRandom(rng);
+      // Each subsystem gets its own seeded RNG (offset seed) so their sequences
+      // are independent — time-based event triggers won't corrupt distance-based
+      // obstacle layout when players have different frame rates.
+      const baseSeed = parseInt(this.dailyDateKey, 10);
+      this.world.setRandom(seededRandom(baseSeed));
+      this.powerups.setRandom(seededRandom(baseSeed + 1));
+      this.speedGates.setRandom(seededRandom(baseSeed + 2));
+      this.worldEvents.setRandom(seededRandom(baseSeed + 3));
+      this.bossWaves.setRandom(seededRandom(baseSeed + 4));
     } else {
       this.world.setRandom(Math.random);
       this.powerups.setRandom(Math.random);
@@ -1939,7 +1975,7 @@ export class Game {
     let isNewDailyBest = false;
     let prevDailyBest = 0;
     if (this.isDailyMode) {
-      const dailyKey = `shatterDriftDaily_${this.dailyDateKey}`;
+      const dailyKey = `shatterDriftDailyBest_${this.getDailyApiDate(this.dailyDateKey)}`;
       prevDailyBest = parseInt(localStorage.getItem(dailyKey) || "0", 10);
       isNewDailyBest = this.score > prevDailyBest;
       if (isNewDailyBest) {
@@ -1958,15 +1994,15 @@ export class Game {
 
     // Daily-specific header block
     const dailyHeader = this.isDailyMode
-      ? `<div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,68,255,0.2)">
-           <div style="font-size:11px;color:#ff88ff;letter-spacing:4px;margin-bottom:4px">DAILY CHALLENGE</div>
-           <div style="font-size:17px;font-weight:700;color:#ff44ff;text-shadow:0 0 14px rgba(255,68,255,0.5);letter-spacing:2px">${this.formatDailyDate(this.dailyDateKey)}</div>
+      ? `<div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,204,0,0.2)">
+           <div style="font-size:11px;color:#ffcc00;letter-spacing:4px;margin-bottom:4px">DAILY CHALLENGE</div>
+           <div style="font-size:17px;font-weight:700;color:#ffcc00;text-shadow:0 0 14px rgba(255,204,0,0.5);letter-spacing:2px">${this.formatDailyDate(this.dailyDateKey)}</div>
          </div>`
       : "";
 
     // "Come back tomorrow" footer for daily mode
     const tomorrowLine = this.isDailyMode
-      ? `<div style="margin-top:12px;font-size:11px;color:#ff88ff;letter-spacing:2px;text-shadow:0 0 8px rgba(255,68,255,0.3)">COME BACK TOMORROW FOR A NEW CHALLENGE</div>`
+      ? `<div style="margin-top:12px;font-size:11px;color:#ffcc00;letter-spacing:2px;text-shadow:0 0 8px rgba(255,204,0,0.3)">COME BACK TOMORROW FOR A NEW CHALLENGE</div>`
       : `<div id="next-run-goal" style="margin-top:16px;padding-top:12px;border-top:1px solid #223344">
            <div style="font-size:11px;color:#668899;letter-spacing:2px;margin-bottom:6px">NEXT RUN</div>
            <div style="font-size:18px;color:${nextGoal.color};letter-spacing:1px;text-shadow:0 0 14px ${nextGoal.color}55">${nextGoal.text}</div>
@@ -2004,15 +2040,23 @@ export class Game {
     if (shareBtn) {
       shareBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const tweetText = [
-          `I scored ${this.score.toLocaleString()} (${grade.label}) on SHATTER DRIFT!`,
-          `Reached ${this.distance.toLocaleString()}m in the ${this.biomes.currentBiome.displayName} zone`,
-          ``,
-          `Can you beat my score?`,
-          `https://tommyato.com/games/shatter-drift/`,
-          ``,
-          `#vibejam #gamedev #threejs`,
-        ].join("\n");
+        const tweetText = this.isDailyMode
+          ? [
+              `I scored ${this.score.toLocaleString()} (${grade.label}) on today's SHATTER DRIFT Daily Challenge!`,
+              `Can you beat my score? Same course for everyone!`,
+              `https://tommyato.com/games/shatter-drift/`,
+              ``,
+              `#vibejam #dailychallenge`,
+            ].join("\n")
+          : [
+              `I scored ${this.score.toLocaleString()} (${grade.label}) on SHATTER DRIFT!`,
+              `Reached ${this.distance.toLocaleString()}m in the ${this.biomes.currentBiome.displayName} zone`,
+              ``,
+              `Can you beat my score?`,
+              `https://tommyato.com/games/shatter-drift/`,
+              ``,
+              `#vibejam #gamedev #threejs`,
+            ].join("\n");
         const url = `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
         window.open(url, "_blank", "noopener,noreferrer");
       });
@@ -2046,7 +2090,7 @@ export class Game {
     // Death popup — show the most exciting achievement
     if (this.isDailyMode && isNewDailyBest) {
       setTimeout(() => {
-        this.popups.showCenter("DAILY BEST!", this.score.toLocaleString(), "#ff44ff");
+        this.popups.showCenter("DAILY BEST!", this.score.toLocaleString(), "#ffcc00");
       }, 500);
     } else if (isNewHighScore) {
       setTimeout(() => {
@@ -2110,7 +2154,7 @@ export class Game {
 
     const isDaily = !!dailyOptions;
     const lbLabel = isDaily ? "TODAY'S LEADERBOARD" : "GLOBAL LEADERBOARD";
-    const rankColor = isDaily ? "#ff88ff" : "#00ffcc";
+    const rankColor = isDaily ? "#ffcc00" : "#00ffcc";
 
     // Show loading state
     lbContainer.innerHTML = '<div style="color:#445566;font-size:11px;text-align:center;margin-top:12px">Loading leaderboard...</div>';
@@ -2129,8 +2173,8 @@ export class Game {
     ]);
 
     // Build leaderboard HTML
-    let html = `<div style="margin-top:16px;border-top:1px solid ${isDaily ? "rgba(255,68,255,0.2)" : "#223344"};padding-top:12px">`;
-    html += `<div style="font-family:'Orbitron',monospace;font-size:12px;color:${isDaily ? "#ff88ff" : "#668899"};letter-spacing:3px;text-align:center;margin-bottom:8px">${lbLabel}</div>`;
+    let html = `<div style="margin-top:16px;border-top:1px solid ${isDaily ? "rgba(255,204,0,0.2)" : "#223344"};padding-top:12px">`;
+    html += `<div style="font-family:'Orbitron',monospace;font-size:12px;color:${isDaily ? "#ffcc00" : "#668899"};letter-spacing:3px;text-align:center;margin-bottom:8px">${lbLabel}</div>`;
 
     if (submitResult) {
       const rankText = isDaily
@@ -2154,9 +2198,9 @@ export class Game {
       for (let i = 0; i < topScores.length; i++) {
         const s = topScores[i];
         const isYou = submitResult && s.score === score && s.name === playerName;
-        const youColor = isDaily ? "#ff88ff" : "#00ffcc";
+        const youColor = isDaily ? "#ffcc00" : "#00ffcc";
         const rowColor = isYou ? youColor : (i < 3 ? "#ffcc00" : "#8899aa");
-        const bg = isYou ? (isDaily ? "rgba(255,68,255,0.05)" : "rgba(0,255,204,0.05)") : "transparent";
+        const bg = isYou ? (isDaily ? "rgba(255,204,0,0.05)" : "rgba(0,255,204,0.05)") : "transparent";
         html += `<tr style="color:${rowColor};background:${bg}">`;
         html += `<td style="padding:2px 6px">${i + 1}</td>`;
         html += `<td>${s.name}</td>`;
