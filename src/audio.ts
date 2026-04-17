@@ -5,6 +5,8 @@
 
 let ctx: AudioContext | null = null;
 let masterGain: GainNode | null = null;
+let reverbSend: GainNode | null = null;
+let delaySend: GainNode | null = null;
 let droneOsc: OscillatorNode | null = null;
 let droneGain: GainNode | null = null;
 let windNoise: AudioBufferSourceNode | null = null;
@@ -12,17 +14,124 @@ let windFilter: BiquadFilterNode | null = null;
 let windGain: GainNode | null = null;
 let initialized = false;
 
+/**
+ * Generate an impulse response buffer for convolution reverb.
+ * Creates a smooth exponential decay with subtle early reflections.
+ */
+function createReverbImpulse(audioCtx: AudioContext, duration = 2.5, decay = 2.0): AudioBuffer {
+  const sampleRate = audioCtx.sampleRate;
+  const length = sampleRate * duration;
+  const impulse = audioCtx.createBuffer(2, length, sampleRate);
+
+  for (let ch = 0; ch < 2; ch++) {
+    const data = impulse.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      const t = i / sampleRate;
+      // Exponential decay envelope
+      const envelope = Math.pow(1 - t / duration, decay);
+      // Noise with stereo decorrelation
+      data[i] = (Math.random() * 2 - 1) * envelope;
+    }
+    // Early reflections — subtle taps in first 80ms
+    const earlyEnd = Math.min(Math.floor(0.08 * sampleRate), length);
+    for (let i = 0; i < earlyEnd; i++) {
+      const tap = Math.floor(Math.random() * earlyEnd);
+      if (tap < length) {
+        data[tap] += (Math.random() * 2 - 1) * 0.3;
+      }
+    }
+  }
+  return impulse;
+}
+
 function ensureContext(): AudioContext {
   if (!ctx) {
     ctx = new AudioContext();
     masterGain = ctx.createGain();
     masterGain.gain.value = 0.5;
+
+    // --- Reverb bus: convolver → highpass (remove mud) → wet gain → master ---
+    const convolver = ctx.createConvolver();
+    convolver.buffer = createReverbImpulse(ctx, 2.5, 2.0);
+
+    const reverbHipass = ctx.createBiquadFilter();
+    reverbHipass.type = "highpass";
+    reverbHipass.frequency.value = 400; // cut low-end mud from reverb tail
+
+    const reverbWet = ctx.createGain();
+    reverbWet.gain.value = 0.18; // subtle — adds space without washing out
+
+    reverbSend = ctx.createGain();
+    reverbSend.gain.value = 1.0;
+    reverbSend.connect(convolver);
+    convolver.connect(reverbHipass);
+    reverbHipass.connect(reverbWet);
+    reverbWet.connect(masterGain);
+
+    // --- Stereo ping-pong delay bus ---
+    const delayL = ctx.createDelay(1.0);
+    const delayR = ctx.createDelay(1.0);
+    delayL.delayTime.value = 0.375; // dotted eighth at ~120bpm
+    delayR.delayTime.value = 0.25;  // eighth note
+
+    const feedbackL = ctx.createGain();
+    feedbackL.gain.value = 0.3;
+    const feedbackR = ctx.createGain();
+    feedbackR.gain.value = 0.3;
+
+    const delayFilter = ctx.createBiquadFilter();
+    delayFilter.type = "lowpass";
+    delayFilter.frequency.value = 2500; // darken repeats
+
+    const delayWet = ctx.createGain();
+    delayWet.gain.value = 0.12;
+
+    // Stereo merger
+    const merger = ctx.createChannelMerger(2);
+
+    delaySend = ctx.createGain();
+    delaySend.gain.value = 1.0;
+    delaySend.connect(delayL);
+    delayL.connect(feedbackL);
+    feedbackL.connect(delayR);
+    delayR.connect(feedbackR);
+    feedbackR.connect(delayL); // ping-pong
+
+    delayL.connect(merger, 0, 0);
+    delayR.connect(merger, 0, 1);
+    merger.connect(delayFilter);
+    delayFilter.connect(delayWet);
+    delayWet.connect(masterGain);
+
     masterGain.connect(ctx.destination);
   }
   if (ctx.state === "suspended") {
     ctx.resume();
   }
   return ctx;
+}
+
+/**
+ * Connect a node to master + optionally to reverb/delay sends.
+ * reverb/delay are 0-1 levels controlling how much goes to each bus.
+ */
+function connectWithSends(
+  node: AudioNode,
+  opts: { reverb?: number; delay?: number } = {}
+) {
+  node.connect(masterGain!);
+  if (opts.reverb && opts.reverb > 0 && reverbSend) {
+    const sendGain = ctx!.createGain();
+    sendGain.gain.value = opts.reverb;
+    node.connect(sendGain);
+    sendGain.connect(reverbSend);
+  }
+  if (opts.delay && opts.delay > 0 && delaySend) {
+    const sendGain = ctx!.createGain();
+    sendGain.gain.value = opts.delay;
+    node.connect(sendGain);
+    sendGain.connect(delaySend);
+  }
 }
 
 /** Call on first user interaction to unlock audio */
@@ -156,7 +265,7 @@ export function playRecombine(multiplier: number = 1) {
   gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
 
   osc.connect(gain);
-  gain.connect(masterGain);
+  connectWithSends(gain, { reverb: 0.4 }); // chime trails off in reverb
   osc.start(t);
   osc.stop(t + 0.16);
 }
@@ -178,7 +287,7 @@ export function playCollect(combo: number) {
   gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
 
   osc.connect(gain);
-  gain.connect(masterGain);
+  connectWithSends(gain, { reverb: 0.3, delay: 0.15 }); // sparkle in space
   osc.start(t);
   osc.stop(t + 0.13);
 
@@ -193,7 +302,7 @@ export function playCollect(combo: number) {
   gain2.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
 
   osc2.connect(gain2);
-  gain2.connect(masterGain);
+  connectWithSends(gain2, { reverb: 0.4, delay: 0.2 }); // overtone shimmers more
   osc2.start(t);
   osc2.stop(t + 0.09);
 }
@@ -226,7 +335,7 @@ export function playCloseCall() {
 
   src.connect(filter);
   filter.connect(gain);
-  gain.connect(masterGain);
+  connectWithSends(gain, { reverb: 0.35 }); // swoosh trails in space
   src.start(t);
   src.stop(t + dur);
 }
@@ -273,7 +382,7 @@ export function playDeath() {
 
   src.connect(filter);
   filter.connect(crashGain);
-  crashGain.connect(masterGain);
+  connectWithSends(crashGain, { reverb: 0.6 }); // dramatic death reverb tail
   src.start(t);
   src.stop(t + dur + 0.05);
 }
@@ -296,7 +405,7 @@ export function playPowerUp() {
     gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.15);
 
     osc.connect(gain);
-    gain.connect(masterGain);
+    connectWithSends(gain, { reverb: 0.5, delay: 0.25 }); // arpeggio echoes beautifully
     osc.start(t + i * 0.08);
     osc.stop(t + i * 0.08 + 0.16);
   }
@@ -310,7 +419,7 @@ export function playPowerUp() {
   shimmerGain.gain.setValueAtTime(0.04, t);
   shimmerGain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
   shimmer.connect(shimmerGain);
-  shimmerGain.connect(masterGain);
+  connectWithSends(shimmerGain, { reverb: 0.6, delay: 0.3 }); // shimmer spreads wide
   shimmer.start(t);
   shimmer.stop(t + 0.36);
 }
@@ -344,7 +453,7 @@ export function playBiomeTransition() {
 
   src.connect(filter);
   filter.connect(gain);
-  gain.connect(masterGain);
+  connectWithSends(gain, { reverb: 0.5 }); // sweeping noise blooms in reverb
   src.start(t);
   src.stop(t + dur + 0.1);
 
@@ -357,7 +466,7 @@ export function playBiomeTransition() {
   impactGain.gain.setValueAtTime(0.15, t + 0.1);
   impactGain.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
   impact.connect(impactGain);
-  impactGain.connect(masterGain);
+  connectWithSends(impactGain, { reverb: 0.3 });
   impact.start(t + 0.1);
   impact.stop(t + 1.0);
 }
@@ -389,7 +498,7 @@ export function playShieldBreak() {
 
     src.connect(filter);
     filter.connect(gain);
-    gain.connect(masterGain);
+    connectWithSends(gain, { reverb: 0.5 }); // glass scatter in space
     src.start(t + i * 0.04);
     src.stop(t + i * 0.04 + dur + 0.01);
   }
@@ -403,7 +512,7 @@ export function playShieldBreak() {
   oscGain.gain.setValueAtTime(0.1, t);
   oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
   osc.connect(oscGain);
-  oscGain.connect(masterGain);
+  connectWithSends(oscGain, { reverb: 0.4, delay: 0.2 });
   osc.start(t);
   osc.stop(t + 0.26);
 }
@@ -476,7 +585,7 @@ export function playChallengeComplete() {
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
 
     osc.connect(gain);
-    gain.connect(masterGain);
+    connectWithSends(gain, { reverb: 0.5, delay: 0.2 }); // fanfare rings out
     osc.start(t + i * 0.06);
     osc.stop(t + 0.85);
   }
@@ -504,7 +613,7 @@ export function playPersonalBest() {
     gain.gain.exponentialRampToValueAtTime(0.001, t + note.offset + 0.45);
 
     osc.connect(gain);
-    gain.connect(masterGain);
+    connectWithSends(gain, { reverb: 0.6, delay: 0.25 }); // victory chord blooms
     osc.start(t + note.offset);
     osc.stop(t + note.offset + 0.5);
   }
@@ -519,7 +628,7 @@ export function playPersonalBest() {
   shimmerGain.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
 
   shimmer.connect(shimmerGain);
-  shimmerGain.connect(masterGain);
+  connectWithSends(shimmerGain, { reverb: 0.5, delay: 0.3 });
   shimmer.start(t + 0.1);
   shimmer.stop(t + 0.56);
 }
@@ -549,7 +658,7 @@ export function playLaunch() {
 
   osc.connect(filter);
   filter.connect(gain);
-  gain.connect(masterGain);
+  connectWithSends(gain, { reverb: 0.4 }); // launch sweep blooms
   osc.start(t);
   osc.stop(t + 1.6);
 
@@ -565,7 +674,7 @@ export function playLaunch() {
   gain2.gain.exponentialRampToValueAtTime(0.001, t + 1.3);
 
   osc2.connect(gain2);
-  gain2.connect(masterGain);
+  connectWithSends(gain2, { reverb: 0.3 });
   osc2.start(t);
   osc2.stop(t + 1.4);
 
@@ -738,6 +847,13 @@ class ProceduralMusic {
     this.arpOsc.connect(this.arpFilter);
     this.arpFilter.connect(this.arpGain);
     this.arpGain.connect(this.output);
+    // Route arp through delay for rhythmic depth
+    if (delaySend) {
+      const arpDelaySend = c.createGain();
+      arpDelaySend.gain.value = 0.2; // subtle ping-pong on arp notes
+      this.arpGain.connect(arpDelaySend);
+      arpDelaySend.connect(delaySend);
+    }
     this.arpOsc.start(t);
 
     // --- Bass: square → gain ---
@@ -792,6 +908,13 @@ class ProceduralMusic {
 
     this.padFilter.connect(this.padGain);
     this.padGain.connect(this.output);
+    // Route pad through reverb for atmospheric depth
+    if (reverbSend) {
+      const padReverbSend = c.createGain();
+      padReverbSend.gain.value = 0.45; // generous reverb on the pad
+      this.padGain.connect(padReverbSend);
+      padReverbSend.connect(reverbSend);
+    }
   }
 
   /** Call every frame with dt, current speed, and shatter state */
