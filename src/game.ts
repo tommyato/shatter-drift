@@ -2085,7 +2085,7 @@ export class Game {
               `Can you beat my score? Same course for everyone!`,
               `https://tommyato.com/games/shatter-drift/`,
               ``,
-              `#vibejam #dailychallenge`,
+              `#vibejam #dailychallenge @tommyatoai`,
             ].join("\n")
           : [
               `I scored ${this.score.toLocaleString()} (${grade.label}) on SHATTER DRIFT!`,
@@ -2094,7 +2094,7 @@ export class Game {
               `Can you beat my score?`,
               `https://tommyato.com/games/shatter-drift/`,
               ``,
-              `#vibejam #gamedev #threejs`,
+              `#vibejam #gamedev @tommyatoai`,
             ].join("\n");
         const url = `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
         window.open(url, "_blank", "noopener,noreferrer");
