@@ -2009,6 +2009,9 @@ export class Game {
            <div style="font-size:11px;color:#7f92a6;margin-top:4px">${nextGoal.subtext}</div>
          </div>`;
 
+    // Hide HUD state indicator so it doesn't overlap game-over text
+    this.hudState.style.opacity = "0";
+
     // Show game over with more stats
     this.state = GameState.GameOver;
     this.centerTitle!.textContent = "SHATTERED";
