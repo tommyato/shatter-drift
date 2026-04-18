@@ -205,6 +205,47 @@
       text-shadow: 0 0 12px rgba(255,204,0,0.5);
     }
 
+    /* Game over tabs */
+    .go-tabs {
+      display: flex;
+      border-bottom: 1px solid #223344;
+      margin: 8px 0 12px;
+      gap: 0;
+    }
+
+    .go-tab {
+      flex: 1;
+      padding: 8px 0;
+      font-family: 'Orbitron', monospace;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: #668899;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+      pointer-events: auto;
+    }
+
+    .go-tab.active {
+      color: #00ffcc;
+      border-bottom-color: #00ffcc;
+    }
+
+    .go-tab.active.daily {
+      color: #ffcc00;
+      border-bottom-color: #ffcc00;
+    }
+
+    .go-tab-content {
+      text-align: left;
+    }
+
+    .go-tab-content.hidden {
+      display: none;
+    }
+
     #center-message .retry {
       font-size: 18px;
       color: #668899;
@@ -563,7 +604,6 @@
       <div id="center-message">
         <h2 id="center-title"></h2>
         <div class="stats" id="center-stats"></div>
-        <div id="leaderboard-section"></div>
         <div class="retry" id="center-retry"></div>
       </div>
     </div>

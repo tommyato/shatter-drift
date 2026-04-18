@@ -370,6 +370,7 @@ export class Game {
   // Daily Challenge mode
   private isDailyMode = false;
   private dailyDateKey = ""; // YYYYMMDD
+  private lastGameOverTab = "stats";
   private dailyChallengeQueued = false;
   private dailyBanner: HTMLElement | null = null;
   private dailyTimerInterval: ReturnType<typeof setInterval> | null = null;
@@ -983,10 +984,9 @@ export class Game {
     this.customizePanel.classList.add("hidden");
     this.customizeOpen = false;
     this.centerMessage.style.opacity = "0";
-    // Clear blur overlay and leaderboard from previous game over
+    // Clear blur overlay and game-over content from previous game over
     this.gameOverOverlay.classList.remove("active");
-    const lbSection = document.getElementById("leaderboard-section");
-    if (lbSection) lbSection.innerHTML = "";
+    if (this.centerStats) this.centerStats.innerHTML = "";
     // Restore HUD state indicator
     this.hudState.style.display = "";
 
@@ -2024,28 +2024,55 @@ export class Game {
     // Show game over with more stats
     this.state = GameState.GameOver;
     this.centerTitle!.textContent = "SHATTERED";
+    const tabActiveClass = this.isDailyMode ? "active daily" : "active";
+
     this.centerStats!.innerHTML = `
       ${dailyHeader}
-      <div style="font-size:40px;margin-bottom:12px;color:${grade.color};text-shadow:0 0 20px ${grade.color}88;letter-spacing:4px">${grade.label}</div>
-      <div style="font-size:32px;margin:8px 0"><span class="highlight">${this.score.toLocaleString()}</span></div>
-      <div style="font-size:13px;color:#8899aa;margin:4px 0">${this.distance.toLocaleString()}m · ${Math.floor(this.speed)} m/s · x${this.maxCombo}</div>
-      Zone: ${this.biomes.currentBiome.displayName}<br>
-      ${pbLine}
-      ${bestLine}
-      ${tomorrowLine}
-      <button id="share-x-btn" style="
-        margin-top:14px;padding:8px 22px;
-        font-family:'Orbitron',monospace;font-size:11px;letter-spacing:2px;
-        color:#1da1f2;background:rgba(29,161,242,0.08);
-        border:1px solid rgba(29,161,242,0.35);border-radius:4px;
-        cursor:pointer;pointer-events:auto;
-        transition:all 0.2s;
-      " onmouseover="this.style.background='rgba(29,161,242,0.18)';this.style.borderColor='rgba(29,161,242,0.7)';this.style.textShadow='0 0 10px rgba(29,161,242,0.4)'"
-         onmouseout="this.style.background='rgba(29,161,242,0.08)';this.style.borderColor='rgba(29,161,242,0.35)';this.style.textShadow='none'"
-      >SHARE ON X</button>
+      <div style="font-size:40px;margin-bottom:8px;color:${grade.color};text-shadow:0 0 20px ${grade.color}88;letter-spacing:4px">${grade.label}</div>
+      <div class="go-tabs">
+        <button class="go-tab ${this.lastGameOverTab === 'stats' ? tabActiveClass : ''}" id="go-tab-btn-stats">STATS</button>
+        <button class="go-tab ${this.lastGameOverTab === 'leaderboard' ? tabActiveClass : ''}" id="go-tab-btn-leaderboard">LEADERBOARD</button>
+      </div>
+      <div id="go-tab-stats" class="go-tab-content${this.lastGameOverTab !== 'stats' ? ' hidden' : ''}">
+        <div style="font-size:32px;margin:8px 0"><span class="highlight">${this.score.toLocaleString()}</span></div>
+        <div style="font-size:13px;color:#8899aa;margin:4px 0">${this.distance.toLocaleString()}m · ${Math.floor(this.speed)} m/s · x${this.maxCombo}</div>
+        Zone: ${this.biomes.currentBiome.displayName}<br>
+        ${pbLine}
+        ${bestLine}
+        ${tomorrowLine}
+        <button id="share-x-btn" style="
+          margin-top:14px;padding:8px 22px;
+          font-family:'Orbitron',monospace;font-size:11px;letter-spacing:2px;
+          color:#1da1f2;background:rgba(29,161,242,0.08);
+          border:1px solid rgba(29,161,242,0.35);border-radius:4px;
+          cursor:pointer;pointer-events:auto;
+          transition:all 0.2s;
+        " onmouseover="this.style.background='rgba(29,161,242,0.18)';this.style.borderColor='rgba(29,161,242,0.7)';this.style.textShadow='0 0 10px rgba(29,161,242,0.4)'"
+           onmouseout="this.style.background='rgba(29,161,242,0.08)';this.style.borderColor='rgba(29,161,242,0.35)';this.style.textShadow='none'"
+        >SHARE ON X</button>
+      </div>
+      <div id="go-tab-leaderboard" class="go-tab-content${this.lastGameOverTab !== 'leaderboard' ? ' hidden' : ''}">
+        <div id="go-lb-status" style="font-size:11px;color:#445566;text-align:center;margin:8px 0">Saving...</div>
+      </div>
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
     this.centerMessage.style.opacity = "1";
+
+    // Tab switching
+    const tabBtns = document.querySelectorAll<HTMLButtonElement>(".go-tab");
+    tabBtns.forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const tabName = btn.id.replace("go-tab-btn-", "");
+        this.lastGameOverTab = tabName;
+        tabBtns.forEach(b => b.classList.remove("active", "daily"));
+        btn.classList.add(...(this.isDailyMode ? ["active", "daily"] : ["active"]));
+        document.getElementById("go-tab-stats")?.classList.toggle("hidden", tabName !== "stats");
+        document.getElementById("go-tab-leaderboard")?.classList.toggle("hidden", tabName !== "leaderboard");
+      });
+      btn.addEventListener("mousedown", e => e.stopPropagation());
+      btn.addEventListener("keydown", e => e.stopPropagation());
+    });
 
     // Wire up Share to X button
     const shareBtn = document.getElementById("share-x-btn");
@@ -2161,15 +2188,16 @@ export class Game {
     biome: string,
     dailyOptions?: { mode: "daily"; date: string }
   ) {
-    const lbContainer = document.getElementById("leaderboard-section");
+    const lbContainer = document.getElementById("go-tab-leaderboard");
     if (!lbContainer) return;
 
     const isDaily = !!dailyOptions;
     const lbLabel = isDaily ? "TODAY'S LEADERBOARD" : "GLOBAL LEADERBOARD";
     const rankColor = isDaily ? "#ffcc00" : "#00ffcc";
 
-    // Show loading state
-    lbContainer.innerHTML = '<div style="color:#445566;font-size:11px;text-align:center;margin-top:12px">Loading leaderboard...</div>';
+    // Show loading state in status div (already seeded to "Saving..." by enterGameOver)
+    const statusEl = document.getElementById("go-lb-status");
+    if (statusEl) statusEl.innerHTML = '<span style="color:#445566">Saving...</span>';
 
     // Name entry (persistent)
     let playerName = getPlayerName();
@@ -2179,30 +2207,46 @@ export class Game {
     }
 
     // Submit score + fetch leaderboard in parallel
-    const [submitResult, topScores] = await Promise.all([
-      submitScore({ name: playerName, score, distance, grade, biome }, dailyOptions),
-      fetchLeaderboard(10, dailyOptions),
-    ]);
-
-    // Build leaderboard HTML
-    let html = `<div style="margin-top:16px;border-top:1px solid ${isDaily ? "rgba(255,204,0,0.2)" : "#223344"};padding-top:12px">`;
-    html += `<div style="font-family:'Orbitron',monospace;font-size:12px;color:${isDaily ? "#ffcc00" : "#668899"};letter-spacing:3px;text-align:center;margin-bottom:8px">${lbLabel}</div>`;
-
-    if (submitResult) {
-      const rankText = isDaily
-        ? `You placed #${submitResult.rank} today!`
-        : `You ranked #${submitResult.rank} of ${submitResult.total}`;
-      html += `<div style="color:${rankColor};font-size:11px;text-align:center;margin-bottom:8px">${rankText}</div>`;
+    type LeaderboardEntry = Awaited<ReturnType<typeof fetchLeaderboard>>[number];
+    type SubmitResult = Awaited<ReturnType<typeof submitScore>>;
+    let submitResult: SubmitResult = null;
+    let topScores: LeaderboardEntry[] = [];
+    try {
+      [submitResult, topScores] = await Promise.all([
+        submitScore({ name: playerName, score, distance, grade, biome }, dailyOptions),
+        fetchLeaderboard(10, dailyOptions),
+      ]);
+    } catch {
+      submitResult = null;
+      topScores = [];
     }
 
+    // Update status line
+    if (statusEl) {
+      if (submitResult) {
+        const rankText = isDaily
+          ? `✓ Score saved! You placed #${submitResult.rank} today!`
+          : `✓ Score saved! You ranked #${submitResult.rank} of ${submitResult.total}`;
+        statusEl.innerHTML = `<span style="color:${rankColor}">${rankText}</span>`;
+      } else {
+        statusEl.innerHTML = '<span style="color:#553333">Offline — score not saved</span>';
+      }
+    }
+
+    // Build leaderboard HTML
+    let html = ``;
+
     // Name edit row
-    html += `<div style="text-align:center;margin-bottom:10px">`;
+    html += `<div style="text-align:center;margin:10px 0">`;
+    html += `<div style="font-size:10px;color:#445566;letter-spacing:2px;margin-bottom:4px">YOUR NAME</div>`;
     html += `<input id="lb-name-input" type="text" maxlength="16" value="${playerName}" style="
       background:rgba(0,20,30,0.6);border:1px solid #334455;color:#00ffcc;
-      font-family:'Orbitron',monospace;font-size:11px;padding:4px 8px;
-      text-align:center;width:120px;border-radius:3px;letter-spacing:1px;
+      font-family:'Orbitron',monospace;font-size:11px;padding:5px 10px;
+      text-align:center;width:160px;border-radius:3px;letter-spacing:1px;
       outline:none;" placeholder="YOUR NAME">`;
     html += `</div>`;
+
+    html += `<div style="font-family:'Orbitron',monospace;font-size:12px;color:${isDaily ? "#ffcc00" : "#668899"};letter-spacing:3px;text-align:center;margin-bottom:8px">${lbLabel}</div>`;
 
     if (topScores.length > 0) {
       html += `<table style="width:100%;font-size:11px;border-collapse:collapse">`;
@@ -2225,8 +2269,13 @@ export class Game {
       html += `<div style="color:#445566;font-size:11px;text-align:center">No scores yet — be first!</div>`;
     }
 
-    html += `</div>`;
-    lbContainer.innerHTML = html;
+    // Append below the status div (keep the status line at top)
+    const existingStatus = document.getElementById("go-lb-status");
+    if (existingStatus) {
+      existingStatus.insertAdjacentHTML("afterend", html);
+    } else {
+      lbContainer.innerHTML += html;
+    }
 
     // Wire up name input — save on change
     const nameInput = document.getElementById("lb-name-input") as HTMLInputElement;
