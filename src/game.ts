@@ -348,6 +348,7 @@ export class Game {
   private customizePanel!: HTMLElement;
   private customizeOpen = false;
   private pauseMenu!: HTMLElement;
+  private gameOverOverlay!: HTMLElement;
 
   // Persistent stats
   private totalRuns = 0;
@@ -506,6 +507,7 @@ export class Game {
     this.hudBossWarning = document.getElementById("hud-boss-warning")!;
     this.customizePanel = document.getElementById("customize-panel")!;
     this.pauseMenu = document.getElementById("pause-menu")!;
+    this.gameOverOverlay = document.getElementById("gameover-overlay")!;
 
     // Cache daily banner
     this.dailyBanner = document.getElementById("daily-banner");
@@ -981,9 +983,12 @@ export class Game {
     this.customizePanel.classList.add("hidden");
     this.customizeOpen = false;
     this.centerMessage.style.opacity = "0";
-    // Clear leaderboard from previous game over
+    // Clear blur overlay and leaderboard from previous game over
+    this.gameOverOverlay.classList.remove("active");
     const lbSection = document.getElementById("leaderboard-section");
     if (lbSection) lbSection.innerHTML = "";
+    // Restore HUD state indicator
+    this.hudState.style.display = "";
 
     // Start recording after launch completes
     if (this.recorder && !this.recorder.isRecording) {
@@ -2011,6 +2016,10 @@ export class Game {
 
     // Hide HUD state indicator so it doesn't overlap game-over text
     this.hudState.style.opacity = "0";
+    this.hudState.style.display = "none";
+
+    // Blur overlay — frosted glass behind game over screen
+    this.gameOverOverlay.classList.add("active");
 
     // Show game over with more stats
     this.state = GameState.GameOver;
