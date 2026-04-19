@@ -145,7 +145,7 @@ interface Shard {
   lifetime: number;  // fade-out duration
 }
 
-const SHARD_LIFETIME = 1.5;
+const SHARD_LIFETIME = 2.0;
 const GRAVITY = -12;
 const MAX_SHARDS = 150;
 
@@ -167,7 +167,8 @@ export class VoronoiShatter {
     impactPoint: THREE.Vector3,
     color: number,
     emissive: number,
-    emissiveIntensity: number
+    emissiveIntensity: number,
+    forwardSpeed: number = 0
   ): void {
     const geo = mesh.geometry as THREE.BoxGeometry;
     if (!geo || !geo.parameters) return;
@@ -183,8 +184,8 @@ export class VoronoiShatter {
     const hw = w / 2;
     const hh = h / 2;
 
-    // Generate 8-12 seed points within the front face rectangle
-    const seedCount = 8 + Math.floor(Math.random() * 5);
+    // Generate 6-9 seed points within the front face rectangle (fewer = larger shards)
+    const seedCount = 6 + Math.floor(Math.random() * 4);
     const seeds: Vec2[] = [];
     for (let i = 0; i < seedCount; i++) {
       seeds.push(v2(
@@ -237,11 +238,13 @@ export class VoronoiShatter {
       const speed = 3 + Math.random() * 5;
       const jitter = () => (Math.random() - 0.5) * 4;
 
+      // Forward scatter: some shards fly ahead, most trail behind
+      const forwardBias = (Math.random() - 0.3) * 4; // biased slightly backward
       this.shards.push({
         mesh: shardMesh,
         vx: dir.x * speed + jitter(),
         vy: dir.y * speed + Math.random() * 3,
-        vz: dir.z * speed + jitter() - 2, // scatter slightly back toward player
+        vz: dir.z * speed + jitter() + forwardSpeed * 0.7 + forwardBias,
         ax: (Math.random() - 0.5) * 20,
         ay: (Math.random() - 0.5) * 20,
         az: (Math.random() - 0.5) * 20,
@@ -260,7 +263,8 @@ export class VoronoiShatter {
     obstacle: Obstacle,
     impactX: number,
     impactZ: number,
-    biomeColors: { obstacleBase: number; obstacleEdge: number; obstacleEmissiveIntensity: number }
+    biomeColors: { obstacleBase: number; obstacleEdge: number; obstacleEmissiveIntensity: number },
+    forwardSpeed: number = 0
   ): void {
     const impactPoint = new THREE.Vector3(impactX, 1, impactZ);
     const { obstacleBase, obstacleEdge, obstacleEmissiveIntensity } = biomeColors;
@@ -269,7 +273,7 @@ export class VoronoiShatter {
 
     if (obj instanceof THREE.Mesh && obj.geometry instanceof THREE.BoxGeometry) {
       // Single pillar
-      this.shatterMesh(obj, impactPoint, obstacleBase, obstacleEdge, obstacleEmissiveIntensity);
+      this.shatterMesh(obj, impactPoint, obstacleBase, obstacleEdge, obstacleEmissiveIntensity, forwardSpeed);
     } else if (obj instanceof THREE.Group) {
       // Gate: find child mesh closest to impactX
       let closest: THREE.Mesh | null = null;
@@ -288,7 +292,7 @@ export class VoronoiShatter {
       });
 
       if (closest) {
-        this.shatterMesh(closest, impactPoint, obstacleBase, obstacleEdge, obstacleEmissiveIntensity);
+        this.shatterMesh(closest, impactPoint, obstacleBase, obstacleEdge, obstacleEmissiveIntensity, forwardSpeed);
       }
     }
   }

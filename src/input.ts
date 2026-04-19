@@ -59,6 +59,9 @@ export class Input {
     });
 
     window.addEventListener("mousedown", (e) => {
+      // Don't capture clicks on interactive UI elements
+      const target = e.target as HTMLElement;
+      if (target.closest("input, button, select, textarea, [data-ui]")) return;
       if (e.button === 0) this.keys.add("click");
       if (e.button === 2) this.keys.add("rightclick");
     });

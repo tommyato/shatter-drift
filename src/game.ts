@@ -1481,7 +1481,7 @@ export class Game {
           this.player.setShieldActive(false);
           // Remove the regular obstacle that was hit (boss parts persist)
           if (hit) {
-            this.world.shatterObstacle(hit, this.player.group.position.x, this.playerZ);
+            this.world.shatterObstacle(hit, this.player.group.position.x, this.playerZ, this.speed);
           }
         } else {
           this.die();
@@ -1549,7 +1549,8 @@ export class Game {
           this.world.shatterObstacle(
             regularCloseCall,
             this.player.group.position.x,
-            this.playerZ
+            this.playerZ,
+            this.speed
           );
         }
         if (this.playerZ - this.lastCloseCall > 3) {

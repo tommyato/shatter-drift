@@ -1164,8 +1164,8 @@ export class World {
   }
 
   /** Shatter an obstacle visually and disable its collision */
-  shatterObstacle(obs: Obstacle, impactX: number, impactZ: number): void {
-    this.voronoiShatter.shatterObstacle(obs, impactX, impactZ, this.biomes.colors);
+  shatterObstacle(obs: Obstacle, impactX: number, impactZ: number, speed: number = 0): void {
+    this.voronoiShatter.shatterObstacle(obs, impactX, impactZ, this.biomes.colors, speed);
     obs.active = false;
     // Hide the original mesh and all its children
     obs.mesh.visible = false;
