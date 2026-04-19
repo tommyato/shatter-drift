@@ -145,8 +145,9 @@ interface Shard {
   lifetime: number;  // fade-out duration
 }
 
-const SHARD_LIFETIME = 2.0;
-const GRAVITY = -12;
+const SHARD_LIFETIME = 1.4;
+const GRAVITY = -22;
+const DRAG = 3.0;  // exponential drag coefficient — shards decelerate fast
 const MAX_SHARDS = 150;
 
 export class VoronoiShatter {
@@ -233,20 +234,20 @@ export class VoronoiShatter {
         center.z
       );
       const dir = new THREE.Vector3().subVectors(shardWorldPos, impactPoint);
-      dir.y = Math.abs(dir.y) * 0.5 + 0.5; // bias upward
+      dir.y = Math.abs(dir.y) * 0.3 - 0.2; // slight downward bias — debris falls
       const dirLen = dir.length() || 1;
       dir.divideScalar(dirLen);
 
-      const speed = 8 + Math.random() * 6;
-      const jitter = () => (Math.random() - 0.5) * 8;
+      const speed = 10 + Math.random() * 8;
+      const jitter = () => (Math.random() - 0.5) * 10;
 
-      // Shards blast FORWARD (positive Z) faster than the camera — punch-through effect.
-      // Gravity + drag will pull them back, but initially they fly ahead.
+      // Shards blast FORWARD much faster than camera — drag decelerates them
+      // so they fly ahead briefly then fall behind. Feels like punching through.
       this.shards.push({
         mesh: shardMesh,
         vx: dir.x * speed + jitter(),
-        vy: dir.y * speed + Math.random() * 3,
-        vz: forwardSpeed + 8 + Math.random() * 6,
+        vy: dir.y * speed + Math.random() * 2 - 1,
+        vz: forwardSpeed + 12 + Math.random() * 8,
         ax: (Math.random() - 0.5) * 30,
         ay: (Math.random() - 0.5) * 30,
         az: (Math.random() - 0.5) * 30,
@@ -307,7 +308,10 @@ export class VoronoiShatter {
       const s = this.shards[i];
       s.age += dt;
 
-      // Physics
+      // Physics — drag decelerates shards so they don't float at constant speed
+      const dragFactor = Math.exp(-DRAG * dt);
+      s.vx *= dragFactor;
+      s.vz *= dragFactor;
       s.vy += GRAVITY * dt;
       s.mesh.position.x += s.vx * dt;
       s.mesh.position.y += s.vy * dt;
