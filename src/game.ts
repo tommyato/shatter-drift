@@ -2324,9 +2324,11 @@ export class Game {
     // Demo mode: auto-restart after 2 seconds
     // Don't restart while player is typing in the leaderboard name input
     const isTypingName = document.activeElement?.id === "lb-name-input";
+    // Require 1.2s cooldown before accepting restart — prevents accidental
+    // restarts when the player mashes space during a fast-twitch death
     const shouldRestart = this.demoMode
       ? this.gameOverTimer > 2
-      : !isTypingName && (this.input.justPressed("space") || this.input.justPressed("click"));
+      : this.gameOverTimer > 1.2 && !isTypingName && (this.input.justPressed("space") || this.input.justPressed("click"));
 
     if (shouldRestart) {
       this.player.group.visible = true;
