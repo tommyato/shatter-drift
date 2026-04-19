@@ -139,7 +139,135 @@ void main() {
   color += uEdgeColor * edgeGlow * 0.3;
   
   float alpha = uOpacity * (0.28 + heat * 0.16 + centerWeight * 0.12);
-  
+
+  gl_FragColor = vec4(color, alpha);
+}
+`;
+
+const PLASMA_OBSTACLE_FRAGMENT = /* glsl */ `
+precision highp float;
+
+varying vec2 vUv;
+varying vec3 vWorldPosition;
+
+uniform float uTime;
+uniform vec3 uBaseColor;
+uniform vec3 uEdgeColor;
+uniform vec3 uAccentColor;
+uniform float uOpacity;
+
+float hash21(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(hash21(i + vec2(0.0, 0.0)), hash21(i + vec2(1.0, 0.0)), u.x),
+    mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+    u.y
+  );
+}
+
+float fbm(vec2 p) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  for (int i = 0; i < 5; i++) {
+    value += amplitude * noise(p);
+    p = p * 2.02 + vec2(19.7, -11.3);
+    amplitude *= 0.5;
+  }
+  return value;
+}
+
+mat2 rot(float a) {
+  float s = sin(a);
+  float c = cos(a);
+  return mat2(c, -s, s, c);
+}
+
+void main() {
+  // Obstacle boxes are much smaller than walls — less tiling needed
+  vec2 p = vUv * vec2(3.0, 2.0);
+
+  float flowA = fbm(p + vec2(0.0, uTime * 0.72));
+  float flowB = fbm((p + vec2(4.3, -2.1)) * rot(-0.2) - vec2(uTime * 0.4, -uTime * 0.28));
+  float band = fbm(p * 2.2 + vec2(flowA * 2.4, flowB * 1.8));
+  float heat = clamp(flowA * 0.55 + flowB * 0.4 + band * 0.65, 0.0, 1.0);
+
+  float centerWeight = smoothstep(0.88, 0.08, abs(vUv.y - 0.5) * 2.0);
+  float turbulence = sin((flowA + flowB + band) * 10.0 - uTime * 3.6) * 0.5 + 0.5;
+
+  vec3 color = mix(uBaseColor * 0.55, uEdgeColor, heat);
+  color = mix(color, uAccentColor, turbulence * 0.25 + centerWeight * 0.18);
+  color += uEdgeColor * centerWeight * 0.48;
+
+  float edgeDist = min(vUv.y, 1.0 - vUv.y);
+  float edgeGlow = pow(1.0 - clamp(edgeDist * 4.0, 0.0, 1.0), 2.4);
+  color += uEdgeColor * edgeGlow * 0.3;
+
+  float alpha = uOpacity * (0.28 + heat * 0.16 + centerWeight * 0.12);
+
+  gl_FragColor = vec4(color, alpha);
+}
+`;
+
+const SCANLINES_VERTEX = /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPosition;
+
+void main() {
+  vUv = uv;
+  vec4 worldPos = modelMatrix * vec4(position, 1.0);
+  vWorldPosition = worldPos.xyz;
+  gl_Position = projectionMatrix * viewMatrix * worldPos;
+}
+`;
+
+const SCANLINES_FRAGMENT = /* glsl */ `
+precision highp float;
+
+varying vec2 vUv;
+varying vec3 vWorldPosition;
+
+uniform float uTime;
+uniform vec3 uBaseColor;
+uniform vec3 uEdgeColor;
+uniform vec3 uAccentColor;
+uniform float uOpacity;
+
+float hash21(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(hash21(i + vec2(0.0, 0.0)), hash21(i + vec2(1.0, 0.0)), u.x),
+    mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+    u.y
+  );
+}
+
+void main() {
+  float lines = pow(clamp(sin((vUv.y * 84.0) - uTime * 6.2) * 0.5 + 0.5, 0.0, 1.0), 5.0);
+  float shimmer = noise(vec2(vUv.x * 11.0 + uTime * 0.4, vUv.y * 19.0 - uTime * 1.7));
+  float pulse = 0.5 + 0.5 * sin(uTime * 2.4 + vUv.y * 9.0);
+  float streak = smoothstep(0.75, 1.0, sin((vUv.y + uTime * 0.65) * 20.0) * 0.5 + 0.5);
+
+  vec3 color = mix(uBaseColor * 0.65, uEdgeColor, lines * 0.7 + pulse * 0.18);
+  color += uAccentColor * streak * 0.45;
+  color += uAccentColor * shimmer * 0.18;
+  float alpha = uOpacity * (0.16 + lines * 0.2 + streak * 0.08 + pulse * 0.04);
+
   gl_FragColor = vec4(color, alpha);
 }
 `;
@@ -293,14 +421,14 @@ export class World {
 
     for (const side of [-1, 1]) {
       const mat = new THREE.ShaderMaterial({
-        vertexShader: PLASMA_VERTEX,
-        fragmentShader: PLASMA_FRAGMENT,
+        vertexShader: SCANLINES_VERTEX,
+        fragmentShader: SCANLINES_FRAGMENT,
         uniforms: {
           uTime: { value: 0 },
           uBaseColor: { value: new THREE.Color(0x7733cc) },
           uEdgeColor: { value: new THREE.Color(0xdd99ff) },
           uAccentColor: { value: new THREE.Color(0xff87f8) },
-          uOpacity: { value: 0.35 },
+          uOpacity: { value: 0.25 },
         },
         transparent: true,
         side: THREE.DoubleSide,
@@ -470,34 +598,34 @@ export class World {
       // Phase transparency: only fade obstacles BEHIND or VERY CLOSE to the player
       // Obstacles ahead stay fully visible so you can see what's coming
       const obsBehindOrClose = obs.z < playerZ + 3; // within 3 units ahead or behind
-      const targetOpacity = (isPhasing && obsBehindOrClose) ? 0.25 : 1.0;
+      const targetOpacity = (isPhasing && obsBehindOrClose) ? 0.25 : 0.85;
 
       const mesh = obs.mesh;
-      // Pulse the obstacle — subtle breathing effect + phase transparency
-      if (mesh instanceof THREE.Mesh && mesh.material instanceof THREE.MeshStandardMaterial) {
-        const basePulse = this.biomes.colors.obstacleEmissiveIntensity;
-        mesh.material.emissiveIntensity = basePulse + Math.sin(time * 2 + obs.z * 0.3) * 0.1;
-        // Smoothly lerp opacity for phase effect
-        mesh.material.opacity = THREE.MathUtils.lerp(mesh.material.opacity, targetOpacity, 0.15);
+      // Pulse the obstacle — update plasma shader time + phase transparency
+      if (mesh instanceof THREE.Mesh && mesh.material instanceof THREE.ShaderMaterial) {
+        mesh.material.uniforms.uTime.value = this.plasmaElapsed;
+        mesh.material.uniforms.uOpacity.value = THREE.MathUtils.lerp(
+          mesh.material.uniforms.uOpacity.value, targetOpacity, 0.15
+        );
         // Also fade edge wireframes
         mesh.traverse((child) => {
           if (child instanceof THREE.LineSegments && child.material instanceof THREE.LineBasicMaterial) {
-            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity, 0.15);
+            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity > 0.5 ? 1.0 : 0.25, 0.15);
           }
         });
       }
       // Traverse groups (gates have children)
       if (mesh instanceof THREE.Group) {
         mesh.traverse((child) => {
-          if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
-            const basePulse = this.biomes.colors.obstacleEmissiveIntensity;
-            child.material.emissiveIntensity = basePulse + Math.sin(time * 2 + obs.z * 0.3) * 0.1;
-            // Smoothly lerp opacity for phase effect
-            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity, 0.15);
+          if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
+            child.material.uniforms.uTime.value = this.plasmaElapsed;
+            child.material.uniforms.uOpacity.value = THREE.MathUtils.lerp(
+              child.material.uniforms.uOpacity.value, targetOpacity, 0.15
+            );
           }
           // Also fade edge wireframes
           if (child instanceof THREE.LineSegments && child.material instanceof THREE.LineBasicMaterial) {
-            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity, 0.15);
+            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity > 0.5 ? 1.0 : 0.25, 0.15);
           }
         });
       }
@@ -626,12 +754,37 @@ export class World {
       mat.color.setHex(c.gridColor);
     }
 
-    // Tunnel walls — plasma barrier colors driven by biome
-    const wallBaseColor = new THREE.Color(c.obstacleBase);
-    const wallEdgeColor = new THREE.Color(c.obstacleEdge);
+    // Tunnel walls — scanlines, subtle decorative (dimmer than obstacle colors)
+    const wallBaseColor = new THREE.Color(c.obstacleBase).multiplyScalar(0.5);
+    const wallEdgeColor = new THREE.Color(c.obstacleEdge).multiplyScalar(0.7);
+    const wallAccentColor = new THREE.Color(c.obstacleEdge).multiplyScalar(0.5);
     for (const mat of this.tunnelWallMats) {
       mat.uniforms.uBaseColor.value.copy(wallBaseColor);
       mat.uniforms.uEdgeColor.value.copy(wallEdgeColor);
+      mat.uniforms.uAccentColor.value.copy(wallAccentColor);
+    }
+
+    // Obstacle barriers — update ShaderMaterial colors for biome transitions
+    const obsBaseColor = new THREE.Color(c.obstacleBase);
+    const obsEdgeColor = new THREE.Color(c.obstacleEdge);
+    const obsAccentColor = new THREE.Color(c.obstacleEdge).multiplyScalar(1.3);
+    for (const obs of this.obstacles) {
+      if (!obs.active) continue;
+      const mesh = obs.mesh;
+      if (mesh instanceof THREE.Mesh && mesh.material instanceof THREE.ShaderMaterial) {
+        mesh.material.uniforms.uBaseColor.value.copy(obsBaseColor);
+        mesh.material.uniforms.uEdgeColor.value.copy(obsEdgeColor);
+        mesh.material.uniforms.uAccentColor.value.copy(obsAccentColor);
+      }
+      if (mesh instanceof THREE.Group) {
+        mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
+            child.material.uniforms.uBaseColor.value.copy(obsBaseColor);
+            child.material.uniforms.uEdgeColor.value.copy(obsEdgeColor);
+            child.material.uniforms.uAccentColor.value.copy(obsAccentColor);
+          }
+        });
+      }
     }
 
     // Tunnel edge lines — barely visible boundary markers
@@ -879,14 +1032,19 @@ export class World {
   ): THREE.Mesh {
     const c = this.biomes.colors;
     const geo = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshStandardMaterial({
-      color: c.obstacleBase,
-      emissive: c.obstacleEdge,
-      emissiveIntensity: c.obstacleEmissiveIntensity * 1.5,
-      metalness: 0.8,
-      roughness: 0.2,
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: PLASMA_VERTEX,
+      fragmentShader: PLASMA_OBSTACLE_FRAGMENT,
+      uniforms: {
+        uTime: { value: 0 },
+        uBaseColor: { value: new THREE.Color(c.obstacleBase) },
+        uEdgeColor: { value: new THREE.Color(c.obstacleEdge) },
+        uAccentColor: { value: new THREE.Color(c.obstacleEdge).multiplyScalar(1.3) },
+        uOpacity: { value: 0.85 },
+      },
       transparent: true,
-      opacity: 1.0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, y + h / 2, 0);
