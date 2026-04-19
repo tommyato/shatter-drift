@@ -212,7 +212,7 @@ export class VoronoiShatter {
       });
       const shardMesh = new THREE.Mesh(shardGeo, mat);
       // Scale up so shards are visually noticeable
-      shardMesh.scale.setScalar(1.5);
+      shardMesh.scale.setScalar(2.0);
 
       // Position shard at wall's world position
       shardMesh.position.copy(center);
@@ -237,20 +237,19 @@ export class VoronoiShatter {
       const dirLen = dir.length() || 1;
       dir.divideScalar(dirLen);
 
-      const speed = 3 + Math.random() * 5;
-      const jitter = () => (Math.random() - 0.5) * 4;
+      const speed = 8 + Math.random() * 6;
+      const jitter = () => (Math.random() - 0.5) * 8;
 
-      // Shards must travel at game speed so they stay visible as camera moves forward.
-      // Explosion scatter is lateral (X/Y) — Z stays close to camera speed.
-      const zScatter = (Math.random() - 0.5) * 3; // small Z jitter
+      // Shards blast FORWARD (positive Z) faster than the camera — punch-through effect.
+      // Gravity + drag will pull them back, but initially they fly ahead.
       this.shards.push({
         mesh: shardMesh,
         vx: dir.x * speed + jitter(),
         vy: dir.y * speed + Math.random() * 3,
-        vz: forwardSpeed + zScatter,
-        ax: (Math.random() - 0.5) * 20,
-        ay: (Math.random() - 0.5) * 20,
-        az: (Math.random() - 0.5) * 20,
+        vz: forwardSpeed + 8 + Math.random() * 6,
+        ax: (Math.random() - 0.5) * 30,
+        ay: (Math.random() - 0.5) * 30,
+        az: (Math.random() - 0.5) * 30,
         age: 0,
         lifetime: SHARD_LIFETIME * (0.8 + Math.random() * 0.4),
       });
