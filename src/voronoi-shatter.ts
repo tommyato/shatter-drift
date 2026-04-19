@@ -238,13 +238,14 @@ export class VoronoiShatter {
       const speed = 3 + Math.random() * 5;
       const jitter = () => (Math.random() - 0.5) * 4;
 
-      // Forward scatter: some shards fly ahead, most trail behind
-      const forwardBias = (Math.random() - 0.3) * 4; // biased slightly backward
+      // Shards must travel at game speed so they stay visible as camera moves forward.
+      // Explosion scatter is lateral (X/Y) — Z stays close to camera speed.
+      const zScatter = (Math.random() - 0.5) * 3; // small Z jitter
       this.shards.push({
         mesh: shardMesh,
         vx: dir.x * speed + jitter(),
         vy: dir.y * speed + Math.random() * 3,
-        vz: dir.z * speed + jitter() + forwardSpeed * 0.7 + forwardBias,
+        vz: forwardSpeed + zScatter,
         ax: (Math.random() - 0.5) * 20,
         ay: (Math.random() - 0.5) * 20,
         az: (Math.random() - 0.5) * 20,
