@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BiomeManager } from "./biomes";
+import { PLASMA_OBSTACLE_FRAGMENT, PLASMA_VERTEX } from "./shaders";
 import { VoronoiShatter } from "./voronoi-shatter";
 
 // --- Obstacle types ---
@@ -49,26 +50,6 @@ const DESPAWN_DISTANCE = -10; // how far behind to remove
 const ORB_SPACING = 3;
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 const PORTAL_INTERVAL = 300; // meters between portal appearances
-
-const PLASMA_VERTEX = /* glsl */ `
-varying vec2 vUv;
-varying vec3 vWorldPosition;
-
-uniform float uTime;
-
-void main() {
-  vUv = uv;
-  vec3 displaced = position;
-  
-  // Subtle vertex displacement for organic feel
-  float wave = sin(position.y * 2.0 + uTime * 1.5) * 0.02;
-  displaced.z += wave;
-  
-  vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
-  vWorldPosition = worldPos.xyz;
-  gl_Position = projectionMatrix * viewMatrix * worldPos;
-}
-`;
 
 const PLASMA_FRAGMENT = /* glsl */ `
 precision highp float;
@@ -138,79 +119,7 @@ void main() {
   float edgeGlow = pow(1.0 - clamp(edgeDist * 4.0, 0.0, 1.0), 2.4);
   color += uEdgeColor * edgeGlow * 0.3;
   
-  float alpha = uOpacity * (0.28 + heat * 0.16 + centerWeight * 0.12);
-
-  gl_FragColor = vec4(color, alpha);
-}
-`;
-
-const PLASMA_OBSTACLE_FRAGMENT = /* glsl */ `
-precision highp float;
-
-varying vec2 vUv;
-varying vec3 vWorldPosition;
-
-uniform float uTime;
-uniform vec3 uBaseColor;
-uniform vec3 uEdgeColor;
-uniform vec3 uAccentColor;
-uniform float uOpacity;
-
-float hash21(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(
-    mix(hash21(i + vec2(0.0, 0.0)), hash21(i + vec2(1.0, 0.0)), u.x),
-    mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
-    u.y
-  );
-}
-
-float fbm(vec2 p) {
-  float value = 0.0;
-  float amplitude = 0.5;
-  for (int i = 0; i < 5; i++) {
-    value += amplitude * noise(p);
-    p = p * 2.02 + vec2(19.7, -11.3);
-    amplitude *= 0.5;
-  }
-  return value;
-}
-
-mat2 rot(float a) {
-  float s = sin(a);
-  float c = cos(a);
-  return mat2(c, -s, s, c);
-}
-
-void main() {
-  // Obstacle boxes are much smaller than walls — less tiling needed
-  vec2 p = vUv * vec2(3.0, 2.0);
-
-  float flowA = fbm(p + vec2(0.0, uTime * 0.72));
-  float flowB = fbm((p + vec2(4.3, -2.1)) * rot(-0.2) - vec2(uTime * 0.4, -uTime * 0.28));
-  float band = fbm(p * 2.2 + vec2(flowA * 2.4, flowB * 1.8));
-  float heat = clamp(flowA * 0.55 + flowB * 0.4 + band * 0.65, 0.0, 1.0);
-
-  float centerWeight = smoothstep(0.88, 0.08, abs(vUv.y - 0.5) * 2.0);
-  float turbulence = sin((flowA + flowB + band) * 10.0 - uTime * 3.6) * 0.5 + 0.5;
-
-  vec3 color = mix(uBaseColor * 0.55, uEdgeColor, heat);
-  color = mix(color, uAccentColor, turbulence * 0.25 + centerWeight * 0.18);
-  color += uEdgeColor * centerWeight * 0.48;
-
-  float edgeDist = min(vUv.y, 1.0 - vUv.y);
-  float edgeGlow = pow(1.0 - clamp(edgeDist * 4.0, 0.0, 1.0), 2.4);
-  color += uEdgeColor * edgeGlow * 0.3;
-
-  float alpha = uOpacity * (0.28 + heat * 0.16 + centerWeight * 0.12);
+  float alpha = uOpacity * (0.55 + heat * 0.2 + centerWeight * 0.15);
 
   gl_FragColor = vec4(color, alpha);
 }
@@ -586,46 +495,23 @@ export class World {
       this.nextMarkerZ += 100;
     }
 
-    // Animate obstacles — pulse emissive glow + phase transparency
-    const time = performance.now() * 0.001;
-
+    // Animate obstacles — pulse emissive glow
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
       // Distance-based pulse intensity (closer = more visible animation)
       const distToPlayer = Math.abs(obs.z - playerZ);
       if (distToPlayer > 40) continue; // skip far obstacles for perf
 
-      // Phase transparency: only fade obstacles BEHIND or VERY CLOSE to the player
-      // Obstacles ahead stay fully visible so you can see what's coming
-      const obsBehindOrClose = obs.z < playerZ + 3; // within 3 units ahead or behind
-      const targetOpacity = (isPhasing && obsBehindOrClose) ? 0.25 : 0.85;
-
       const mesh = obs.mesh;
-      // Pulse the obstacle — update plasma shader time + phase transparency
+      // Pulse the obstacle — update plasma shader time
       if (mesh instanceof THREE.Mesh && mesh.material instanceof THREE.ShaderMaterial) {
         mesh.material.uniforms.uTime.value = this.plasmaElapsed;
-        mesh.material.uniforms.uOpacity.value = THREE.MathUtils.lerp(
-          mesh.material.uniforms.uOpacity.value, targetOpacity, 0.15
-        );
-        // Also fade edge wireframes
-        mesh.traverse((child) => {
-          if (child instanceof THREE.LineSegments && child.material instanceof THREE.LineBasicMaterial) {
-            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity > 0.5 ? 1.0 : 0.25, 0.15);
-          }
-        });
       }
       // Traverse groups (gates have children)
       if (mesh instanceof THREE.Group) {
         mesh.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
             child.material.uniforms.uTime.value = this.plasmaElapsed;
-            child.material.uniforms.uOpacity.value = THREE.MathUtils.lerp(
-              child.material.uniforms.uOpacity.value, targetOpacity, 0.15
-            );
-          }
-          // Also fade edge wireframes
-          if (child instanceof THREE.LineSegments && child.material instanceof THREE.LineBasicMaterial) {
-            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, targetOpacity > 0.5 ? 1.0 : 0.25, 0.15);
           }
         });
       }

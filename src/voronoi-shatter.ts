@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { Obstacle } from "./world";
+import { SHARD_PLASMA_FRAGMENT, SHARD_PLASMA_VERTEX } from "./shaders";
 
 // --- 2D vector helpers ---
 
@@ -203,14 +204,18 @@ export class VoronoiShatter {
       if (this.shards.length >= MAX_SHARDS) break;
 
       const shardGeo = buildExtrudedGeometry(cell, d);
-      // Use MeshBasicMaterial with bright emissive-style color for visibility.
-      // MeshStandardMaterial was invisible because the game's lighting doesn't
-      // illuminate small fast-moving shards adequately.
-      const mat = new THREE.MeshBasicMaterial({
-        color: emissive || color,
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: SHARD_PLASMA_VERTEX,
+        fragmentShader: SHARD_PLASMA_FRAGMENT,
+        uniforms: {
+          uTime: { value: 0 },
+          uBaseColor: { value: new THREE.Color(color) },
+          uEdgeColor: { value: new THREE.Color(emissive || color) },
+          uOpacity: { value: 1.0 },
+        },
         transparent: true,
-        opacity: 1.0,
         side: THREE.DoubleSide,
+        depthWrite: false,
       });
       const shardMesh = new THREE.Mesh(shardGeo, mat);
       // No artificial scale — shards are voronoi cells of the actual wall geometry,
@@ -332,7 +337,10 @@ export class VoronoiShatter {
       // Fade out
       const t = s.age / s.lifetime;
       const opacity = Math.max(0, 1 - t);
-      (s.mesh.material as THREE.Material & { opacity: number }).opacity = opacity;
+      if (s.mesh.material instanceof THREE.ShaderMaterial) {
+        s.mesh.material.uniforms.uTime.value += dt;
+        s.mesh.material.uniforms.uOpacity.value = opacity;
+      }
 
       if (opacity <= 0 || s.mesh.position.y < -10) {
         toRemove.push(i);

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BiomeManager } from "./biomes";
+import { PLASMA_OBSTACLE_FRAGMENT, PLASMA_VERTEX } from "./shaders";
 
 /**
  * Boss Wave system — dramatic obstacle encounters every 500m.
@@ -46,6 +47,7 @@ export class BossWaveManager {
   private random: () => number = Math.random;
   private nextBossZ = BOSS_INTERVAL;
   private bossCount = 0;
+  private plasmaElapsed = 0;
 
   // Warning system
   warningActive = false;
@@ -72,6 +74,7 @@ export class BossWaveManager {
     }
 
     // Animate active bosses
+    this.plasmaElapsed += dt;
     for (const wave of this.waves) {
       if (!wave.active) continue;
       wave.timer += dt;
@@ -88,6 +91,12 @@ export class BossWaveManager {
       // Animate parts
       for (const part of wave.parts) {
         this.animatePart(part, wave.timer, dt);
+      }
+
+      for (const part of wave.parts) {
+        if (part.mesh.material instanceof THREE.ShaderMaterial) {
+          part.mesh.material.uniforms.uTime.value = this.plasmaElapsed;
+        }
       }
 
       // Despawn far behind — remove from scene and dispose
@@ -185,12 +194,19 @@ export class BossWaveManager {
 
   private createBossMesh(w: number, h: number, d: number, color: number): THREE.Mesh {
     const geo = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0x110022,
-      emissive: color,
-      emissiveIntensity: 0.5,
-      metalness: 0.9,
-      roughness: 0.2,
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: PLASMA_VERTEX,
+      fragmentShader: PLASMA_OBSTACLE_FRAGMENT,
+      uniforms: {
+        uTime: { value: 0 },
+        uBaseColor: { value: new THREE.Color(color) },
+        uEdgeColor: { value: new THREE.Color(color).multiplyScalar(1.5) },
+        uAccentColor: { value: new THREE.Color(color).multiplyScalar(1.3) },
+        uOpacity: { value: 0.85 },
+      },
+      transparent: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
     const mesh = new THREE.Mesh(geo, mat);
 
@@ -336,6 +352,7 @@ export class BossWaveManager {
     this.waves.length = 0;
     this.nextBossZ = BOSS_INTERVAL;
     this.bossCount = 0;
+    this.plasmaElapsed = 0;
     this.warningActive = false;
     this.warningTimer = 0;
   }
