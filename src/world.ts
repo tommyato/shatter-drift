@@ -929,8 +929,8 @@ export class World {
         uOpacity: { value: 0.85 },
       },
       transparent: true,
-      side: THREE.DoubleSide,
-      depthWrite: false,
+      side: THREE.FrontSide,
+      depthWrite: true,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, y + h / 2, 0);

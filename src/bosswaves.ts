@@ -205,8 +205,8 @@ export class BossWaveManager {
         uOpacity: { value: 0.85 },
       },
       transparent: true,
-      side: THREE.DoubleSide,
-      depthWrite: false,
+      side: THREE.FrontSide,
+      depthWrite: true,
     });
     const mesh = new THREE.Mesh(geo, mat);
 

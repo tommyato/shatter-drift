@@ -82,7 +82,7 @@ void main() {
   float edgeGlow = pow(1.0 - clamp(edgeDist * 4.0, 0.0, 1.0), 2.4);
   color += uEdgeColor * edgeGlow * 0.3;
 
-  float alpha = uOpacity * (0.55 + heat * 0.2 + centerWeight * 0.15);
+  float alpha = uOpacity * (0.78 + heat * 0.12 + centerWeight * 0.10);
 
   gl_FragColor = vec4(color, alpha);
 }
