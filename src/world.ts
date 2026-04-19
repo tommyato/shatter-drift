@@ -51,6 +51,66 @@ const ORB_SPACING = 3;
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 const PORTAL_INTERVAL = 300; // meters between portal appearances
 
+const GRID_FLOOR_VERTEX = /* glsl */ `
+varying vec2 vWorldXZ;
+
+void main() {
+  vec4 worldPos = modelMatrix * vec4(position, 1.0);
+  vWorldXZ = worldPos.xz;
+  gl_Position = projectionMatrix * viewMatrix * worldPos;
+}
+`;
+
+const GRID_FLOOR_FRAGMENT = /* glsl */ `
+precision highp float;
+
+varying vec2 vWorldXZ;
+
+uniform float uTime;
+uniform float uPlayerZ;
+uniform float uPlayerX;
+uniform vec3 uGridColor;
+uniform float uGridOpacity;
+
+void main() {
+  float cellSize = 4.0;
+  vec2 p = vWorldXZ / cellSize;
+
+  // Anti-aliased grid lines
+  // min(fract(p), 1 - fract(p)) = distance to nearest integer (0 at line, 0.5 at cell center)
+  vec2 f = fract(p);
+  vec2 lineT = min(f, 1.0 - f);
+  vec2 fw = max(fwidth(p), vec2(0.001));
+
+  float lineWidth = 0.04; // 4% of cellSize = 0.16 world units per line
+  float lineX = 1.0 - smoothstep(lineWidth, lineWidth + fw.x * 2.0, lineT.x);
+  float lineZ = 1.0 - smoothstep(lineWidth, lineWidth + fw.y * 2.0, lineT.y);
+  float line = max(lineX, lineZ);
+
+  // Intersection glow — crossings are brighter than individual lines
+  float intersection = lineX * lineZ;
+
+  // Player proximity glow — lines near the player are brighter
+  float dx = vWorldXZ.x - uPlayerX;
+  float dz = vWorldXZ.y - uPlayerZ;
+  float dist2 = dx * dx + dz * dz;
+  float distFromPlayer = sqrt(dist2);
+  float proximityGlow = exp(-dist2 / (18.0 * 18.0));
+
+  // Vignette falloff — grid fades into darkness at the edges/distance
+  float vignette = 1.0 - smoothstep(35.0, 80.0, distFromPlayer);
+
+  // Subtle pulse animation
+  float pulse = 0.88 + 0.12 * sin(uTime * 2.2);
+
+  // Combine: line intensity + intersection bonus + proximity boost, all modulated by biome opacity
+  float gridIntensity = (line + intersection * 0.5) * (1.0 + proximityGlow * 0.5) * vignette * pulse * uGridOpacity;
+
+  // Output: additive grid lines (transparent background — scene darkness shows through)
+  gl_FragColor = vec4(uGridColor, clamp(gridIntensity, 0.0, 1.0));
+}
+`;
+
 const PLASMA_FRAGMENT = /* glsl */ `
 precision highp float;
 
@@ -202,9 +262,13 @@ export class World {
   private starColors!: Float32Array;
   private starBaseColors!: Float32Array;
 
-  // Ground grid lines for motion perception
-  private gridLines: THREE.LineSegments[] = [];
-  private gridMats: THREE.LineBasicMaterial[] = [];
+  // Shader-driven TRON grid floor
+  private gridFloorMesh!: THREE.Mesh;
+  private gridFloorMat!: THREE.ShaderMaterial;
+
+  // Soft glow disc under the player
+  private playerGlowMesh!: THREE.Mesh;
+  private playerGlowMat!: THREE.MeshBasicMaterial;
 
   // Tunnel walls for depth perception
   private tunnelWalls: THREE.Mesh[] = [];
@@ -213,10 +277,6 @@ export class World {
   // Tunnel edge highlight lines
   private tunnelEdges: THREE.LineSegments[] = [];
   private tunnelEdgeMats: THREE.LineBasicMaterial[] = [];
-
-  // Floor panels
-  private floorPanels: THREE.Mesh[] = [];
-  private floorMats: THREE.MeshStandardMaterial[] = [];
 
   // Distance markers
   private markers: { group: THREE.Group; z: number; active: boolean }[] = [];
@@ -234,9 +294,8 @@ export class World {
     this.biomes = biomes;
     this.voronoiShatter = new VoronoiShatter(scene);
     this.createStarfield();
-    this.createGridLines();
+    this.createShaderFloor();
     this.createTunnelWalls();
-    this.createFloorPanels();
   }
 
   private createStarfield() {
@@ -275,50 +334,44 @@ export class World {
     this.scene.add(this.starfield);
   }
 
-  private createGridLines() {
-    // Create scrolling grid on the "floor" for speed perception
-    // Cross-hatch pattern: both horizontal AND vertical lines
-    const lineCount = 40;
-    const lineSpacing = 4;
+  private createShaderFloor() {
+    // Shader-driven TRON grid floor — replaces old grid lines + floor panels
+    const floorGeo = new THREE.PlaneGeometry(LANE_WIDTH * 2.5, 300, 1, 1);
+    const c = this.biomes.colors;
+    this.gridFloorMat = new THREE.ShaderMaterial({
+      vertexShader: GRID_FLOOR_VERTEX,
+      fragmentShader: GRID_FLOOR_FRAGMENT,
+      uniforms: {
+        uTime: { value: 0 },
+        uPlayerZ: { value: 0 },
+        uPlayerX: { value: 0 },
+        uGridColor: { value: new THREE.Color(c.gridColor) },
+        uGridOpacity: { value: c.gridOpacity },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.FrontSide,
+    });
+    this.gridFloorMesh = new THREE.Mesh(floorGeo, this.gridFloorMat);
+    this.gridFloorMesh.rotation.x = -Math.PI / 2;
+    this.gridFloorMesh.position.y = -1.5;
+    this.scene.add(this.gridFloorMesh);
 
-    // Horizontal lines (cross the path)
-    for (let i = 0; i < lineCount; i++) {
-      const points = [
-        new THREE.Vector3(-LANE_WIDTH, -1.5, i * lineSpacing),
-        new THREE.Vector3(LANE_WIDTH, -1.5, i * lineSpacing),
-      ];
-      const geo = new THREE.BufferGeometry().setFromPoints(points);
-      const mat = new THREE.LineBasicMaterial({
-        color: 0x1a3355,
-        transparent: true,
-        opacity: 0.4,
-      });
-      const line = new THREE.LineSegments(geo, mat);
-      this.scene.add(line);
-      this.gridLines.push(line);
-      this.gridMats.push(mat);
-    }
-
-    // Vertical lines (run along the path) — adds depth perception
-    const vLineCount = 8;
-    const vSpacing = LANE_WIDTH * 2 / (vLineCount - 1);
-    for (let i = 0; i < vLineCount; i++) {
-      const x = -LANE_WIDTH + i * vSpacing;
-      const points = [
-        new THREE.Vector3(x, -1.5, 0),
-        new THREE.Vector3(x, -1.5, lineCount * lineSpacing),
-      ];
-      const geo = new THREE.BufferGeometry().setFromPoints(points);
-      const mat = new THREE.LineBasicMaterial({
-        color: 0x1a3355,
-        transparent: true,
-        opacity: 0.25,
-      });
-      const line = new THREE.LineSegments(geo, mat);
-      this.scene.add(line);
-      this.gridLines.push(line);
-      this.gridMats.push(mat);
-    }
+    // Soft glow disc under the player — anchors avatar to the floor
+    const glowGeo = new THREE.CircleGeometry(1.5, 32);
+    this.playerGlowMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(c.playerTrail),
+      transparent: true,
+      opacity: 0.25,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.playerGlowMesh = new THREE.Mesh(glowGeo, this.playerGlowMat);
+    this.playerGlowMesh.rotation.x = -Math.PI / 2;
+    this.playerGlowMesh.position.y = -1.49;
+    this.scene.add(this.playerGlowMesh);
   }
 
   private createTunnelWalls() {
@@ -383,26 +436,6 @@ export class World {
       this.tunnelEdges.push(upperEdge);
       this.tunnelEdgeMats.push(upperMat);
     }
-  }
-
-  private createFloorPanels() {
-    // Subtle floor panels for depth
-    const panelGeo = new THREE.PlaneGeometry(LANE_WIDTH * 2, 300, 1, 1);
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0x0e0e28,
-      emissive: 0x1a1a40,
-      emissiveIntensity: 0.35,
-      metalness: 0.7,
-      roughness: 0.5,
-      transparent: true,
-      opacity: 0.75,
-    });
-    const floor = new THREE.Mesh(panelGeo, mat);
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -1.5;
-    this.scene.add(floor);
-    this.floorPanels.push(floor);
-    this.floorMats.push(mat);
   }
 
   /** Remove inactive objects from arrays and dispose their Three.js resources */
@@ -470,7 +503,7 @@ export class World {
     }
   }
 
-  update(dt: number, playerZ: number, speed: number, isPhasing: boolean = false) {
+  update(dt: number, playerZ: number, playerX: number, speed: number, isPhasing: boolean = false) {
     // Generate obstacles ahead — spacing is biome-driven
     while (this.nextObstacleZ < playerZ + SPAWN_DISTANCE) {
       this.spawnObstacle(this.nextObstacleZ);
@@ -570,43 +603,26 @@ export class World {
       this.cleanupInactive();
     }
 
-    // Move tunnel walls, edges, and floor with player
+    // Move tunnel walls and edges with player
     for (const wall of this.tunnelWalls) {
       wall.position.z = playerZ;
     }
     for (const edge of this.tunnelEdges) {
       edge.position.z = playerZ;
     }
-    for (const floor of this.floorPanels) {
-      floor.position.z = playerZ;
-    }
     this.plasmaElapsed += dt;
     for (const mat of this.tunnelWallMats) {
       mat.uniforms.uTime.value = this.plasmaElapsed;
     }
 
-    // Move grid lines with player (scroll effect)
-    const lineSpacing = 4;
-    const totalGridLength = 40 * lineSpacing;
-    const horizontalLineCount = 40; // first 40 are horizontal
-    for (let i = 0; i < Math.min(horizontalLineCount, this.gridLines.length); i++) {
-      const baseZ = i * lineSpacing;
-      // Wrap around as player moves forward
-      const offsetZ = ((baseZ - playerZ % totalGridLength) + totalGridLength) % totalGridLength;
-      this.gridLines[i].position.z = playerZ - totalGridLength / 2 + offsetZ;
+    // Move shader floor with player and update uniforms
+    this.gridFloorMesh.position.z = playerZ;
+    this.gridFloorMat.uniforms.uTime.value = this.plasmaElapsed;
+    this.gridFloorMat.uniforms.uPlayerZ.value = playerZ;
+    this.gridFloorMat.uniforms.uPlayerX.value = playerX;
 
-      // Proximity-based brightness — lines near the player glow brighter
-      const distFromPlayer = Math.abs(this.gridLines[i].position.z - playerZ);
-      const proximityGlow = Math.max(0, 1 - distFromPlayer / 30);
-      const baseOpacity = this.biomes.colors.gridOpacity;
-      this.gridMats[i].opacity = baseOpacity + proximityGlow * 0.15;
-    }
-    // Vertical lines scroll with player + update base opacity
-    const baseOpacityV = this.biomes.colors.gridOpacity * 0.5; // vertical lines subtler
-    for (let i = horizontalLineCount; i < this.gridLines.length; i++) {
-      this.gridLines[i].position.z = playerZ - totalGridLength / 2;
-      this.gridMats[i].opacity = baseOpacityV;
-    }
+    // Update player glow position
+    this.playerGlowMesh.position.set(playerX, -1.49, playerZ);
 
     // Move starfield with player (parallax)
     this.starfield.position.z = playerZ * 0.3;
@@ -635,10 +651,12 @@ export class World {
       (this.starfield.geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
     }
 
-    // Grid lines — only update color, NOT opacity (proximity glow is set in update())
-    for (const mat of this.gridMats) {
-      mat.color.setHex(c.gridColor);
-    }
+    // Shader grid floor — update biome color and opacity
+    this.gridFloorMat.uniforms.uGridColor.value.setHex(c.gridColor);
+    this.gridFloorMat.uniforms.uGridOpacity.value = c.gridOpacity;
+
+    // Player glow — track biome trail color
+    this.playerGlowMat.color.setHex(c.playerTrail);
 
     // Tunnel walls — scanlines, subtle decorative (dimmer than obstacle colors)
     const wallBaseColor = new THREE.Color(c.obstacleBase).multiplyScalar(0.5);
@@ -1369,10 +1387,15 @@ export class World {
       this.starfield.geometry.dispose();
       (this.starfield.material as THREE.Material).dispose();
     }
-    for (const line of this.gridLines) {
-      this.scene.remove(line);
-      line.geometry.dispose();
-      (line.material as THREE.Material).dispose();
+    if (this.gridFloorMesh) {
+      this.scene.remove(this.gridFloorMesh);
+      this.gridFloorMesh.geometry.dispose();
+      this.gridFloorMat.dispose();
+    }
+    if (this.playerGlowMesh) {
+      this.scene.remove(this.playerGlowMesh);
+      this.playerGlowMesh.geometry.dispose();
+      this.playerGlowMat.dispose();
     }
     for (const wall of this.tunnelWalls) {
       this.scene.remove(wall);
@@ -1383,11 +1406,6 @@ export class World {
       this.scene.remove(edge);
       edge.geometry.dispose();
       (edge.material as THREE.Material).dispose();
-    }
-    for (const floor of this.floorPanels) {
-      this.scene.remove(floor);
-      floor.geometry.dispose();
-      (floor.material as THREE.Material).dispose();
     }
   }
 

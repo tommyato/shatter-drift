@@ -1022,7 +1022,7 @@ export class Game {
     this.player.group.position.set(0, 0, this.playerZ);
 
     // World generates obstacles so the scene is live
-    this.world.update(dt, this.playerZ, this.speed, false);
+    this.world.update(dt, this.playerZ, 0, this.speed, false);
 
     // Camera: smooth interpolation from orbit position to gameplay position
     const endCamPos = new THREE.Vector3(0, this.cameraOffset.y, this.playerZ + this.cameraOffset.z);
@@ -1202,7 +1202,7 @@ export class Game {
     // World difficulty is now fully biome-driven (see world.ts)
 
     // Update world
-    this.world.update(dt, this.playerZ, this.speed, this.player.shattered);
+    this.world.update(dt, this.playerZ, this.player.group.position.x, this.speed, this.player.shattered);
 
     // Update biomes
     const biomeChanged = this.biomes.update(this.distance);
