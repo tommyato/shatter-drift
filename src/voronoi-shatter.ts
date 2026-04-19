@@ -145,10 +145,11 @@ interface Shard {
   lifetime: number;  // fade-out duration
 }
 
-const SHARD_LIFETIME = 1.4;
-const GRAVITY = -22;
-const DRAG = 3.0;  // exponential drag coefficient — shards decelerate fast
-const MAX_SHARDS = 150;
+const SHARD_LIFETIME = 1.2;
+const GRAVITY = -28;
+const DRAG = 2.5;  // exponential drag coefficient — shards decelerate fast
+const ANGULAR_DRAG = 4.0;  // angular velocity decays fast — heavy chunks don't spin like paper
+const MAX_SHARDS = 80;
 
 export class VoronoiShatter {
   private scene: THREE.Scene;
@@ -185,8 +186,8 @@ export class VoronoiShatter {
     const hw = w / 2;
     const hh = h / 2;
 
-    // Generate 6-9 seed points within the front face rectangle (fewer = larger shards)
-    const seedCount = 6 + Math.floor(Math.random() * 4);
+    // 3-5 seeds = fewer, larger chunks that read as heavy wall pieces
+    const seedCount = 3 + Math.floor(Math.random() * 3);
     const seeds: Vec2[] = [];
     for (let i = 0; i < seedCount; i++) {
       seeds.push(v2(
@@ -212,8 +213,9 @@ export class VoronoiShatter {
         side: THREE.DoubleSide,
       });
       const shardMesh = new THREE.Mesh(shardGeo, mat);
-      // Scale up so shards are visually noticeable
-      shardMesh.scale.setScalar(2.0);
+      // No artificial scale — shards are voronoi cells of the actual wall geometry,
+      // so they naturally match the wall size. Slight bump for visual presence.
+      shardMesh.scale.setScalar(1.1);
 
       // Position shard at wall's world position
       shardMesh.position.copy(center);
@@ -238,19 +240,21 @@ export class VoronoiShatter {
       const dirLen = dir.length() || 1;
       dir.divideScalar(dirLen);
 
-      const speed = 10 + Math.random() * 8;
-      const jitter = () => (Math.random() - 0.5) * 10;
+      // Strong radial burst + forward punch. High initial speed + drag =
+      // shards blast out then slow quickly, like real debris.
+      const speed = 12 + Math.random() * 10;
+      const jitter = () => (Math.random() - 0.5) * 6;
 
-      // Shards blast FORWARD much faster than camera — drag decelerates them
-      // so they fly ahead briefly then fall behind. Feels like punching through.
       this.shards.push({
         mesh: shardMesh,
         vx: dir.x * speed + jitter(),
-        vy: dir.y * speed + Math.random() * 2 - 1,
-        vz: forwardSpeed + 12 + Math.random() * 8,
-        ax: (Math.random() - 0.5) * 30,
-        ay: (Math.random() - 0.5) * 30,
-        az: (Math.random() - 0.5) * 30,
+        vy: dir.y * speed + Math.random() * 3,  // slight upward on impact
+        vz: forwardSpeed + 14 + Math.random() * 10,
+        // Heavy chunks tumble slowly — ±4 rad/s max, not ±30.
+        // Angular drag decelerates them further. Rigid material feel.
+        ax: (Math.random() - 0.5) * 8,
+        ay: (Math.random() - 0.5) * 8,
+        az: (Math.random() - 0.5) * 8,
         age: 0,
         lifetime: SHARD_LIFETIME * (0.8 + Math.random() * 0.4),
       });
@@ -310,12 +314,17 @@ export class VoronoiShatter {
 
       // Physics — drag decelerates shards so they don't float at constant speed
       const dragFactor = Math.exp(-DRAG * dt);
+      const angDragFactor = Math.exp(-ANGULAR_DRAG * dt);
       s.vx *= dragFactor;
       s.vz *= dragFactor;
       s.vy += GRAVITY * dt;
       s.mesh.position.x += s.vx * dt;
       s.mesh.position.y += s.vy * dt;
       s.mesh.position.z += s.vz * dt;
+      // Angular drag — heavy chunks slow their spin, not spin forever like confetti
+      s.ax *= angDragFactor;
+      s.ay *= angDragFactor;
+      s.az *= angDragFactor;
       s.mesh.rotation.x += s.ax * dt;
       s.mesh.rotation.y += s.ay * dt;
       s.mesh.rotation.z += s.az * dt;
