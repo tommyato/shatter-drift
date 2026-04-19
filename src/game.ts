@@ -1481,8 +1481,7 @@ export class Game {
           this.player.setShieldActive(false);
           // Remove the regular obstacle that was hit (boss parts persist)
           if (hit) {
-            hit.active = false;
-            hit.mesh.visible = false;
+            this.world.shatterObstacle(hit, this.player.group.position.x, this.playerZ);
           }
         } else {
           this.die();
@@ -1545,6 +1544,14 @@ export class Game {
       const regularCloseCall = this.world.checkCloseCall(this.player.group.position.x, this.playerZ);
       const bossCloseCall = this.bossWaves.checkCloseCall(this.player.group.position.x, this.playerZ);
       if (regularCloseCall || bossCloseCall) {
+        // Shatter the obstacle we phased through
+        if (regularCloseCall) {
+          this.world.shatterObstacle(
+            regularCloseCall,
+            this.player.group.position.x,
+            this.playerZ
+          );
+        }
         if (this.playerZ - this.lastCloseCall > 3) {
           this.phaseStreak++;
           const streakBonus = Math.min(this.phaseStreak, 5); // up to 5x streak

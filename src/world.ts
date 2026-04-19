@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BiomeManager } from "./biomes";
+import { VoronoiShatter } from "./voronoi-shatter";
 
 // --- Obstacle types ---
 
@@ -88,6 +89,8 @@ export class World {
   // Distance markers
   private markers: { group: THREE.Group; z: number; active: boolean }[] = [];
 
+  private voronoiShatter!: VoronoiShatter;
+
   /** Replace the PRNG used for world generation. Call before each game start.
    *  Pass Math.random for normal mode, seededRandom(seed) for daily challenge. */
   setRandom(fn: () => number) {
@@ -97,6 +100,7 @@ export class World {
   constructor(scene: THREE.Scene, biomes: BiomeManager) {
     this.scene = scene;
     this.biomes = biomes;
+    this.voronoiShatter = new VoronoiShatter(scene);
     this.createStarfield();
     this.createGridLines();
     this.createTunnelWalls();
@@ -492,6 +496,9 @@ export class World {
 
     // Update biome-reactive colors
     this.updateBiomeVisuals();
+
+    // Update voronoi shard physics
+    this.voronoiShatter.update(dt);
   }
 
   private lastStarTint: [number, number, number] = [0, 0, 0];
@@ -1156,8 +1163,17 @@ export class World {
     return null;
   }
 
+  /** Shatter an obstacle visually and disable its collision */
+  shatterObstacle(obs: Obstacle, impactX: number, impactZ: number): void {
+    this.voronoiShatter.shatterObstacle(obs, impactX, impactZ, this.biomes.colors);
+    obs.active = false;
+    // Hide the original mesh and all its children
+    obs.mesh.visible = false;
+    obs.mesh.traverse((child) => { child.visible = false; });
+  }
+
   /** Check close calls (passing through obstacle while shattered) */
-  checkCloseCall(playerX: number, playerZ: number): boolean {
+  checkCloseCall(playerX: number, playerZ: number): Obstacle | null {
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
       const dz = Math.abs(playerZ - obs.z);
@@ -1165,16 +1181,17 @@ export class World {
 
       if (obs.isGate) {
         const dx = Math.abs(playerX - obs.gapX);
-        if (dx > obs.gapHalfWidth - 0.3) return true;
+        if (dx > obs.gapHalfWidth - 0.3) return obs;
       } else {
         const dx = Math.abs(playerX - obs.x);
-        if (dx < obs.halfWidth + 0.8) return true;
+        if (dx < obs.halfWidth + 0.8) return obs;
       }
     }
-    return false;
+    return null;
   }
 
   reset() {
+    this.voronoiShatter.reset();
     // Remove all obstacles, orbs, and portals
     for (const obs of this.obstacles) {
       this.scene.remove(obs.mesh);
