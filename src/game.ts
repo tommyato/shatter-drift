@@ -640,6 +640,13 @@ export class Game {
     const backBtn = document.getElementById("customize-back")!;
     const openBtn = document.getElementById("customize-btn")!;
 
+    // Player name input
+    const nameInput = document.getElementById("customize-name-input") as HTMLInputElement;
+    nameInput.value = getPlayerName();
+    nameInput.addEventListener("keydown", (e) => e.stopPropagation());
+    nameInput.addEventListener("change", () => setPlayerName(nameInput.value.trim()));
+    nameInput.addEventListener("blur", () => setPlayerName(nameInput.value.trim()));
+
     const unlockedRewards = this.challenges.getUnlockedRewards();
     const unlockedCrystals = new Set(["default", ...unlockedRewards.filter(r => r.type === "crystal").map(r => r.value)]);
     const unlockedTrails = new Set(["default", ...unlockedRewards.filter(r => r.type === "trail").map(r => r.value)]);
@@ -697,6 +704,7 @@ export class Game {
       e.stopPropagation();
       this.customizeOpen = true;
       this.titleOverlay.classList.add("hidden");
+      nameInput.value = getPlayerName();
       this.customizePanel.classList.remove("hidden");
     });
 

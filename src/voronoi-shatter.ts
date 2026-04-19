@@ -171,7 +171,10 @@ export class VoronoiShatter {
     forwardSpeed: number = 0
   ): void {
     const geo = mesh.geometry as THREE.BoxGeometry;
-    if (!geo || !geo.parameters) return;
+    if (!geo || !geo.parameters) {
+      console.warn('[VoronoiShatter] No BoxGeometry parameters, skipping');
+      return;
+    }
 
     const w = geo.parameters.width  ?? 1;
     const h = geo.parameters.height ?? 1;
@@ -180,6 +183,7 @@ export class VoronoiShatter {
     // World-space center of this mesh
     const center = new THREE.Vector3();
     mesh.getWorldPosition(center);
+    console.log(`[VoronoiShatter] shatterMesh: center=${center.x.toFixed(1)},${center.y.toFixed(1)},${center.z.toFixed(1)} size=${w.toFixed(1)}x${h.toFixed(1)}x${d.toFixed(1)} fwdSpeed=${forwardSpeed.toFixed(1)} shardsBefore=${this.shards.length}`);
 
     const hw = w / 2;
     const hh = h / 2;
@@ -253,6 +257,7 @@ export class VoronoiShatter {
         lifetime: SHARD_LIFETIME * (0.8 + Math.random() * 0.4),
       });
     }
+    console.log(`[VoronoiShatter] Created ${this.shards.length} total shards`);
   }
 
   /**
@@ -271,6 +276,7 @@ export class VoronoiShatter {
     const { obstacleBase, obstacleEdge, obstacleEmissiveIntensity } = biomeColors;
 
     const obj = obstacle.mesh;
+    console.log(`[VoronoiShatter] shatterObstacle: type=${obj.constructor.name} impactX=${impactX.toFixed(1)} impactZ=${impactZ.toFixed(1)} fwdSpeed=${forwardSpeed.toFixed(1)}`);
 
     if (obj instanceof THREE.Mesh && obj.geometry instanceof THREE.BoxGeometry) {
       // Single pillar
