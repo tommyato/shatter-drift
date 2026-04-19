@@ -50,6 +50,100 @@ const ORB_SPACING = 3;
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 const PORTAL_INTERVAL = 300; // meters between portal appearances
 
+const PLASMA_VERTEX = /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPosition;
+
+uniform float uTime;
+
+void main() {
+  vUv = uv;
+  vec3 displaced = position;
+  
+  // Subtle vertex displacement for organic feel
+  float wave = sin(position.y * 2.0 + uTime * 1.5) * 0.02;
+  displaced.z += wave;
+  
+  vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
+  vWorldPosition = worldPos.xyz;
+  gl_Position = projectionMatrix * viewMatrix * worldPos;
+}
+`;
+
+const PLASMA_FRAGMENT = /* glsl */ `
+precision highp float;
+
+varying vec2 vUv;
+varying vec3 vWorldPosition;
+
+uniform float uTime;
+uniform vec3 uBaseColor;
+uniform vec3 uEdgeColor;
+uniform vec3 uAccentColor;
+uniform float uOpacity;
+
+float hash21(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(hash21(i + vec2(0.0, 0.0)), hash21(i + vec2(1.0, 0.0)), u.x),
+    mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+    u.y
+  );
+}
+
+float fbm(vec2 p) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  for (int i = 0; i < 5; i++) {
+    value += amplitude * noise(p);
+    p = p * 2.02 + vec2(19.7, -11.3);
+    amplitude *= 0.5;
+  }
+  return value;
+}
+
+mat2 rot(float a) {
+  float s = sin(a);
+  float c = cos(a);
+  return mat2(c, -s, s, c);
+}
+
+void main() {
+  // Scale UVs for the wall — use world position for seamless tiling
+  vec2 p = vUv * vec2(12.0, 3.5);  // stretch horizontally since walls are long
+  
+  float flowA = fbm(p + vec2(0.0, uTime * 0.72));
+  float flowB = fbm((p + vec2(4.3, -2.1)) * rot(-0.2) - vec2(uTime * 0.4, -uTime * 0.28));
+  float band = fbm(p * 2.2 + vec2(flowA * 2.4, flowB * 1.8));
+  float heat = clamp(flowA * 0.55 + flowB * 0.4 + band * 0.65, 0.0, 1.0);
+  
+  // Vertical center weighting — brighter in the middle of the wall
+  float centerWeight = smoothstep(0.88, 0.08, abs(vUv.y - 0.5) * 2.0);
+  float turbulence = sin((flowA + flowB + band) * 10.0 - uTime * 3.6) * 0.5 + 0.5;
+  
+  vec3 color = mix(uBaseColor * 0.55, uEdgeColor, heat);
+  color = mix(color, uAccentColor, turbulence * 0.25 + centerWeight * 0.18);
+  color += uEdgeColor * centerWeight * 0.48;
+  
+  // Edge glow — brighter at top and bottom edges of wall
+  float edgeDist = min(vUv.y, 1.0 - vUv.y);
+  float edgeGlow = pow(1.0 - clamp(edgeDist * 4.0, 0.0, 1.0), 2.4);
+  color += uEdgeColor * edgeGlow * 0.3;
+  
+  float alpha = uOpacity * (0.28 + heat * 0.16 + centerWeight * 0.12);
+  
+  gl_FragColor = vec4(color, alpha);
+}
+`;
+
 export class World {
   obstacles: Obstacle[] = [];
   orbs: EnergyOrb[] = [];
@@ -64,6 +158,7 @@ export class World {
   private nextPortalZ = PORTAL_INTERVAL;
   private nextMarkerZ = 100; // distance markers every 100m
   private cleanupTimer = 0; // periodic cleanup of inactive objects
+  private plasmaElapsed = 0;
 
   // Starfield
   private starfield!: THREE.Points;
@@ -76,7 +171,7 @@ export class World {
 
   // Tunnel walls for depth perception
   private tunnelWalls: THREE.Mesh[] = [];
-  private tunnelWallMats: THREE.MeshStandardMaterial[] = [];
+  private tunnelWallMats: THREE.ShaderMaterial[] = [];
 
   // Tunnel edge highlight lines
   private tunnelEdges: THREE.LineSegments[] = [];
@@ -197,15 +292,19 @@ export class World {
     const wallGeo = new THREE.PlaneGeometry(wallLength, wallHeight, 30, 4);
 
     for (const side of [-1, 1]) {
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0x060610,
-        emissive: 0x111122,
-        emissiveIntensity: 0.08,
-        metalness: 0.9,
-        roughness: 0.5,
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: PLASMA_VERTEX,
+        fragmentShader: PLASMA_FRAGMENT,
+        uniforms: {
+          uTime: { value: 0 },
+          uBaseColor: { value: new THREE.Color(0x7733cc) },
+          uEdgeColor: { value: new THREE.Color(0xdd99ff) },
+          uAccentColor: { value: new THREE.Color(0xff87f8) },
+          uOpacity: { value: 0.35 },
+        },
         transparent: true,
-        opacity: 0.12,
         side: THREE.DoubleSide,
+        depthWrite: false,
       });
 
       const wall = new THREE.Mesh(wallGeo, mat);
@@ -467,6 +566,10 @@ export class World {
     for (const floor of this.floorPanels) {
       floor.position.z = playerZ;
     }
+    this.plasmaElapsed += dt;
+    for (const mat of this.tunnelWallMats) {
+      mat.uniforms.uTime.value = this.plasmaElapsed;
+    }
 
     // Move grid lines with player (scroll effect)
     const lineSpacing = 4;
@@ -523,12 +626,12 @@ export class World {
       mat.color.setHex(c.gridColor);
     }
 
-    // Tunnel walls — very subtle background tint, NOT obstacle color
-    // Walls are spatial reference only; obstacles must visually dominate
-    const wallTint = this.darkenHex(c.background, 1.6);
+    // Tunnel walls — plasma barrier colors driven by biome
+    const wallBaseColor = new THREE.Color(c.obstacleBase);
+    const wallEdgeColor = new THREE.Color(c.obstacleEdge);
     for (const mat of this.tunnelWallMats) {
-      mat.emissive.setHex(wallTint);
-      mat.emissiveIntensity = 0.06;
+      mat.uniforms.uBaseColor.value.copy(wallBaseColor);
+      mat.uniforms.uEdgeColor.value.copy(wallEdgeColor);
     }
 
     // Tunnel edge lines — barely visible boundary markers
