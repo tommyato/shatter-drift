@@ -149,6 +149,9 @@ const SHARD_LIFETIME = 2.0;
 const GRAVITY = -12;
 const MAX_SHARDS = 150;
 
+// Debug: track all shatter events for testing
+(window as any).__shatterDebug = { events: [] as any[], shardCount: 0 };
+
 export class VoronoiShatter {
   private scene: THREE.Scene;
   private shards: Shard[] = [];
@@ -205,16 +208,18 @@ export class VoronoiShatter {
       if (this.shards.length >= MAX_SHARDS) break;
 
       const shardGeo = buildExtrudedGeometry(cell, d);
-      const mat = new THREE.MeshStandardMaterial({
-        color,
-        emissive,
-        emissiveIntensity: emissiveIntensity * 1.2,
-        metalness: 0.8,
-        roughness: 0.2,
+      // Use MeshBasicMaterial with bright emissive-style color for visibility.
+      // MeshStandardMaterial was invisible because the game's lighting doesn't
+      // illuminate small fast-moving shards adequately.
+      const mat = new THREE.MeshBasicMaterial({
+        color: emissive || color,
         transparent: true,
         opacity: 1.0,
+        side: THREE.DoubleSide,
       });
       const shardMesh = new THREE.Mesh(shardGeo, mat);
+      // Scale up so shards are visually noticeable
+      shardMesh.scale.setScalar(1.5);
 
       // Position shard at wall's world position
       shardMesh.position.copy(center);
@@ -258,6 +263,8 @@ export class VoronoiShatter {
       });
     }
     console.log(`[VoronoiShatter] Created ${this.shards.length} total shards`);
+    (window as any).__shatterDebug.shardCount = this.shards.length;
+    (window as any).__shatterDebug.events.push({ type: 'shardsCreated', count: this.shards.length, center: { x: center.x, y: center.y, z: center.z }, time: Date.now() });
   }
 
   /**
@@ -277,6 +284,7 @@ export class VoronoiShatter {
 
     const obj = obstacle.mesh;
     console.log(`[VoronoiShatter] shatterObstacle: type=${obj.constructor.name} impactX=${impactX.toFixed(1)} impactZ=${impactZ.toFixed(1)} fwdSpeed=${forwardSpeed.toFixed(1)}`);
+    (window as any).__shatterDebug.events.push({ type: 'shatterObstacle', meshType: obj.constructor.name, impactX, impactZ, forwardSpeed, time: Date.now() });
 
     if (obj instanceof THREE.Mesh && obj.geometry instanceof THREE.BoxGeometry) {
       // Single pillar
