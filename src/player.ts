@@ -120,12 +120,14 @@ export class Player {
     const mat = new THREE.MeshBasicMaterial({
       color: PLAYER_COLOR,
       transparent: true,
-      opacity: 0.3,
+      opacity: 0.35,
       side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
     this.glowRing = new THREE.Mesh(geo, mat);
     this.glowRing.rotation.x = -Math.PI / 2;
-    this.glowRing.position.y = -0.3;
+    this.glowRing.position.y = -1.5; // sits on the floor
     this.group.add(this.glowRing);
   }
 
@@ -193,12 +195,13 @@ export class Player {
     this.crystalMesh.rotation.y += dt * rotSpeed;
     this.crystalMesh.rotation.x = Math.sin(performance.now() * 0.002) * 0.2;
 
-    // Glow ring
+    // Glow ring — stays on the floor (counteract the group's Y bob)
     const ringColor = this.shattered ? SHATTER_COLOR : PLAYER_COLOR;
     (this.glowRing.material as THREE.MeshBasicMaterial).color.setHex(ringColor);
-    (this.glowRing.material as THREE.MeshBasicMaterial).opacity = 0.15 + this.shatterT * 0.2;
+    (this.glowRing.material as THREE.MeshBasicMaterial).opacity = 0.2 + this.shatterT * 0.2;
     this.glowRing.scale.setScalar(1 + this.shatterT * 0.5);
     this.glowRing.rotation.z += dt * 0.5;
+    this.glowRing.position.y = -1.5 - this.group.position.y; // pin to floor in world space
 
     // Shield bubble animation
     const shieldMat = this.shieldBubble.material as THREE.MeshStandardMaterial;

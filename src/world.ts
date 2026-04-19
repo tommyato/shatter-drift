@@ -266,10 +266,6 @@ export class World {
   private gridFloorMesh!: THREE.Mesh;
   private gridFloorMat!: THREE.ShaderMaterial;
 
-  // Soft glow disc under the player
-  private playerGlowMesh!: THREE.Mesh;
-  private playerGlowMat!: THREE.MeshBasicMaterial;
-
   // Tunnel walls for depth perception
   private tunnelWalls: THREE.Mesh[] = [];
   private tunnelWallMats: THREE.ShaderMaterial[] = [];
@@ -357,21 +353,6 @@ export class World {
     this.gridFloorMesh.rotation.x = -Math.PI / 2;
     this.gridFloorMesh.position.y = -1.5;
     this.scene.add(this.gridFloorMesh);
-
-    // Soft glow disc under the player — anchors avatar to the floor
-    const glowGeo = new THREE.CircleGeometry(1.5, 32);
-    this.playerGlowMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(c.playerTrail),
-      transparent: true,
-      opacity: 0.25,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    this.playerGlowMesh = new THREE.Mesh(glowGeo, this.playerGlowMat);
-    this.playerGlowMesh.rotation.x = -Math.PI / 2;
-    this.playerGlowMesh.position.y = -1.49;
-    this.scene.add(this.playerGlowMesh);
   }
 
   private createTunnelWalls() {
@@ -621,9 +602,6 @@ export class World {
     this.gridFloorMat.uniforms.uPlayerZ.value = playerZ;
     this.gridFloorMat.uniforms.uPlayerX.value = playerX;
 
-    // Update player glow position
-    this.playerGlowMesh.position.set(playerX, -1.49, playerZ);
-
     // Move starfield with player (parallax)
     this.starfield.position.z = playerZ * 0.3;
 
@@ -654,9 +632,6 @@ export class World {
     // Shader grid floor — update biome color and opacity
     this.gridFloorMat.uniforms.uGridColor.value.setHex(c.gridColor);
     this.gridFloorMat.uniforms.uGridOpacity.value = c.gridOpacity;
-
-    // Player glow — track biome trail color
-    this.playerGlowMat.color.setHex(c.playerTrail);
 
     // Tunnel walls — scanlines, subtle decorative (dimmer than obstacle colors)
     const wallBaseColor = new THREE.Color(c.obstacleBase).multiplyScalar(0.5);
@@ -1391,11 +1366,6 @@ export class World {
       this.scene.remove(this.gridFloorMesh);
       this.gridFloorMesh.geometry.dispose();
       this.gridFloorMat.dispose();
-    }
-    if (this.playerGlowMesh) {
-      this.scene.remove(this.playerGlowMesh);
-      this.playerGlowMesh.geometry.dispose();
-      this.playerGlowMat.dispose();
     }
     for (const wall of this.tunnelWalls) {
       this.scene.remove(wall);
