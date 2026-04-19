@@ -6,7 +6,7 @@ import { Player } from "./player";
 import { World } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
 import { PostFXPass } from "./postfx";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { clamp, ease, ScreenShake, seededRandom } from "./utils";
@@ -1490,6 +1490,7 @@ export class Game {
           // Remove the regular obstacle that was hit (boss parts persist)
           if (hit) {
             this.world.shatterObstacle(hit, this.player.group.position.x, this.playerZ, this.speed);
+            playWallBreak();
           }
         } else {
           this.die();
@@ -1560,6 +1561,7 @@ export class Game {
             this.playerZ,
             this.speed
           );
+          playWallBreak();
         }
         if (this.playerZ - this.lastCloseCall > 3) {
           this.phaseStreak++;
