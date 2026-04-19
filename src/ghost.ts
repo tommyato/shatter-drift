@@ -186,7 +186,7 @@ export class GhostManager {
       depthWrite: false,
     });
     const nameSprite = new THREE.Sprite(nameMaterial);
-    nameSprite.scale.set(NAME_SPRITE_SCALE * 2, NAME_SPRITE_SCALE * 0.5, 1);
+    nameSprite.scale.set(NAME_SPRITE_SCALE * 4, NAME_SPRITE_SCALE * 0.5, 1);
     nameSprite.position.y = 1.2;
     group.add(nameSprite);
 
@@ -371,7 +371,7 @@ export class GhostManager {
 /** Render a short label to a CanvasTexture — used for ghost name sprites. */
 function makeNameTexture(name: string, color: number): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
+  canvas.width = 512;
   canvas.height = 64;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
