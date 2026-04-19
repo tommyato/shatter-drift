@@ -202,7 +202,7 @@ export class BossWaveManager {
         uBaseColor: { value: new THREE.Color(color) },
         uEdgeColor: { value: new THREE.Color(color).multiplyScalar(1.5) },
         uAccentColor: { value: new THREE.Color(color).multiplyScalar(1.3) },
-        uOpacity: { value: 0.85 },
+        uOpacity: { value: 1.0 },
       },
       transparent: true,
       side: THREE.FrontSide,

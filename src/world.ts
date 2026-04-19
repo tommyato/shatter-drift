@@ -926,7 +926,7 @@ export class World {
         uBaseColor: { value: new THREE.Color(c.obstacleBase) },
         uEdgeColor: { value: new THREE.Color(c.obstacleEdge) },
         uAccentColor: { value: new THREE.Color(c.obstacleEdge).multiplyScalar(1.3) },
-        uOpacity: { value: 0.85 },
+        uOpacity: { value: 1.0 },
       },
       transparent: true,
       side: THREE.FrontSide,

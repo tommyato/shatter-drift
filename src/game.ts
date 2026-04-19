@@ -1201,7 +1201,7 @@ export class Game {
 
     // World difficulty is now fully biome-driven (see world.ts)
 
-    // Update world — pass phasing state so obstacles become transparent (peek-through effect)
+    // Update world
     this.world.update(dt, this.playerZ, this.speed, this.player.shattered);
 
     // Update biomes
