@@ -245,63 +245,81 @@ export function playShatter() {
   osc.stop(t + 0.12);
 }
 
-/** Wall-break sound — deep punchy impact when phasing through a wall */
+/** Wall-break sound — crystal/glass shattering with bright high-freq content */
 export function playWallBreak() {
   if (!ctx || !masterGain) return;
   const t = ctx.currentTime;
 
-  // Low-frequency noise burst — glass/crystal shattering, filtered deep
-  const dur = 0.3;
-  const buffer = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < data.length; i++) {
-    const env = Math.pow(1 - i / data.length, 0.7);
-    data[i] = (Math.random() * 2 - 1) * env;
+  // 1. Bright glass shatter noise — highpass filtered for that crystalline crackle
+  const shatterDur = 0.25;
+  const shatterBuf = ctx.createBuffer(1, ctx.sampleRate * shatterDur, ctx.sampleRate);
+  const shatterData = shatterBuf.getChannelData(0);
+  for (let i = 0; i < shatterData.length; i++) {
+    // Sharp attack, fast decay with slight randomized "spikes" for individual shard hits
+    const progress = i / shatterData.length;
+    const env = Math.pow(1 - progress, 1.5) * (1 + 0.3 * Math.sin(progress * 200));
+    shatterData[i] = (Math.random() * 2 - 1) * env;
   }
-  const src = ctx.createBufferSource();
-  src.buffer = buffer;
+  const shatterSrc = ctx.createBufferSource();
+  shatterSrc.buffer = shatterBuf;
+  const hipass = ctx.createBiquadFilter();
+  hipass.type = "highpass";
+  hipass.frequency.setValueAtTime(3000, t);
+  hipass.Q.setValueAtTime(0.5, t);
+  const shatterGain = ctx.createGain();
+  shatterGain.gain.setValueAtTime(0.35, t);
+  shatterGain.gain.exponentialRampToValueAtTime(0.001, t + shatterDur);
+  shatterSrc.connect(hipass);
+  hipass.connect(shatterGain);
+  shatterGain.connect(masterGain);
+  if (reverbSend) shatterGain.connect(reverbSend);
+  shatterSrc.start(t);
+  shatterSrc.stop(t + shatterDur);
 
-  const filter = ctx.createBiquadFilter();
-  filter.type = "bandpass";
-  filter.frequency.setValueAtTime(800, t);
-  filter.frequency.exponentialRampToValueAtTime(150, t + dur);
-  filter.Q.setValueAtTime(0.8, t);
+  // 2. Multiple "tinkle" transients — short sine bursts at random high frequencies
+  //    Simulates individual glass shards hitting/ringing
+  for (let i = 0; i < 5; i++) {
+    const delay = Math.random() * 0.08;
+    const freq = 2000 + Math.random() * 4000; // 2-6 kHz
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, t + delay);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.7, t + delay + 0.06);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.06 + Math.random() * 0.04, t + delay);
+    g.gain.exponentialRampToValueAtTime(0.001, t + delay + 0.04 + Math.random() * 0.04);
+    osc.connect(g);
+    g.connect(masterGain);
+    if (reverbSend) g.connect(reverbSend);
+    osc.start(t + delay);
+    osc.stop(t + delay + 0.1);
+  }
 
-  const noiseGain = ctx.createGain();
-  noiseGain.gain.setValueAtTime(0.5, t);
-  noiseGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-
-  src.connect(filter);
-  filter.connect(noiseGain);
-  noiseGain.connect(masterGain);
-  src.start(t);
-  src.stop(t + dur);
-
-  // Sub-bass thump — the impact punch
-  const thump = ctx.createOscillator();
-  thump.type = "sine";
-  thump.frequency.setValueAtTime(120, t);
-  thump.frequency.exponentialRampToValueAtTime(40, t + 0.15);
-  const thumpGain = ctx.createGain();
-  thumpGain.gain.setValueAtTime(0.6, t);
-  thumpGain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-  thump.connect(thumpGain);
-  thumpGain.connect(masterGain);
-  thump.start(t);
-  thump.stop(t + 0.2);
-
-  // High crack transient
+  // 3. Sharp crack transient — bright sawtooth at 3-5kHz, very short
   const crack = ctx.createOscillator();
   crack.type = "sawtooth";
-  crack.frequency.setValueAtTime(1200, t);
-  crack.frequency.exponentialRampToValueAtTime(300, t + 0.05);
+  crack.frequency.setValueAtTime(4500, t);
+  crack.frequency.exponentialRampToValueAtTime(1500, t + 0.03);
   const crackGain = ctx.createGain();
-  crackGain.gain.setValueAtTime(0.15, t);
-  crackGain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+  crackGain.gain.setValueAtTime(0.2, t);
+  crackGain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
   crack.connect(crackGain);
   crackGain.connect(masterGain);
   crack.start(t);
-  crack.stop(t + 0.07);
+  crack.stop(t + 0.05);
+
+  // 4. Subtle sub-bass punch — present but not dominant (felt, not heard as "thud")
+  const thump = ctx.createOscillator();
+  thump.type = "sine";
+  thump.frequency.setValueAtTime(80, t);
+  thump.frequency.exponentialRampToValueAtTime(35, t + 0.1);
+  const thumpGain = ctx.createGain();
+  thumpGain.gain.setValueAtTime(0.15, t);
+  thumpGain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  thump.connect(thumpGain);
+  thumpGain.connect(masterGain);
+  thump.start(t);
+  thump.stop(t + 0.13);
 }
 
 /** Recombine sound — ascending chime */
