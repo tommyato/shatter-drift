@@ -261,6 +261,7 @@ export class World {
   private starfield!: THREE.Points;
   private starColors!: Float32Array;
   private starBaseColors!: Float32Array;
+  private starPhases!: Float32Array;
 
   // Shader-driven TRON grid floor
   private gridFloorMesh!: THREE.Mesh;
@@ -295,15 +296,22 @@ export class World {
   }
 
   private createStarfield() {
-    const count = 2000;
+    const count = 2500;
+    const STAR_RADIUS = 150;
     const positions = new Float32Array(count * 3);
     this.starBaseColors = new Float32Array(count * 3);
     this.starColors = new Float32Array(count * 3);
+    this.starPhases = new Float32Array(count);
 
     for (let i = 0; i < count; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 200;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 100 + 20;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 200;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const r = STAR_RADIUS * (0.8 + Math.random() * 0.2);
+      const sinPhi = Math.sin(phi);
+
+      positions[i * 3] = r * sinPhi * Math.cos(theta);
+      positions[i * 3 + 1] = Math.abs(r * sinPhi * Math.sin(theta)) + 5;
+      positions[i * 3 + 2] = r * Math.cos(phi);
 
       const brightness = 0.3 + Math.random() * 0.7;
       this.starBaseColors[i * 3] = brightness;
@@ -312,6 +320,7 @@ export class World {
       this.starColors[i * 3] = brightness;
       this.starColors[i * 3 + 1] = brightness;
       this.starColors[i * 3 + 2] = brightness;
+      this.starPhases[i] = Math.random() * Math.PI * 2;
     }
 
     const geo = new THREE.BufferGeometry();
@@ -319,7 +328,7 @@ export class World {
     geo.setAttribute("color", new THREE.BufferAttribute(this.starColors, 3));
 
     const mat = new THREE.PointsMaterial({
-      size: 0.15,
+      size: 0.3,
       vertexColors: true,
       transparent: true,
       opacity: 0.8,
@@ -602,8 +611,9 @@ export class World {
     this.gridFloorMat.uniforms.uPlayerZ.value = playerZ;
     this.gridFloorMat.uniforms.uPlayerX.value = playerX;
 
-    // Move starfield with player (parallax)
-    this.starfield.position.z = playerZ * 0.3;
+    // Move starfield with player so it behaves like a sky dome.
+    this.starfield.position.x = 0;
+    this.starfield.position.z = playerZ;
 
     // Update biome-reactive colors
     this.updateBiomeVisuals();
@@ -612,22 +622,17 @@ export class World {
     this.voronoiShatter.update(dt);
   }
 
-  private lastStarTint: [number, number, number] = [0, 0, 0];
-
   private updateBiomeVisuals() {
     const c = this.biomes.colors;
-
-    // Star tint — only update when tint actually changes (saves iterating 2000 stars every frame)
     const tint = c.starTint;
-    if (tint[0] !== this.lastStarTint[0] || tint[1] !== this.lastStarTint[1] || tint[2] !== this.lastStarTint[2]) {
-      this.lastStarTint = [tint[0], tint[1], tint[2]];
-      for (let i = 0; i < this.starBaseColors.length / 3; i++) {
-        this.starColors[i * 3] = this.starBaseColors[i * 3] * tint[0];
-        this.starColors[i * 3 + 1] = this.starBaseColors[i * 3 + 1] * tint[1];
-        this.starColors[i * 3 + 2] = this.starBaseColors[i * 3 + 2] * tint[2];
-      }
-      (this.starfield.geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+    const time = this.plasmaElapsed;
+    for (let i = 0; i < this.starPhases.length; i++) {
+      const shimmer = 0.7 + 0.3 * Math.sin(time * (1.5 + this.starPhases[i] * 0.5) + this.starPhases[i]);
+      this.starColors[i * 3] = this.starBaseColors[i * 3] * tint[0] * shimmer;
+      this.starColors[i * 3 + 1] = this.starBaseColors[i * 3 + 1] * tint[1] * shimmer;
+      this.starColors[i * 3 + 2] = this.starBaseColors[i * 3 + 2] * tint[2] * shimmer;
     }
+    (this.starfield.geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
 
     // Shader grid floor — update biome color and opacity
     this.gridFloorMat.uniforms.uGridColor.value.setHex(c.gridColor);
