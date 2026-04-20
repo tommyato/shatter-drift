@@ -48,7 +48,7 @@ export interface VibeversePortal {
 const SPAWN_DISTANCE = 80; // how far ahead to spawn
 const DESPAWN_DISTANCE = -10; // how far behind to remove
 const ORB_SPACING = 3;
-const LANE_WIDTH = 12; // total playable width (-6 to 6)
+const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 const PORTAL_INTERVAL = 300; // meters between portal appearances
 
 const GRID_FLOOR_VERTEX = /* glsl */ `
@@ -787,7 +787,7 @@ export class World {
   }
 
   private spawnGate(z: number) {
-    const gapX = (this.random() - 0.5) * 7;
+    const gapX = (this.random() - 0.5) * 5;
     // Gap narrows with each biome — more forgiving early, punishing late
     const biomeGapWidths = [4.5, 4.2, 3.8, 3.4, 3.0];
     const gapWidth = biomeGapWidths[Math.min(this.biomes.biomeIndex, 4)];
@@ -828,7 +828,7 @@ export class World {
   }
 
   private spawnPillar(z: number) {
-    const x = (this.random() - 0.5) * 8;
+    const x = (this.random() - 0.5) * 6;
     const width = 1 + this.random() * 1.5;
     const height = 2 + this.random() * 2;
 
@@ -880,7 +880,7 @@ export class World {
 
   private spawnWideBar(z: number) {
     const gapSide = this.random() < 0.5 ? -1 : 1;
-    const gapX = gapSide * (2.5 + this.random() * 3);
+    const gapX = gapSide * (2 + this.random() * 2);
 
     const width = LANE_WIDTH * 2;
     const height = 1.5;
@@ -960,7 +960,7 @@ export class World {
 
     for (let i = 0; i < count; i++) {
       const side = startSide * (i % 2 === 0 ? 1 : -1);
-      const x = side * (2 + this.random() * 2);
+      const x = side * (1.5 + this.random() * 1.5);
       const width = 2 + this.random();
       const height = 2 + this.random() * 1.5;
       const mesh = this.createObstacleMesh(width, height, 0.8, 0, 0);
@@ -990,7 +990,7 @@ export class World {
    * Gap is in the center — player threads the needle.
    */
   private spawnDiamond(z: number) {
-    const cx = (this.random() - 0.5) * 4;
+    const cx = (this.random() - 0.5) * 3;
     // Tighter diamond in later biomes — less room to thread the needle
     const biomeSpread = [4.0, 3.5, 3.0, 2.5, 2.0];
     const spread = biomeSpread[Math.min(this.biomes.biomeIndex, 4)];
@@ -1037,7 +1037,7 @@ export class World {
     const gateSpacing = biomeGateSpacing[Math.min(this.biomes.biomeIndex, 4)];
 
     for (let i = 0; i < 3; i++) {
-      const gapX = (i % 2 === 0 ? -1 : 1) * (2 + this.random() * 2);
+      const gapX = (i % 2 === 0 ? -1 : 1) * (1.5 + this.random() * 1.5);
       const gapWidth = biomeZigzagGap[Math.min(this.biomes.biomeIndex, 4)];
       const wallHeight = 3;
       const wallThickness = 0.6;
@@ -1088,7 +1088,7 @@ export class World {
     const fieldDepth = 10;
 
     for (let i = 0; i < count; i++) {
-      const x = (this.random() - 0.5) * 9;
+      const x = (this.random() - 0.5) * 7;
       const pz = z + this.random() * fieldDepth;
       const w = 0.6 + this.random() * 0.8;
       const h = 1 + this.random() * 2;
@@ -1114,7 +1114,7 @@ export class World {
 
   private spawnOrbCluster(z: number) {
     const count = 1 + Math.floor(this.random() * 3);
-    const baseX = (this.random() - 0.5) * 8;
+    const baseX = (this.random() - 0.5) * 6;
 
     for (let i = 0; i < count; i++) {
       const x = baseX + (i - (count - 1) / 2) * 1.5;
@@ -1251,7 +1251,7 @@ export class World {
 
   private spawnPortal(z: number) {
     const group = new THREE.Group();
-    const x = (this.random() < 0.5 ? -1 : 1) * (2.5 + this.random() * 2.5);
+    const x = (this.random() < 0.5 ? -1 : 1) * (2 + this.random() * 1.5);
 
     // Torus ring
     const torusGeo = new THREE.TorusGeometry(1.5, 0.15, 16, 32);

@@ -156,7 +156,7 @@ export class Player {
     // Horizontal movement
     const moveSpeed = 8;
     this.laneX += moveInput * moveSpeed * dt;
-    this.laneX = THREE.MathUtils.clamp(this.laneX, -5.5, 5.5);
+    this.laneX = THREE.MathUtils.clamp(this.laneX, -4, 4);
 
     // Smooth rendering position
     this.renderX = THREE.MathUtils.lerp(this.renderX, this.laneX, 1 - Math.exp(-15 * dt));
