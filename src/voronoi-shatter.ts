@@ -292,7 +292,7 @@ export class VoronoiShatter {
       let closestDist = Infinity;
 
       obj.traverse((child) => {
-        if (child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry) {
+        if (child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry && child.visible) {
           const worldPos = new THREE.Vector3();
           child.getWorldPosition(worldPos);
           const dist = Math.abs(worldPos.x - impactX);

@@ -22,6 +22,8 @@ export interface Obstacle {
   /** Gap half-width */
   gapHalfWidth: number;
   active: boolean;
+  /** True after one wall of a gate has been shattered — prevents double-shatter */
+  partiallyShattered: boolean;
 }
 
 export interface EnergyOrb {
@@ -826,6 +828,7 @@ export class World {
       gapX,
       gapHalfWidth: gapWidth / 2,
       active: true,
+      partiallyShattered: false,
     });
   }
 
@@ -848,6 +851,7 @@ export class World {
       gapX: 0,
       gapHalfWidth: 0,
       active: true,
+      partiallyShattered: false,
     });
   }
 
@@ -877,6 +881,7 @@ export class World {
       gapX: 0,
       gapHalfWidth: 0,
       active: true,
+      partiallyShattered: false,
     });
   }
 
@@ -906,6 +911,7 @@ export class World {
       gapX,
       gapHalfWidth: 2,
       active: true,
+      partiallyShattered: false,
     });
   }
 
@@ -980,6 +986,7 @@ export class World {
         gapX: 0,
         gapHalfWidth: 0,
         active: true,
+        partiallyShattered: false,
       });
     }
 
@@ -1024,6 +1031,7 @@ export class World {
         gapX: 0,
         gapHalfWidth: 0,
         active: true,
+        partiallyShattered: false,
       });
     }
   }
@@ -1074,6 +1082,7 @@ export class World {
         gapX,
         gapHalfWidth: gapWidth / 2,
         active: true,
+        partiallyShattered: false,
       });
     }
 
@@ -1108,6 +1117,7 @@ export class World {
         gapX: 0,
         gapHalfWidth: 0,
         active: true,
+        partiallyShattered: false,
       });
     }
 
@@ -1334,6 +1344,7 @@ export class World {
       const hit = closest as THREE.Mesh | null;
       if (hit) {
         hit.visible = false;
+        obs.partiallyShattered = true;
 
         // Widen the gap to cover the destroyed wall's area
         const childX = new THREE.Vector3();
@@ -1374,6 +1385,7 @@ export class World {
       if (dz > 1.5) continue;
 
       if (obs.isGate) {
+        if (obs.partiallyShattered) continue;
         const dx = Math.abs(playerX - obs.gapX);
         if (dx > obs.gapHalfWidth - 0.3) return obs;
       } else {
