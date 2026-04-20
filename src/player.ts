@@ -157,8 +157,9 @@ export class Player {
     // Horizontal movement
     const moveSpeed = 8;
     this.laneX += moveInput * moveSpeed * dt;
-    // Clamp to wall distance — walls are transparent, so center can touch them
-    const bound = WALL_DISTANCE;
+    // Allow player to reach past the side walls (camera parallax makes the
+    // wall-floor junction appear further out than it is in world space)
+    const bound = 7;
     this.laneX = THREE.MathUtils.clamp(this.laneX, -bound, bound);
 
     // Smooth rendering position
@@ -206,16 +207,19 @@ export class Player {
     this.glowRing.rotation.z += dt * 0.5;
     this.glowRing.position.y = -1.5 - this.group.position.y; // pin to floor in world space
 
-    // Shield bubble animation
+    // Shield bubble animation — hide entirely when inactive so wireframe
+    // doesn't render as dark outlines at near-zero opacity
     const shieldMat = this.shieldBubble.material as THREE.MeshStandardMaterial;
     if (this.shieldActive) {
+      this.shieldBubble.visible = true;
       shieldMat.opacity = THREE.MathUtils.lerp(shieldMat.opacity, 0.15, 1 - Math.exp(-5 * dt));
       this.shieldBubble.rotation.y += dt * 1.5;
       this.shieldBubble.rotation.x += dt * 0.7;
       const pulse = 1 + Math.sin(performance.now() * 0.005) * 0.05;
       this.shieldBubble.scale.setScalar(pulse);
     } else {
-      shieldMat.opacity = THREE.MathUtils.lerp(shieldMat.opacity, 0, 1 - Math.exp(-8 * dt));
+      shieldMat.opacity = 0;
+      this.shieldBubble.visible = false;
     }
 
     // Trail position (world space)
@@ -235,7 +239,7 @@ export class Player {
 
   /** Get collision radius (smaller when shattered = more forgiving) */
   getCollisionRadius(): number {
-    return this.shattered ? 0.15 : 0.35;
+    return this.shattered ? 0.1 : 0.25;
   }
 
   /** Check if player can collect (must be whole) */
