@@ -1,3 +1,7 @@
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+
 // src/constants.ts
 var PLAYABLE_HALF_WIDTH = 10;
 var LANE_WIDTH = 9;
@@ -88,12 +92,12 @@ function getContainerCache(container) {
   return cache;
 }
 var ContainerImpl = class _ContainerImpl {
-  bindings = /* @__PURE__ */ new Map();
-  parent;
-  rootResolvingSet;
-  resolvingChain;
-  destroyed = false;
   constructor(parent, rootResolvingSet, resolvingChain) {
+    __publicField(this, "bindings", /* @__PURE__ */ new Map());
+    __publicField(this, "parent");
+    __publicField(this, "rootResolvingSet");
+    __publicField(this, "resolvingChain");
+    __publicField(this, "destroyed", false);
     this.parent = parent;
     this.rootResolvingSet = rootResolvingSet;
     this.resolvingChain = resolvingChain;
@@ -295,7 +299,9 @@ var ACTION_TO_STATE = {
   0: { horizontal: 0, shatter: false },
   1: { horizontal: -1, shatter: false },
   2: { horizontal: 1, shatter: false },
-  3: { horizontal: 0, shatter: true }
+  3: { horizontal: 0, shatter: true },
+  4: { horizontal: -1, shatter: true },
+  5: { horizontal: 1, shatter: true }
 };
 function createAgentInput() {
   let currentAction = 0;
@@ -949,9 +955,9 @@ function createRuntime(config = {}) {
 
 // src/simulation.ts
 var ShatterDriftSimulation = class {
-  config;
-  runtime;
   constructor(config = {}) {
+    __publicField(this, "config");
+    __publicField(this, "runtime");
     this.config = {
       fixedDt: Number.isFinite(config.fixedDt) && config.fixedDt !== void 0 ? Number(config.fixedDt) : null
     };

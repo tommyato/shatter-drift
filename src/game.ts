@@ -1132,8 +1132,9 @@ export class Game {
         phaseLocked: this.phaseLocked,
         obstacles: this.world.obstacles,
       });
-      moveX = action === 1 ? -1 : action === 2 ? 1 : 0;
-      shatterInput = action === 3;
+      // Actions 0-5: idle, left, right, shatter, shatter+left, shatter+right
+      moveX = (action === 1 || action === 4) ? -1 : (action === 2 || action === 5) ? 1 : 0;
+      shatterInput = action >= 3;
     } else if (this.autopilot) {
       const ai = this.autopilot.update(
         this.player.group.position.x,

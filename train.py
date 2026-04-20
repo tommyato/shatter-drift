@@ -100,7 +100,7 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
         elif t == "close_call":
             reward += 0.05
         elif t == "shatter_activated":
-            reward -= 0.01  # slight discourage — learn to dodge first
+            reward += 0.15  # encourage shattering — it's the core mechanic
         elif t == "wall_destroyed":
             reward += 0.1  # shattering through a wall is fine
         elif t == "death":
@@ -216,7 +216,7 @@ class GameEnv(gym.Env):
         resp = self._send({"op": "reset"})
         obs = _parse_obs(resp["obs"])
         self.observation_space = Box(low=obs_low, high=obs_high, shape=obs.shape, dtype=np.float32)
-        self.action_space = Discrete(4)
+        self.action_space = Discrete(6)
         self._initial_obs = obs
 
     def _send(self, msg: dict) -> dict:

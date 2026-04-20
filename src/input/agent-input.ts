@@ -5,6 +5,8 @@ const ACTION_TO_STATE: Record<number, SimulationInputState> = {
 	1: { horizontal: -1, shatter: false },
 	2: { horizontal: 1, shatter: false },
 	3: { horizontal: 0, shatter: true },
+	4: { horizontal: -1, shatter: true },
+	5: { horizontal: 1, shatter: true },
 }
 
 export function createAgentInput(): SimulationInput {
