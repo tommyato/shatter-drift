@@ -34,6 +34,8 @@ export interface SimulationState {
 	nextObstacleZ: number
 	nextOrbZ: number
 	lastCloseCallZ: number
+	nextBossZ: number
+	bossCount: number
 }
 
 export interface SimulationWorld {
@@ -63,6 +65,8 @@ function createInitialState(): SimulationState {
 		nextObstacleZ: 30,
 		nextOrbZ: 15,
 		lastCloseCallZ: -10,
+		nextBossZ: 500, // matches BOSS_INTERVAL in bosswaves.ts
+		bossCount: 0,
 	}
 }
 

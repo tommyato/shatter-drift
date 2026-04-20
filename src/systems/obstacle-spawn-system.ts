@@ -7,6 +7,8 @@ import {
 } from '../constants'
 import type { SimulationObstacle, SimulationWorld } from '../sim-world'
 
+const BOSS_WAVE_INTERVAL = 500
+
 function createGate(world: SimulationWorld, z: number, gapHalfWidth: number): void {
 	const gapX = (world.random() - 0.5) * 5
 	const leftWidth = gapX - gapHalfWidth + PLAYABLE_HALF_WIDTH
@@ -143,6 +145,85 @@ function getObstacleSpacing(world: SimulationWorld): number {
 	return 5 + world.random() * 4
 }
 
+// Boss type 0: SpinningGate — 4 wide pillars spread over ~12m zone; gaps exist but tight
+function spawnBossSpinningGate(world: SimulationWorld, bossZ: number): void {
+	for (const zOff of [-6, -2, 2, 6]) {
+		world.state.obstacles.push({
+			z: bossZ + zOff,
+			x: 0,
+			halfWidth: 3,
+			halfHeight: 1.5,
+			isGate: false,
+			gapX: 0,
+			gapHalfWidth: 0,
+			active: true,
+			partiallyShattered: false,
+			passed: false,
+		})
+	}
+}
+
+// Boss type 1: ConvergingWalls — 3 rows with narrow gaps (gapHalfWidth=1.5 vs normal 2.25)
+function spawnBossConvergingWalls(world: SimulationWorld, bossZ: number): void {
+	for (const zOff of [-5, 0, 5]) {
+		createGate(world, bossZ + zOff, 1.5)
+	}
+}
+
+// Boss type 2: OrbitalRings — 5 pillars alternating sides; dodgeable
+function spawnBossOrbitalRings(world: SimulationWorld, bossZ: number): void {
+	const zOffsets = [-6, -3, 0, 3, 6]
+	zOffsets.forEach((zOff, i) => {
+		world.state.obstacles.push({
+			z: bossZ + zOff,
+			x: i % 2 === 0 ? -2 : 2,
+			halfWidth: 0.75,
+			halfHeight: 1.5,
+			isGate: false,
+			gapX: 0,
+			gapHalfWidth: 0,
+			active: true,
+			partiallyShattered: false,
+			passed: false,
+		})
+	})
+}
+
+// Boss type 3: LaserGrid — 4 full-width bars; CANNOT be dodged — agent MUST shatter
+function spawnBossLaserGrid(world: SimulationWorld, bossZ: number): void {
+	for (const zOff of [-6, -2, 2, 6]) {
+		world.state.obstacles.push({
+			z: bossZ + zOff,
+			x: 0,
+			halfWidth: PLAYABLE_HALF_WIDTH,
+			halfHeight: 0.4,
+			isGate: false,
+			gapX: 0,
+			gapHalfWidth: 0,
+			active: true,
+			partiallyShattered: false,
+			passed: false,
+		})
+	}
+}
+
+function spawnBossWave(world: SimulationWorld, bossZ: number): void {
+	switch (world.state.bossCount % 4) {
+		case 0:
+			spawnBossSpinningGate(world, bossZ)
+			break
+		case 1:
+			spawnBossConvergingWalls(world, bossZ)
+			break
+		case 2:
+			spawnBossOrbitalRings(world, bossZ)
+			break
+		case 3:
+			spawnBossLaserGrid(world, bossZ)
+			break
+	}
+}
+
 export function createObstacleSpawnSystem(world: SimulationWorld) {
 	return (_dt: number) => {
 		if (world.state.nextObstacleZ === 0) {
@@ -160,6 +241,13 @@ export function createObstacleSpawnSystem(world: SimulationWorld) {
 		while (world.state.nextOrbZ < world.state.playerZ + SPAWN_DISTANCE) {
 			spawnOrbCluster(world, world.state.nextOrbZ)
 			world.state.nextOrbZ += ORB_SPACING + world.random() * 5
+		}
+
+		// Boss wave spawning — additive on top of regular obstacles
+		while (world.state.nextBossZ < world.state.playerZ + SPAWN_DISTANCE) {
+			spawnBossWave(world, world.state.nextBossZ)
+			world.state.nextBossZ += BOSS_WAVE_INTERVAL
+			world.state.bossCount += 1
 		}
 	}
 }
