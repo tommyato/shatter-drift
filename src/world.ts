@@ -55,6 +55,8 @@ const ORB_SPACING = 3;
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 /** Distance from center to side walls — player bounds derive from this */
 export const WALL_DISTANCE = LANE_WIDTH / 2 + 1.5;
+/** Actual playable half-width accounting for camera parallax */
+export const PLAYABLE_HALF_WIDTH = 10;
 const PORTAL_INTERVAL = 300; // meters between portal appearances
 
 const GRID_FLOOR_VERTEX = /* glsl */ `
@@ -803,16 +805,16 @@ export class World {
     const group = new THREE.Group();
     group.position.z = z;
 
-    // Left wall
-    const leftWidth = (gapX - gapWidth / 2) + LANE_WIDTH / 2 + 1;
+    // Left wall — spans from -PLAYABLE_HALF_WIDTH to the gap's left edge
+    const leftWidth = (gapX - gapWidth / 2) + PLAYABLE_HALF_WIDTH;
     if (leftWidth > 0.5) {
-      const leftX = -LANE_WIDTH / 2 - 1 + leftWidth / 2;
+      const leftX = -PLAYABLE_HALF_WIDTH + leftWidth / 2;
       group.add(this.createObstacleMesh(leftWidth, wallHeight, wallThickness, leftX, 0));
     }
 
-    // Right wall
+    // Right wall — spans from gap's right edge to +PLAYABLE_HALF_WIDTH
     const rightStart = gapX + gapWidth / 2;
-    const rightWidth = LANE_WIDTH / 2 + 1 - rightStart;
+    const rightWidth = PLAYABLE_HALF_WIDTH - rightStart;
     if (rightWidth > 0.5) {
       const rightX = rightStart + rightWidth / 2;
       group.add(this.createObstacleMesh(rightWidth, wallHeight, wallThickness, rightX, 0));
@@ -823,7 +825,7 @@ export class World {
     // Store actual wall segments for AABB collision
     const segments: Array<{ x: number; halfWidth: number }> = [];
     if (leftWidth > 0.5) {
-      const leftX = -LANE_WIDTH / 2 - 1 + leftWidth / 2;
+      const leftX = -PLAYABLE_HALF_WIDTH + leftWidth / 2;
       segments.push({ x: leftX, halfWidth: leftWidth / 2 });
     }
     if (rightWidth > 0.5) {
@@ -834,7 +836,7 @@ export class World {
     this.obstacles.push({
       mesh: group,
       z,
-      halfWidth: LANE_WIDTH,
+      halfWidth: PLAYABLE_HALF_WIDTH,
       halfHeight: wallHeight / 2,
       x: 0,
       isGate: true,
@@ -902,46 +904,50 @@ export class World {
   private spawnWideBar(z: number) {
     const gapSide = this.random() < 0.5 ? -1 : 1;
     const gapX = gapSide * (2 + this.random() * 2);
+    const gapHalf = 2; // gap half-width
 
-    const width = LANE_WIDTH * 2;
     const height = 1.5;
 
     const group = new THREE.Group();
     group.position.z = z;
 
-    // Bar spanning most of the width with a gap on one side
-    const barX = -gapSide * 1;
-    group.add(this.createObstacleMesh(width * 0.6, height, 0.5, barX, 0));
+    // Left segment: -PLAYABLE_HALF_WIDTH to gapLeft
+    const gapLeft = gapX - gapHalf;
+    const gapRight = gapX + gapHalf;
+    const leftWidth = gapLeft + PLAYABLE_HALF_WIDTH;
+    if (leftWidth > 0.5) {
+      const leftX = -PLAYABLE_HALF_WIDTH + leftWidth / 2;
+      group.add(this.createObstacleMesh(leftWidth, height, 0.5, leftX, 0));
+    }
+    // Right segment: gapRight to +PLAYABLE_HALF_WIDTH
+    const rightWidth = PLAYABLE_HALF_WIDTH - gapRight;
+    if (rightWidth > 0.5) {
+      const rightX = gapRight + rightWidth / 2;
+      group.add(this.createObstacleMesh(rightWidth, height, 0.5, rightX, 0));
+    }
 
     this.scene.add(group);
 
-    // Compute wall segments: bar spans barX ± halfBarWidth, with gap cut out
-    const halfBarWidth = width * 0.3;
-    const barLeft = barX - halfBarWidth;
-    const barRight = barX + halfBarWidth;
-    const gapLeft = gapX - 2;
-    const gapRight = gapX + 2;
+    // Wall segments for AABB collision
     const segments: Array<{ x: number; halfWidth: number }> = [];
-    // Segment left of gap
-    if (gapLeft > barLeft) {
-      const segW = gapLeft - barLeft;
-      segments.push({ x: barLeft + segW / 2, halfWidth: segW / 2 });
+    if (leftWidth > 0.5) {
+      const leftX = -PLAYABLE_HALF_WIDTH + leftWidth / 2;
+      segments.push({ x: leftX, halfWidth: leftWidth / 2 });
     }
-    // Segment right of gap
-    if (barRight > gapRight) {
-      const segW = barRight - gapRight;
-      segments.push({ x: gapRight + segW / 2, halfWidth: segW / 2 });
+    if (rightWidth > 0.5) {
+      const rightX = gapRight + rightWidth / 2;
+      segments.push({ x: rightX, halfWidth: rightWidth / 2 });
     }
 
     this.obstacles.push({
       mesh: group,
       z,
-      halfWidth: halfBarWidth,
+      halfWidth: PLAYABLE_HALF_WIDTH,
       halfHeight: height / 2,
-      x: barX,
+      x: 0,
       isGate: true,
       gapX,
-      gapHalfWidth: 2,
+      gapHalfWidth: gapHalf,
       active: true,
       partiallyShattered: false,
       wallSegments: segments,
@@ -1089,16 +1095,16 @@ export class World {
       const group = new THREE.Group();
       group.position.z = pz;
 
-      // Left wall
-      const leftWidth = (gapX - gapWidth / 2) + LANE_WIDTH / 2 + 1;
+      // Left wall — spans from -PLAYABLE_HALF_WIDTH to gap's left edge
+      const leftWidth = (gapX - gapWidth / 2) + PLAYABLE_HALF_WIDTH;
       if (leftWidth > 0.5) {
-        const leftX = -LANE_WIDTH / 2 - 1 + leftWidth / 2;
+        const leftX = -PLAYABLE_HALF_WIDTH + leftWidth / 2;
         group.add(this.createObstacleMesh(leftWidth, wallHeight, wallThickness, leftX, 0));
       }
 
-      // Right wall
+      // Right wall — spans from gap's right edge to +PLAYABLE_HALF_WIDTH
       const rightStart = gapX + gapWidth / 2;
-      const rightWidth = LANE_WIDTH / 2 + 1 - rightStart;
+      const rightWidth = PLAYABLE_HALF_WIDTH - rightStart;
       if (rightWidth > 0.5) {
         const rightX = rightStart + rightWidth / 2;
         group.add(this.createObstacleMesh(rightWidth, wallHeight, wallThickness, rightX, 0));
@@ -1109,7 +1115,7 @@ export class World {
       // Store actual wall segments for AABB collision
       const segments: Array<{ x: number; halfWidth: number }> = [];
       if (leftWidth > 0.5) {
-        const leftX = -LANE_WIDTH / 2 - 1 + leftWidth / 2;
+        const leftX = -PLAYABLE_HALF_WIDTH + leftWidth / 2;
         segments.push({ x: leftX, halfWidth: leftWidth / 2 });
       }
       if (rightWidth > 0.5) {
@@ -1120,7 +1126,7 @@ export class World {
       this.obstacles.push({
         mesh: group,
         z: pz,
-        halfWidth: LANE_WIDTH,
+        halfWidth: PLAYABLE_HALF_WIDTH,
         halfHeight: wallHeight / 2,
         x: 0,
         isGate: true,
@@ -1396,7 +1402,7 @@ export class World {
         // Widen the gap to cover the destroyed wall's area
         const childX = new THREE.Vector3();
         hit.getWorldPosition(childX);
-        const edge = WALL_DISTANCE;
+        const edge = PLAYABLE_HALF_WIDTH;
         if (childX.x < obs.gapX) {
           // Left wall destroyed — extend gap leftward
           const rightEdge = obs.gapX + obs.gapHalfWidth;

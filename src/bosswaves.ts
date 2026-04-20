@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BiomeManager } from "./biomes";
+import { PLAYABLE_HALF_WIDTH } from "./world";
 import { PLASMA_OBSTACLE_FRAGMENT, PLASMA_VERTEX } from "./shaders";
 
 /**
@@ -288,7 +289,7 @@ export class BossWaveManager {
   private createLaserGrid(group: THREE.Group, parts: BossPart[], color: number) {
     // Horizontal bars that oscillate vertically (some can be ducked, some can't)
     for (let i = 0; i < 4; i++) {
-      const bar = this.createBossMesh(LANE_WIDTH, 0.8, 0.5, color);
+      const bar = this.createBossMesh(PLAYABLE_HALF_WIDTH * 2, 0.8, 0.5, color);
       const x = (this.random() - 0.5) * 4;
       bar.position.set(x, 1.5, i * 4 - 6);
       group.add(bar);
@@ -297,7 +298,7 @@ export class BossWaveManager {
         mesh: bar,
         baseX: x,
         baseY: 1.5,
-        halfWidth: LANE_WIDTH / 2,
+        halfWidth: PLAYABLE_HALF_WIDTH,
         pattern: "oscillate",
         phase: i * 2,
         speed: 1.5,
@@ -358,4 +359,3 @@ export class BossWaveManager {
   }
 }
 
-const LANE_WIDTH = 9;
