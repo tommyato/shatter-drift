@@ -94,25 +94,31 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
     for ev in events:
         t = ev.get("type")
         if t == "obstacle_passed":
-            reward += 0.1
+            reward += 0.5  # primary objective — clear obstacles
         elif t == "orb_collected":
-            reward += 0.05
+            reward += 0.1
         elif t == "close_call":
-            reward += 0.02
+            reward += 0.05
         elif t == "shatter_activated":
-            reward -= 0.02  # discourage spamming — learn to dodge first
+            reward -= 0.01  # slight discourage — learn to dodge first
         elif t == "wall_destroyed":
-            reward += 0.05  # shattering through a wall is fine, just not spam
+            reward += 0.1  # shattering through a wall is fine
         elif t == "death":
             reward -= 1.0
 
-    # Per-step survival bonus (dense baseline signal)
-    reward += 0.01
+    # Per-step survival bonus scaled by speed — faster survival is harder
+    # and more valuable. At initial speed 12, this is 0.01; at speed 30
+    # it's 0.025. Prevents the agent from being indifferent to progress.
+    if obs is not None:
+        speed_norm = float(obs[2])  # speed / MAX_SPEED, 0-1
+        reward += 0.005 + 0.015 * speed_norm
+    else:
+        reward += 0.01
 
     # Proximity-based gap alignment shaping (CRITICAL for learning signal).
-    # Same principle as pong's ball-proximity reward: gives the agent dense
-    # gradient signal for "move toward the right spot" before it ever passes
-    # an obstacle. Without this, the agent has no idea which direction to go.
+    # Wider window (0.6) and stronger magnitude (0.02) than v1.
+    # Gives the agent dense gradient signal for "move toward the right spot"
+    # before it ever passes an obstacle.
     if obs is not None:
         player_x = float(obs[0])  # normalized [-1, 1]
         nearest_z = float(obs[4])  # distance to nearest obstacle [0, 1]
@@ -120,12 +126,11 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
         nearest_width = float(obs[6])  # gap/obstacle width [0, 1]
         nearest_is_gate = float(obs[7])  # 1 = gate (has gap), 0 = bar
 
-        if nearest_z > 0.0 and nearest_z < 0.4:  # obstacle is approaching
+        if nearest_z > 0.0 and nearest_z < 0.6:  # wider approach window
             if nearest_is_gate > 0.5:
                 # Gate: reward being aligned with the gap center
                 distance_to_gap = abs(player_x - nearest_center)
-                # Normalize by gap width — closer to gap center = higher reward
-                gap_w = max(nearest_width, 0.05)  # avoid div-by-zero
+                gap_w = max(nearest_width, 0.05)
                 alignment = max(0.0, 1.0 - distance_to_gap / gap_w)
             else:
                 # Bar: reward being away from the obstacle center
@@ -134,8 +139,8 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
                 alignment = min(1.0, distance_from_bar / bar_w)
 
             # Stronger signal when obstacle is closer (closer = more urgent)
-            urgency = 1.0 - nearest_z / 0.4
-            reward += 0.008 * alignment * urgency
+            urgency = 1.0 - nearest_z / 0.6
+            reward += 0.02 * alignment * urgency
 
     return reward
 
@@ -491,6 +496,12 @@ def main() -> int:
     # PPO training loop
     # -----------------------------------------------------------------------
     for update in range(1, num_updates + 1):
+        # -- LR annealing (linear decay to 0) --
+        frac = 1.0 - (update - 1) / num_updates
+        lr_now = learning_rate * frac
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr_now
+
         # -- Rollout --
         for step in range(num_steps):
             global_step += 1
