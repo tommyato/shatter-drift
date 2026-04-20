@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { WALL_DISTANCE, PLAYABLE_HALF_WIDTH } from "./world";
+import { PLAYER_MOVE_SPEED, PLAYABLE_HALF_WIDTH } from "./constants";
 import type { CrystalSkin } from "./unlocks";
 
 const FRAGMENT_COUNT = 20; // icosahedron faces
@@ -155,8 +155,7 @@ export class Player {
 
   update(dt: number, moveInput: number) {
     // Horizontal movement
-    const moveSpeed = 8;
-    this.laneX += moveInput * moveSpeed * dt;
+    this.laneX += moveInput * PLAYER_MOVE_SPEED * dt;
     // Allow player to reach past the side walls (camera parallax makes the
     // wall-floor junction appear further out than it is in world space)
     this.laneX = THREE.MathUtils.clamp(this.laneX, -PLAYABLE_HALF_WIDTH, PLAYABLE_HALF_WIDTH);

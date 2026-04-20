@@ -28,6 +28,17 @@ import { RibbonTrail } from "./ribbon";
 import { RunHistoryTracker } from "./stats";
 import { fetchLeaderboard, submitScore, getPlayerName, setPlayerName, fetchGhosts, submitGhost, fetchGhostUploadThreshold, type LeaderboardEntry } from "./leaderboard";
 import { GhostRecorder, GhostManager } from "./ghost";
+import {
+  CLOSE_CALL_SCORE,
+  COMBO_MAX,
+  INITIAL_SPEED,
+  MAX_SPEED,
+  ORB_SCORE,
+  PHASE_DRAIN_RATE,
+  PHASE_MIN_THRESHOLD,
+  PHASE_RECHARGE_RATE,
+  computeSpeed,
+} from "./constants";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {
@@ -210,11 +221,6 @@ enum GameState {
 }
 
 // --- Game tuning ---
-const INITIAL_SPEED = 12;
-const MAX_SPEED = 45;
-const ORB_SCORE = 100;
-const CLOSE_CALL_SCORE = 50;
-const COMBO_MAX = 10;
 const BIOME_MILESTONES = [
   { name: "THE VOID", startDistance: 0 },
   { name: "CRYSTAL CAVES", startDistance: 300 },
@@ -232,10 +238,6 @@ const GRADE_THRESHOLDS = [
 ] as const;
 
 export class Game {
-  private static readonly PHASE_DRAIN_RATE = 0.25;
-  private static readonly PHASE_RECHARGE_RATE = 0.15;
-  private static readonly PHASE_MIN_THRESHOLD = 0.2;
-
   // Three.js
   private renderer!: THREE.WebGLRenderer;
   private scene!: THREE.Scene;
@@ -1135,16 +1137,16 @@ export class Game {
     const wasShattered = this.wasShattered;
     const wantsToPhase = shatterInput && !this.phaseLocked;
     if (wantsToPhase) {
-      this.phaseEnergy = Math.max(0, this.phaseEnergy - Game.PHASE_DRAIN_RATE * dt);
+      this.phaseEnergy = Math.max(0, this.phaseEnergy - PHASE_DRAIN_RATE * dt);
     } else {
-      this.phaseEnergy = Math.min(1, this.phaseEnergy + Game.PHASE_RECHARGE_RATE * dt);
+      this.phaseEnergy = Math.min(1, this.phaseEnergy + PHASE_RECHARGE_RATE * dt);
     }
 
     if (this.phaseEnergy <= 0) {
       this.phaseEnergy = 0;
       this.phaseLocked = true;
       this.player.shattered = false;
-    } else if (this.phaseLocked && this.phaseEnergy >= Game.PHASE_MIN_THRESHOLD) {
+    } else if (this.phaseLocked && this.phaseEnergy >= PHASE_MIN_THRESHOLD) {
       this.phaseLocked = false;
     }
 
@@ -1749,23 +1751,7 @@ export class Game {
    * Distances match biome boundaries in biomes.ts.
    */
   private computeSpeed(distance: number): number {
-    const speedFactor = this.skillFactor;
-    if (distance < 300) {
-      // THE VOID: 12 → 20 (gentle warm-up)
-      return (12 + (distance / 300) * 8) * speedFactor;
-    } else if (distance < 700) {
-      // CRYSTAL CAVES: 20 → 30 (moderate ramp)
-      return (20 + ((distance - 300) / 400) * 10) * speedFactor;
-    } else if (distance < 1200) {
-      // NEON DISTRICT: 30 → 38 (full speed ramp)
-      return (30 + ((distance - 700) / 500) * 8) * speedFactor;
-    } else if (distance < 1800) {
-      // SOLAR STORM: 38 → 43 (dense and fast)
-      return (38 + ((distance - 1200) / 600) * 5) * speedFactor;
-    } else {
-      // COSMIC RIFT: 43 → 45 (maximum challenge)
-      return Math.min(MAX_SPEED, 43 + ((distance - 1800) / 500) * 2) * speedFactor;
-    }
+    return computeSpeed(distance, this.skillFactor);
   }
 
   private getPhaseMultiplier(): number {

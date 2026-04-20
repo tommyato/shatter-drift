@@ -1,5 +1,14 @@
 import * as THREE from "three";
 import { BiomeManager } from "./biomes";
+import {
+  DESPAWN_DISTANCE,
+  INITIAL_OBSTACLE_Z,
+  INITIAL_ORB_Z,
+  ORB_SPACING,
+  PLAYABLE_HALF_WIDTH,
+  SPAWN_DISTANCE,
+  WALL_DISTANCE,
+} from "./constants";
 import { PLASMA_OBSTACLE_FRAGMENT, PLASMA_VERTEX } from "./shaders";
 import { VoronoiShatter } from "./voronoi-shatter";
 
@@ -49,14 +58,11 @@ export interface VibeversePortal {
 
 // --- World generation ---
 
-const SPAWN_DISTANCE = 80; // how far ahead to spawn
-const DESPAWN_DISTANCE = -10; // how far behind to remove
-const ORB_SPACING = 3;
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 /** Distance from center to side walls — player bounds derive from this */
-export const WALL_DISTANCE = LANE_WIDTH / 2 + 1.5;
+export { WALL_DISTANCE } from "./constants";
 /** Actual playable half-width accounting for camera parallax */
-export const PLAYABLE_HALF_WIDTH = 10;
+export { PLAYABLE_HALF_WIDTH } from "./constants";
 const PORTAL_INTERVAL = 300; // meters between portal appearances
 
 const GRID_FLOOR_VERTEX = /* glsl */ `
@@ -258,8 +264,8 @@ export class World {
   private biomes: BiomeManager;
   /** Seeded PRNG for deterministic world generation. Defaults to Math.random (normal mode). */
   private random: () => number = Math.random;
-  private nextObstacleZ = 30;
-  private nextOrbZ = 15;
+  private nextObstacleZ = INITIAL_OBSTACLE_Z;
+  private nextOrbZ = INITIAL_ORB_Z;
   private nextPortalZ = PORTAL_INTERVAL;
   private nextMarkerZ = 100; // distance markers every 100m
   private cleanupTimer = 0; // periodic cleanup of inactive objects
@@ -1472,8 +1478,8 @@ export class World {
       this.scene.remove(marker.group);
     }
     this.markers.length = 0;
-    this.nextObstacleZ = 30;
-    this.nextOrbZ = 15;
+    this.nextObstacleZ = INITIAL_OBSTACLE_Z;
+    this.nextOrbZ = INITIAL_ORB_Z;
     this.nextPortalZ = PORTAL_INTERVAL;
     this.nextMarkerZ = 100;
   }

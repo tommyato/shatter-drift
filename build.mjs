@@ -1,0 +1,24 @@
+import { build as esbuild } from 'esbuild'
+import { build as viteBuild } from 'vite'
+
+await viteBuild()
+
+await esbuild({
+	entryPoints: ['src/main.ts'],
+	outfile: 'dist/game.js',
+	bundle: true,
+	format: 'esm',
+	target: 'es2022',
+	platform: 'browser',
+	sourcemap: false,
+})
+
+await esbuild({
+	entryPoints: ['src/simulation.ts'],
+	outfile: 'dist/simulation.mjs',
+	bundle: true,
+	format: 'esm',
+	target: 'node18',
+	platform: 'node',
+	sourcemap: false,
+})
