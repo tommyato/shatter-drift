@@ -132,8 +132,13 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
                 distance_to_gap = abs(player_x - nearest_center)
                 gap_w = max(nearest_width, 0.05)
                 alignment = max(0.0, 1.0 - distance_to_gap / gap_w)
+            elif nearest_width > 0.85:
+                # Full-width bar (boss laser grid etc): undodgeable,
+                # reward being in shattered state instead of dodging
+                is_shattered = float(obs[1])
+                alignment = is_shattered  # 1.0 if phasing, 0.0 if not
             else:
-                # Bar: reward being away from the obstacle center
+                # Narrow bar: reward being away from the obstacle center
                 distance_from_bar = abs(player_x - nearest_center)
                 bar_w = max(nearest_width, 0.05)
                 alignment = min(1.0, distance_from_bar / bar_w)
