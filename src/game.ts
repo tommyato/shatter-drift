@@ -9,6 +9,7 @@ import { PostFXPass } from "./postfx";
 import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
+import { OnnxAgent } from "./onnx-agent";
 import { clamp, ease, ScreenShake, seededRandom } from "./utils";
 import { BiomeManager } from "./biomes";
 import { PowerUpManager, PowerUpType } from "./powerups";
@@ -359,8 +360,10 @@ export class Game {
 
   // Autopilot & recording
   private autopilot: Autopilot | null = null;
+  private onnxAgent: OnnxAgent | null = null;
   private recorder: GameRecorder | null = null;
   private demoMode = false;
+  private onnxMode = false;
   private portalRefUrl = "";
 
   // Ghost racing — async multiplayer playback
@@ -987,6 +990,7 @@ export class Game {
     this.player.applySkin(this.unlocks.getSelectedCrystal());
     this.player.group.visible = true;
     this.updatePhaseHud();
+    this.onnxAgent?.reset();
 
     // Hide title + customize immediately; HUD revealed when launch completes
     this.hud.classList.add("hidden");
@@ -1114,11 +1118,23 @@ export class Game {
     this.playerZ += this.speed * dt;
     this.distance = Math.floor(this.playerZ);
 
-    // Player input (autopilot or human)
+    // Player input (ONNX, autopilot, or human)
     let moveX: number;
     let shatterInput: boolean;
 
-    if (this.autopilot) {
+    if (this.onnxMode && this.onnxAgent) {
+      const action = this.onnxAgent.update({
+        playerX: this.player.group.position.x,
+        playerZ: this.playerZ,
+        speed: this.speed,
+        shattered: this.player.shattered,
+        phaseEnergy: this.phaseEnergy,
+        phaseLocked: this.phaseLocked,
+        obstacles: this.world.obstacles,
+      });
+      moveX = action === 1 ? -1 : action === 2 ? 1 : 0;
+      shatterInput = action === 3;
+    } else if (this.autopilot) {
       const ai = this.autopilot.update(
         this.player.group.position.x,
         this.playerZ,
@@ -2430,14 +2446,23 @@ export class Game {
   private handlePortalArrival() {
     const params = new URLSearchParams(window.location.search);
     const isPortal = params.get("portal") === "true";
-    this.demoMode = params.get("demo") === "true";
+    this.onnxMode = params.get("_ai") === "onnx";
+    this.demoMode = params.get("demo") === "true" || this.onnxMode;
     const shouldRecord = params.get("record") === "true";
     const recordDuration = parseInt(params.get("duration") || "15", 10);
 
     // Store ref URL for return portal
     this.portalRefUrl = params.get("ref") || "";
 
-    if (this.demoMode) {
+    if (this.onnxMode) {
+      this.autopilot = null;
+      this.onnxAgent = new OnnxAgent();
+      void this.onnxAgent.load();
+      if (shouldRecord) {
+        this.recorder = new GameRecorder(recordDuration);
+      }
+      this.startGame();
+    } else if (this.demoMode) {
       this.autopilot = new Autopilot();
       if (shouldRecord) {
         this.recorder = new GameRecorder(recordDuration);
