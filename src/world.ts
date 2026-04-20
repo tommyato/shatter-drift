@@ -24,6 +24,8 @@ export interface Obstacle {
   active: boolean;
   /** True after one wall of a gate has been shattered — prevents double-shatter */
   partiallyShattered: boolean;
+  /** Actual wall collision segments — AABB boxes in X (center + half-width). Only for gates. */
+  wallSegments?: Array<{ x: number; halfWidth: number }>;
 }
 
 export interface EnergyOrb {
@@ -818,6 +820,17 @@ export class World {
 
     this.scene.add(group);
 
+    // Store actual wall segments for AABB collision
+    const segments: Array<{ x: number; halfWidth: number }> = [];
+    if (leftWidth > 0.5) {
+      const leftX = -LANE_WIDTH / 2 - 1 + leftWidth / 2;
+      segments.push({ x: leftX, halfWidth: leftWidth / 2 });
+    }
+    if (rightWidth > 0.5) {
+      const rightX = rightStart + rightWidth / 2;
+      segments.push({ x: rightX, halfWidth: rightWidth / 2 });
+    }
+
     this.obstacles.push({
       mesh: group,
       z,
@@ -829,6 +842,7 @@ export class World {
       gapHalfWidth: gapWidth / 2,
       active: true,
       partiallyShattered: false,
+      wallSegments: segments,
     });
   }
 
@@ -901,10 +915,28 @@ export class World {
 
     this.scene.add(group);
 
+    // Compute wall segments: bar spans barX ± halfBarWidth, with gap cut out
+    const halfBarWidth = width * 0.3;
+    const barLeft = barX - halfBarWidth;
+    const barRight = barX + halfBarWidth;
+    const gapLeft = gapX - 2;
+    const gapRight = gapX + 2;
+    const segments: Array<{ x: number; halfWidth: number }> = [];
+    // Segment left of gap
+    if (gapLeft > barLeft) {
+      const segW = gapLeft - barLeft;
+      segments.push({ x: barLeft + segW / 2, halfWidth: segW / 2 });
+    }
+    // Segment right of gap
+    if (barRight > gapRight) {
+      const segW = barRight - gapRight;
+      segments.push({ x: gapRight + segW / 2, halfWidth: segW / 2 });
+    }
+
     this.obstacles.push({
       mesh: group,
       z,
-      halfWidth: width * 0.3,
+      halfWidth: halfBarWidth,
       halfHeight: height / 2,
       x: barX,
       isGate: true,
@@ -912,6 +944,7 @@ export class World {
       gapHalfWidth: 2,
       active: true,
       partiallyShattered: false,
+      wallSegments: segments,
     });
   }
 
@@ -1072,6 +1105,18 @@ export class World {
       }
 
       this.scene.add(group);
+
+      // Store actual wall segments for AABB collision
+      const segments: Array<{ x: number; halfWidth: number }> = [];
+      if (leftWidth > 0.5) {
+        const leftX = -LANE_WIDTH / 2 - 1 + leftWidth / 2;
+        segments.push({ x: leftX, halfWidth: leftWidth / 2 });
+      }
+      if (rightWidth > 0.5) {
+        const rightX = rightStart + rightWidth / 2;
+        segments.push({ x: rightX, halfWidth: rightWidth / 2 });
+      }
+
       this.obstacles.push({
         mesh: group,
         z: pz,
@@ -1083,6 +1128,7 @@ export class World {
         gapHalfWidth: gapWidth / 2,
         active: true,
         partiallyShattered: false,
+        wallSegments: segments,
       });
     }
 
@@ -1183,15 +1229,16 @@ export class World {
       const dz = Math.abs(playerZ - obs.z);
       if (dz > 2) continue; // Too far in Z
 
-      if (obs.isGate) {
-        // Gate: player must be in the gap (small forgiveness margin so it doesn't feel unfair)
-        const dx = Math.abs(playerX - obs.gapX);
+      if (obs.isGate && obs.wallSegments) {
+        // Gate: check against actual wall box geometry (AABB vs sphere in X)
         const forgiveness = 0.15;
-        if (dx > obs.gapHalfWidth - playerRadius + forgiveness) {
-          // Outside the gap = collision
-          return obs;
+        for (const seg of obs.wallSegments) {
+          const dx = Math.abs(playerX - seg.x);
+          if (dx < seg.halfWidth + playerRadius - forgiveness) {
+            return obs;
+          }
         }
-      } else {
+      } else if (!obs.isGate) {
         // Pillar: check bounding box
         const dx = Math.abs(playerX - obs.x);
         if (dx < obs.halfWidth + playerRadius) {
@@ -1386,8 +1433,12 @@ export class World {
 
       if (obs.isGate) {
         if (obs.partiallyShattered) continue;
-        const dx = Math.abs(playerX - obs.gapX);
-        if (dx > obs.gapHalfWidth - 0.3) return obs;
+        if (obs.wallSegments) {
+          for (const seg of obs.wallSegments) {
+            if (Math.abs(playerX - seg.x) < seg.halfWidth + 0.8) return obs;
+          }
+        }
+        continue;
       } else {
         const dx = Math.abs(playerX - obs.x);
         if (dx < obs.halfWidth + 0.8) return obs;
