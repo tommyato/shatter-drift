@@ -157,8 +157,8 @@ export class Player {
     // Horizontal movement
     const moveSpeed = 8;
     this.laneX += moveInput * moveSpeed * dt;
-    // Clamp to wall distance minus small margin so player doesn't clip into walls
-    const bound = WALL_DISTANCE - 0.15;
+    // Clamp to wall distance — walls are transparent, so center can touch them
+    const bound = WALL_DISTANCE;
     this.laneX = THREE.MathUtils.clamp(this.laneX, -bound, bound);
 
     // Smooth rendering position
