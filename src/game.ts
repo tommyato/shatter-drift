@@ -3,7 +3,7 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { Input } from "./input";
 import { Player } from "./player";
-import { World } from "./world";
+import { World, type Obstacle } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
 import { PostFXPass } from "./postfx";
 import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak } from "./audio";
@@ -1123,6 +1123,29 @@ export class Game {
     let shatterInput: boolean;
 
     if (this.onnxMode && this.onnxAgent) {
+      // Build boss wave obstacles for the agent — boss parts are animated THREE.js objects
+      // that live outside this.world.obstacles; merge them so the agent can see them.
+      const bossObstacles: Obstacle[] = [];
+      for (const wave of this.bossWaves.waves) {
+        if (!wave.active) continue;
+        for (const part of wave.parts) {
+          const worldPos = new THREE.Vector3();
+          part.mesh.getWorldPosition(worldPos);
+          bossObstacles.push({
+            mesh: part.mesh,
+            z: worldPos.z,
+            halfWidth: part.halfWidth,
+            halfHeight: 0.8,
+            x: worldPos.x,
+            isGate: false,
+            gapX: 0,
+            gapHalfWidth: 0,
+            active: true,
+            partiallyShattered: false,
+          });
+        }
+      }
+
       const action = this.onnxAgent.update({
         playerX: this.player.group.position.x,
         playerZ: this.playerZ,
@@ -1130,7 +1153,7 @@ export class Game {
         shattered: this.player.shattered,
         phaseEnergy: this.phaseEnergy,
         phaseLocked: this.phaseLocked,
-        obstacles: this.world.obstacles,
+        obstacles: [...this.world.obstacles, ...bossObstacles],
       });
       // Actions 0-5: idle, left, right, shatter, shatter+left, shatter+right
       moveX = (action === 1 || action === 4) ? -1 : (action === 2 || action === 5) ? 1 : 0;

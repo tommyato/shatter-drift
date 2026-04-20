@@ -13,4 +13,5 @@ export const ObstacleDespawnSystemToken = createToken<(dt: number) => void>('Obs
 export const CollisionSystemToken = createToken<(dt: number) => void>('CollisionSystem')
 export const ShatterSystemToken = createToken<(dt: number) => void>('ShatterSystem')
 export const OrbSystemToken = createToken<(dt: number) => void>('OrbSystem')
+export const BossAnimationSystemToken = createToken<(dt: number) => void>('BossAnimationSystem')
 

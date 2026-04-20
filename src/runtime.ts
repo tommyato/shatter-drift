@@ -3,6 +3,7 @@ import { getSystemRandom, mulberry32 } from './constants'
 import { createAgentInput } from './input/agent-input'
 import { createSimulationWorld } from './sim-world'
 import {
+	BossAnimationSystemToken,
 	CollisionSystemToken,
 	ObstacleDespawnSystemToken,
 	ObstacleSpawnSystemToken,
@@ -15,6 +16,7 @@ import {
 	WorldScrollSystemToken,
 } from './tokens'
 import type { GameEvent, GameSnapshot, SimulationConfig } from './types'
+import { createBossAnimationSystem } from './systems/boss-animation-system'
 import { createCollisionSystem } from './systems/collision-system'
 import { createObstacleDespawnSystem } from './systems/obstacle-despawn-system'
 import { createObstacleSpawnSystem } from './systems/obstacle-spawn-system'
@@ -83,6 +85,11 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 		.toFactory(createOrbSystem)
 		.withDeps(SimulationWorldToken)
 		.asSingleton()
+	container
+		.bind(BossAnimationSystemToken)
+		.toFactory(createBossAnimationSystem)
+		.withDeps(SimulationWorldToken)
+		.asSingleton()
 
 	const world = container.get(SimulationWorldToken)
 	const playerMovementSystem = container.get(PlayerMovementSystemToken)
@@ -92,6 +99,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 	const collisionSystem = container.get(CollisionSystemToken)
 	const orbSystem = container.get(OrbSystemToken)
 	const obstacleDespawnSystem = container.get(ObstacleDespawnSystemToken)
+	const bossAnimationSystem = container.get(BossAnimationSystemToken)
 	const input = container.get(SimulationInputToken)
 
 	return {
@@ -104,6 +112,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 			shatterSystem(dt)
 			playerMovementSystem(dt)
 			obstacleSpawnSystem(dt)
+			bossAnimationSystem(dt)
 			orbSystem(dt)
 			collisionSystem(dt)
 			obstacleDespawnSystem(dt)

@@ -86,7 +86,7 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
         [4+i*4]   relativeZ / LOOKAHEAD_DIST  (0 to 1, 0 = absent)
         [4+i*4+1] gap/obstacle center X  (-1 to 1)
         [4+i*4+2] gap/obstacle width  (0 to 1)
-        [4+i*4+3] isGate ? 1 : 0
+        [4+i*4+3] obstacle type: 1.0 = gate, 0.5 = must-shatter, 0.0 = dodgeable
     """
     reward = 0.0
 
@@ -124,21 +124,20 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
         nearest_z = float(obs[4])  # distance to nearest obstacle [0, 1]
         nearest_center = float(obs[5])  # gap/obstacle center [-1, 1]
         nearest_width = float(obs[6])  # gap/obstacle width [0, 1]
-        nearest_is_gate = float(obs[7])  # 1 = gate (has gap), 0 = bar
+        nearest_is_gate = float(obs[7])  # 1.0 = gate, 0.5 = must-shatter, 0.0 = dodgeable
 
         if nearest_z > 0.0 and nearest_z < 0.6:  # wider approach window
-            if nearest_is_gate > 0.5:
+            if nearest_is_gate > 0.75:
                 # Gate: reward being aligned with the gap center
                 distance_to_gap = abs(player_x - nearest_center)
                 gap_w = max(nearest_width, 0.05)
                 alignment = max(0.0, 1.0 - distance_to_gap / gap_w)
-            elif nearest_width > 0.85:
-                # Full-width bar (boss laser grid etc): undodgeable,
-                # reward being in shattered state instead of dodging
+            elif nearest_is_gate > 0.25:
+                # Must-shatter (0.5): undodgeable — reward being in shattered state
                 is_shattered = float(obs[1])
                 alignment = is_shattered  # 1.0 if phasing, 0.0 if not
             else:
-                # Narrow bar: reward being away from the obstacle center
+                # Narrow bar (0.0): reward being away from the obstacle center
                 distance_from_bar = abs(player_x - nearest_center)
                 bar_w = max(nearest_width, 0.05)
                 alignment = min(1.0, distance_from_bar / bar_w)

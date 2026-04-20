@@ -171,7 +171,11 @@ export class OnnxAgent {
         0,
         1,
       );
-      observation[offset + 3] = obstacle.isGate ? 1 : 0;
+      observation[offset + 3] = obstacle.isGate
+        ? 1.0
+        : obstacle.halfWidth >= PLAYABLE_HALF_WIDTH * 0.85
+          ? 0.5
+          : 0.0;
     });
 
     return observation;

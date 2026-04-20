@@ -145,9 +145,9 @@ function getObstacleSpacing(world: SimulationWorld): number {
 	return 5 + world.random() * 4
 }
 
-// Boss type 0: SpinningGate — 4 wide pillars spread over ~12m zone; gaps exist but tight
+// Boss type 0: SpinningGate — 4 wide pillars spread over ~12m zone; arms rotate (visual only, x stays 0)
 function spawnBossSpinningGate(world: SimulationWorld, bossZ: number): void {
-	for (const zOff of [-6, -2, 2, 6]) {
+	;[-6, -2, 2, 6].forEach((zOff, i) => {
 		world.state.obstacles.push({
 			z: bossZ + zOff,
 			x: 0,
@@ -159,24 +159,39 @@ function spawnBossSpinningGate(world: SimulationWorld, bossZ: number): void {
 			active: true,
 			partiallyShattered: false,
 			passed: false,
+			bossAnimation: { pattern: 'static', baseX: 0, phase: i * Math.PI / 2, speed: 1.5 + i * 0.3, timer: 0 },
 		})
-	}
+	})
 }
 
-// Boss type 1: ConvergingWalls — 3 rows with narrow gaps (gapHalfWidth=1.5 vs normal 2.25)
+// Boss type 1: ConvergingWalls — 2 walls per row (left+right), 3 rows; walls converge open/closed
 function spawnBossConvergingWalls(world: SimulationWorld, bossZ: number): void {
-	for (const zOff of [-5, 0, 5]) {
-		createGate(world, bossZ + zOff, 1.5)
+	for (let row = 0; row < 3; row++) {
+		for (const side of [-1, 1]) {
+			world.state.obstacles.push({
+				z: bossZ + row * 5 - 5,
+				x: side * 3,
+				halfWidth: 1.5,
+				halfHeight: 2,
+				isGate: false,
+				gapX: 0,
+				gapHalfWidth: 0,
+				active: true,
+				partiallyShattered: false,
+				passed: false,
+				bossAnimation: { pattern: 'converge', baseX: side * 3, phase: row * 1.5, speed: 1.2, timer: 0 },
+			})
+		}
 	}
 }
 
-// Boss type 2: OrbitalRings — 5 pillars alternating sides; dodgeable
+// Boss type 2: OrbitalRings — 5 pillars alternating sides; oscillate side to side
 function spawnBossOrbitalRings(world: SimulationWorld, bossZ: number): void {
-	const zOffsets = [-6, -3, 0, 3, 6]
-	zOffsets.forEach((zOff, i) => {
+	;[-6, -3, 0, 3, 6].forEach((zOff, i) => {
+		const baseX = i % 2 === 0 ? -2 : 2
 		world.state.obstacles.push({
 			z: bossZ + zOff,
-			x: i % 2 === 0 ? -2 : 2,
+			x: baseX,
 			halfWidth: 0.75,
 			halfHeight: 1.5,
 			isGate: false,
@@ -185,16 +200,18 @@ function spawnBossOrbitalRings(world: SimulationWorld, bossZ: number): void {
 			active: true,
 			partiallyShattered: false,
 			passed: false,
+			bossAnimation: { pattern: 'oscillate', baseX, phase: i * 1.2, speed: 2.0, timer: 0 },
 		})
 	})
 }
 
-// Boss type 3: LaserGrid — 4 full-width bars; CANNOT be dodged — agent MUST shatter
+// Boss type 3: LaserGrid — 4 full-width bars; CANNOT be dodged — agent MUST shatter; bars oscillate
 function spawnBossLaserGrid(world: SimulationWorld, bossZ: number): void {
-	for (const zOff of [-6, -2, 2, 6]) {
+	;[-6, -2, 2, 6].forEach((zOff, i) => {
+		const x = (world.random() - 0.5) * 4
 		world.state.obstacles.push({
 			z: bossZ + zOff,
-			x: 0,
+			x,
 			halfWidth: PLAYABLE_HALF_WIDTH,
 			halfHeight: 0.4,
 			isGate: false,
@@ -203,8 +220,9 @@ function spawnBossLaserGrid(world: SimulationWorld, bossZ: number): void {
 			active: true,
 			partiallyShattered: false,
 			passed: false,
+			bossAnimation: { pattern: 'oscillate', baseX: x, phase: i * 2, speed: 1.5, timer: 0 },
 		})
-	}
+	})
 }
 
 function spawnBossWave(world: SimulationWorld, bossZ: number): void {

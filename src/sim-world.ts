@@ -14,6 +14,14 @@ import type { GameEvent, GameSnapshot, ObstacleData, OrbData, SimulationInput } 
 export interface SimulationObstacle extends ObstacleData {
 	partiallyShattered: boolean
 	passed: boolean
+	/** Boss animation — if set, obstacle x-position is animated each tick */
+	bossAnimation?: {
+		pattern: 'oscillate' | 'converge' | 'static'
+		baseX: number
+		phase: number
+		speed: number
+		timer: number
+	}
 }
 
 export interface SimulationOrb extends OrbData {
@@ -168,7 +176,11 @@ export function createSimulationWorld(
 					0,
 					1,
 				)
-				observation[offset + 3] = obstacle.isGate ? 1 : 0
+				observation[offset + 3] = obstacle.isGate
+					? 1.0
+					: obstacle.halfWidth >= PLAYABLE_HALF_WIDTH * 0.85
+						? 0.5
+						: 0.0
 			})
 
 			return observation
