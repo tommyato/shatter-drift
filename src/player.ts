@@ -159,7 +159,7 @@ export class Player {
     this.laneX += moveInput * moveSpeed * dt;
     // Allow player to reach past the side walls (camera parallax makes the
     // wall-floor junction appear further out than it is in world space)
-    const bound = 7;
+    const bound = 10;
     this.laneX = THREE.MathUtils.clamp(this.laneX, -bound, bound);
 
     // Smooth rendering position
