@@ -71,23 +71,72 @@ if hasattr(signal, "SIGPIPE"):
 # through untouched; reward is computed in Python.
 # ---------------------------------------------------------------------------
 
-def compute_reward(events: list[dict], state: dict) -> float:
+def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = None) -> float:
+    """Shatter-drift reward shaping.
+
+    Events: obstacle_passed, orb_collected, close_call, shatter_activated,
+    wall_destroyed, death.
+
+    Obs layout (24 values):
+      [0] playerX / PLAYABLE_HALF_WIDTH  (-1 to 1)
+      [1] shattered ? 1 : 0
+      [2] speed / MAX_SPEED  (0 to 1)
+      [3] phase cooldown  (0 = available, 1 = locked)
+      For each of 5 obstacles (i=0..4):
+        [4+i*4]   relativeZ / LOOKAHEAD_DIST  (0 to 1, 0 = absent)
+        [4+i*4+1] gap/obstacle center X  (-1 to 1)
+        [4+i*4+2] gap/obstacle width  (0 to 1)
+        [4+i*4+3] isGate ? 1 : 0
+    """
     reward = 0.0
+
+    # Event-based rewards (sparse)
     for ev in events:
         t = ev.get("type")
         if t == "obstacle_passed":
-            reward += 1.0
+            reward += 0.1
         elif t == "orb_collected":
-            reward += 0.5
+            reward += 0.05
         elif t == "close_call":
-            reward += 0.3
+            reward += 0.02
         elif t == "shatter_activated":
-            reward += 0.0
+            reward -= 0.02  # discourage spamming — learn to dodge first
         elif t == "wall_destroyed":
-            reward += 0.5
+            reward += 0.05  # shattering through a wall is fine, just not spam
         elif t == "death":
-            reward -= 2.0
+            reward -= 1.0
+
+    # Per-step survival bonus (dense baseline signal)
     reward += 0.01
+
+    # Proximity-based gap alignment shaping (CRITICAL for learning signal).
+    # Same principle as pong's ball-proximity reward: gives the agent dense
+    # gradient signal for "move toward the right spot" before it ever passes
+    # an obstacle. Without this, the agent has no idea which direction to go.
+    if obs is not None:
+        player_x = float(obs[0])  # normalized [-1, 1]
+        nearest_z = float(obs[4])  # distance to nearest obstacle [0, 1]
+        nearest_center = float(obs[5])  # gap/obstacle center [-1, 1]
+        nearest_width = float(obs[6])  # gap/obstacle width [0, 1]
+        nearest_is_gate = float(obs[7])  # 1 = gate (has gap), 0 = bar
+
+        if nearest_z > 0.0 and nearest_z < 0.4:  # obstacle is approaching
+            if nearest_is_gate > 0.5:
+                # Gate: reward being aligned with the gap center
+                distance_to_gap = abs(player_x - nearest_center)
+                # Normalize by gap width — closer to gap center = higher reward
+                gap_w = max(nearest_width, 0.05)  # avoid div-by-zero
+                alignment = max(0.0, 1.0 - distance_to_gap / gap_w)
+            else:
+                # Bar: reward being away from the obstacle center
+                distance_from_bar = abs(player_x - nearest_center)
+                bar_w = max(nearest_width, 0.05)
+                alignment = min(1.0, distance_from_bar / bar_w)
+
+            # Stronger signal when obstacle is closer (closer = more urgent)
+            urgency = 1.0 - nearest_z / 0.4
+            reward += 0.008 * alignment * urgency
+
     return reward
 
 
@@ -95,12 +144,24 @@ def compute_reward(events: list[dict], state: dict) -> float:
 # Gym env wrapping the sim-bridge subprocess
 # ---------------------------------------------------------------------------
 
+def _parse_obs(raw) -> np.ndarray:
+    """Convert bridge obs to ndarray, handling Float64Array dict serialization.
+
+    When sim-bridge sends obs through JSON.stringify without Array.from(),
+    Float64Array serializes as {"0": val, "1": val, ...} instead of [...].
+    This handles both formats so training works regardless of bridge version.
+    """
+    if isinstance(raw, dict):
+        return np.array([raw[str(i)] for i in range(len(raw))], dtype=np.float32)
+    return np.asarray(raw, dtype=np.float32)
+
+
 class GameEnv(gym.Env):
     """Drives a Node sim-bridge subprocess over stdin/stdout JSON.
 
     The browser sim returns `{state, events}` per step; this wrapper calls
-    `compute_reward(events, state)` to convert events into scalar rewards.
-    Observations come from `sim.getObservation()` (shape pinned at
+    `compute_reward(events, state, obs)` to convert events + obs into scalar
+    rewards. Observations come from `sim.getObservation()` (shape pinned at
     construction time from the first reset response).
     """
 
@@ -148,7 +209,7 @@ class GameEnv(gym.Env):
 
         # Discover obs shape via a reset.
         resp = self._send({"op": "reset"})
-        obs = np.asarray(resp["obs"], dtype=np.float32)
+        obs = _parse_obs(resp["obs"])
         self.observation_space = Box(low=obs_low, high=obs_high, shape=obs.shape, dtype=np.float32)
         self.action_space = Discrete(4)
         self._initial_obs = obs
@@ -170,17 +231,14 @@ class GameEnv(gym.Env):
     def reset(self, seed: int | None = None, options: dict | None = None):
         resp = self._send({"op": "reset"})
         self._steps = 0
-        obs = np.asarray(resp["obs"], dtype=np.float32)
+        obs = _parse_obs(resp["obs"])
         return obs, {}
 
     def step(self, action: int):
         resp = self._send({"op": "step", "action": int(action)})
-        obs = np.asarray(resp["obs"], dtype=np.float32)
+        obs = _parse_obs(resp["obs"])
         events = resp.get("events", [])
-        # The bridge doesn't send state — emit an empty dict. Events are
-        # the primary reward signal. Games needing stateful reward shaping
-        # can override compute_reward to inspect the env directly.
-        reward = float(compute_reward(events, {}))
+        reward = float(compute_reward(events, {}, obs))
         terminated = bool(resp.get("terminated", False))
         self._steps += 1
         truncated = self._steps >= self._max_steps
@@ -363,14 +421,17 @@ def main() -> int:
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
-    print(f"[reference-train] device={device}", flush=True)
-    print(f"[reference-train] torch={torch.__version__}", flush=True)
-    print(f"[reference-train] job_id={args.job_id}", flush=True)
+    print(f"[shatter-drift] device={device}", flush=True)
+    print(f"[shatter-drift] torch={torch.__version__}", flush=True)
+    print(f"[shatter-drift] job_id={args.job_id}", flush=True)
 
     # -----------------------------------------------------------------------
     # Env
     # -----------------------------------------------------------------------
-    sim_path = os.path.join(args.script_dir, "simulation.mjs")
+    # Shatter-drift builds to dist/; check dist first, then root.
+    sim_path = os.path.join(args.script_dir, "dist", "simulation.mjs")
+    if not os.path.exists(sim_path):
+        sim_path = os.path.join(args.script_dir, "simulation.mjs")
     # sim-bridge.mjs is a shared utility in the tommyato repo. When the
     # relay invokes this script it injects TOMMYATO_SIM_BRIDGE_PATH; when
     # running standalone fall back to sibling lookup (works for the
@@ -530,12 +591,12 @@ def main() -> int:
             ckpt_path = output_dir / f"ckpt-{global_step}.pt"
             torch.save(model.state_dict(), ckpt_path)
             last_checkpoint_step = global_step
-            print(f"[reference-train] checkpoint step={global_step} path={ckpt_path.name}", flush=True)
+            print(f"[shatter-drift] checkpoint step={global_step} path={ckpt_path.name}", flush=True)
 
         if update % 10 == 0 or update == 1 or update == num_updates:
             mean_ret = float(np.mean(episode_returns[-100:])) if episode_returns else float("nan")
             print(
-                f"[reference-train] update={update}/{num_updates} step={global_step} "
+                f"[shatter-drift] update={update}/{num_updates} step={global_step} "
                 f"mean_ret(100)={mean_ret:.3f} sps={steps_per_sec:.0f}",
                 flush=True,
             )
@@ -546,7 +607,7 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # ONNX export (atomic rename) + summary
     # -----------------------------------------------------------------------
-    print("[reference-train] exporting ONNX", flush=True)
+    print("[shatter-drift] exporting ONNX", flush=True)
     export_onnx(model, obs_dim, output_dir)
 
     final_return = float(np.mean(episode_returns[-100:])) if episode_returns else float("nan")
@@ -578,7 +639,7 @@ def main() -> int:
         json.dump(summary, fh, indent=2)
 
     env.close()
-    print("[reference-train] done", flush=True)
+    print("[shatter-drift] done", flush=True)
     exit_status["code"] = 0
     return 0
 
