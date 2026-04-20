@@ -49,6 +49,8 @@ const SPAWN_DISTANCE = 80; // how far ahead to spawn
 const DESPAWN_DISTANCE = -10; // how far behind to remove
 const ORB_SPACING = 3;
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
+/** Distance from center to side walls — player bounds derive from this */
+export const WALL_DISTANCE = LANE_WIDTH / 2 + 1.5;
 const PORTAL_INTERVAL = 300; // meters between portal appearances
 
 const GRID_FLOOR_VERTEX = /* glsl */ `
@@ -368,7 +370,7 @@ export class World {
     // Side walls that frame the play area — creates a tunnel/corridor feeling
     const wallHeight = 8;
     const wallLength = 300;
-    const wallDistance = LANE_WIDTH / 2 + 1.5;
+    const wallDistance = WALL_DISTANCE;
     const wallGeo = new THREE.PlaneGeometry(wallLength, wallHeight, 30, 4);
 
     for (const side of [-1, 1]) {
@@ -1311,10 +1313,57 @@ export class World {
   /** Shatter an obstacle visually and disable its collision */
   shatterObstacle(obs: Obstacle, impactX: number, impactZ: number, speed: number = 0): void {
     this.voronoiShatter.shatterObstacle(obs, impactX, impactZ, this.biomes.colors, speed);
-    obs.active = false;
-    // Hide the original mesh and all its children
-    obs.mesh.visible = false;
-    obs.mesh.traverse((child) => { child.visible = false; });
+
+    if (obs.isGate && obs.mesh instanceof THREE.Group) {
+      // Gate: only hide the wall that was hit, keep the other wall active
+      let closest: THREE.Mesh | null = null;
+      let closestDist = Infinity;
+
+      obs.mesh.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry && child.visible) {
+          const worldPos = new THREE.Vector3();
+          child.getWorldPosition(worldPos);
+          const dist = Math.abs(worldPos.x - impactX);
+          if (dist < closestDist) {
+            closestDist = dist;
+            closest = child as THREE.Mesh;
+          }
+        }
+      });
+
+      const hit = closest as THREE.Mesh | null;
+      if (hit) {
+        hit.visible = false;
+
+        // Widen the gap to cover the destroyed wall's area
+        const childX = new THREE.Vector3();
+        hit.getWorldPosition(childX);
+        const edge = WALL_DISTANCE;
+        if (childX.x < obs.gapX) {
+          // Left wall destroyed — extend gap leftward
+          const rightEdge = obs.gapX + obs.gapHalfWidth;
+          obs.gapX = (-edge + rightEdge) / 2;
+          obs.gapHalfWidth = (rightEdge + edge) / 2;
+        } else {
+          // Right wall destroyed — extend gap rightward
+          const leftEdge = obs.gapX - obs.gapHalfWidth;
+          obs.gapX = (leftEdge + edge) / 2;
+          obs.gapHalfWidth = (edge - leftEdge) / 2;
+        }
+      }
+
+      // If no visible children remain, fully deactivate
+      let anyVisible = false;
+      obs.mesh.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.visible) anyVisible = true;
+      });
+      if (!anyVisible) obs.active = false;
+    } else {
+      // Simple obstacle — hide everything and deactivate
+      obs.active = false;
+      obs.mesh.visible = false;
+      obs.mesh.traverse((child) => { child.visible = false; });
+    }
   }
 
   /** Check close calls (passing through obstacle while shattered) */

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { WALL_DISTANCE } from "./world";
 import type { CrystalSkin } from "./unlocks";
 
 const FRAGMENT_COUNT = 20; // icosahedron faces
@@ -156,7 +157,9 @@ export class Player {
     // Horizontal movement
     const moveSpeed = 8;
     this.laneX += moveInput * moveSpeed * dt;
-    this.laneX = THREE.MathUtils.clamp(this.laneX, -5.5, 5.5);
+    // Clamp to wall distance minus small margin so player doesn't clip into walls
+    const bound = WALL_DISTANCE - 0.3;
+    this.laneX = THREE.MathUtils.clamp(this.laneX, -bound, bound);
 
     // Smooth rendering position
     this.renderX = THREE.MathUtils.lerp(this.renderX, this.laneX, 1 - Math.exp(-15 * dt));
