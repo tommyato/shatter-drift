@@ -5,6 +5,7 @@ import {
 	MAX_SPEED,
 	ORB_SCORE,
 	PHASE_MIN_THRESHOLD,
+	PHASE_POST_COOLDOWN,
 	PHASE_RECHARGE_RATE,
 	PLAYABLE_HALF_WIDTH,
 	clamp,
@@ -34,6 +35,10 @@ export interface SimulationState {
 	shattered: boolean
 	phaseEnergy: number
 	phaseLocked: boolean
+	/** Post-shatter cooldown timer (seconds remaining). While > 0, phase can't reactivate. */
+	phaseCooldown: number
+	/** Minimum-duration lock timer. While > 0, phase stays active even if input released. */
+	phaseMinTimer: number
 	speed: number
 	score: number
 	alive: boolean
@@ -65,6 +70,8 @@ function createInitialState(): SimulationState {
 		shattered: false,
 		phaseEnergy: 1,
 		phaseLocked: false,
+		phaseCooldown: 0,
+		phaseMinTimer: 0,
 		speed: 0,
 		score: 0,
 		alive: true,
@@ -149,13 +156,12 @@ export function createSimulationWorld(
 			observation[0] = clamp(state.playerX / PLAYABLE_HALF_WIDTH, -1, 1)
 			observation[1] = state.shattered ? 1 : 0
 			observation[2] = clamp(state.speed / MAX_SPEED, 0, 1)
-			observation[3] = clamp(
-				(state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD
+			const energyLock =
+				state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD
 					? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_MIN_THRESHOLD
-					: 0),
-				0,
-				1,
-			)
+					: 0
+			const cooldownLock = state.phaseCooldown > 0 ? state.phaseCooldown / PHASE_POST_COOLDOWN : 0
+			observation[3] = clamp(Math.max(energyLock, cooldownLock), 0, 1)
 
 			const upcoming = state.obstacles
 				.filter((obstacle) => obstacle.active && obstacle.z >= state.playerZ)

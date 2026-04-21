@@ -35,8 +35,11 @@ import {
   INITIAL_SPEED,
   MAX_SPEED,
   ORB_SCORE,
+  PHASE_ACTIVATION_COST,
   PHASE_DRAIN_RATE,
+  PHASE_MIN_DURATION,
   PHASE_MIN_THRESHOLD,
+  PHASE_POST_COOLDOWN,
   PHASE_RECHARGE_RATE,
   computeSpeed,
 } from "./constants";
@@ -304,6 +307,8 @@ export class Game {
   private phaseStreak = 0; // consecutive close calls without recombining
   private phaseEnergy = 1;
   private phaseLocked = false;
+  private phaseCooldown = 0;
+  private phaseMinTimer = 0;
   private deathSlowMo = false;
   private deathSlowMoTimer = 0;
 
@@ -956,6 +961,8 @@ export class Game {
     this.phaseStreak = 0;
     this.phaseEnergy = 1;
     this.phaseLocked = false;
+    this.phaseCooldown = 0;
+    this.phaseMinTimer = 0;
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
@@ -1153,6 +1160,7 @@ export class Game {
         shattered: this.player.shattered,
         phaseEnergy: this.phaseEnergy,
         phaseLocked: this.phaseLocked,
+        phaseCooldown: this.phaseCooldown,
         obstacles: [...this.world.obstacles, ...bossObstacles],
       });
       // Actions 0-5: idle, left, right, shatter, shatter+left, shatter+right
@@ -1175,8 +1183,23 @@ export class Game {
     }
 
     const wasShattered = this.wasShattered;
-    const wantsToPhase = shatterInput && !this.phaseLocked;
-    if (wantsToPhase) {
+
+    // Tick post-shatter cooldown
+    if (this.phaseCooldown > 0) {
+      this.phaseCooldown = Math.max(0, this.phaseCooldown - dt);
+    }
+
+    // Tick minimum-duration lock
+    if (this.phaseMinTimer > 0) {
+      this.phaseMinTimer = Math.max(0, this.phaseMinTimer - dt);
+    }
+
+    // Phase stays active while min-duration timer is running OR input is held
+    const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0;
+    const forcedByMinTimer = this.phaseMinTimer > 0 && !this.phaseLocked;
+    const isPhasing = (wantsToPhase || forcedByMinTimer) && this.phaseEnergy > 0;
+
+    if (isPhasing) {
       this.phaseEnergy = Math.max(0, this.phaseEnergy - PHASE_DRAIN_RATE * dt);
     } else {
       this.phaseEnergy = Math.min(1, this.phaseEnergy + PHASE_RECHARGE_RATE * dt);
@@ -1185,19 +1208,33 @@ export class Game {
     if (this.phaseEnergy <= 0) {
       this.phaseEnergy = 0;
       this.phaseLocked = true;
+      this.phaseMinTimer = 0;
       this.player.shattered = false;
     } else if (this.phaseLocked && this.phaseEnergy >= PHASE_MIN_THRESHOLD) {
       this.phaseLocked = false;
     }
 
-    this.player.shattered = shatterInput && !this.phaseLocked && this.phaseEnergy > 0;
+    this.player.shattered = isPhasing && !this.phaseLocked && this.phaseEnergy > 0;
+
+    // Start post-shatter cooldown when phase ends
+    if (wasShattered && !this.player.shattered) {
+      this.phaseCooldown = PHASE_POST_COOLDOWN;
+    }
     const isShattered = this.player.shattered;
 
     // Shield visual indicator
     this.player.setShieldActive(this.powerups.hasActivePowerUp(PowerUpType.Shield));
 
-    // Shatter/recombine audio triggers + visual effects
+    // On fresh activation: apply activation cost and start min-duration lock
     if (isShattered && !wasShattered) {
+      this.phaseEnergy = Math.max(0, this.phaseEnergy - PHASE_ACTIVATION_COST);
+      this.phaseMinTimer = PHASE_MIN_DURATION;
+      if (this.phaseEnergy <= 0) {
+        this.phaseEnergy = 0;
+        this.phaseLocked = true;
+        this.phaseMinTimer = 0;
+        this.player.shattered = false;
+      }
       playShatter();
       // Energy pulse on entering phase mode
       this.postfx.triggerDistort(0.3);
@@ -1506,8 +1543,8 @@ export class Game {
     }
 
     // Collision detection — grace period: don't collide until recombine animation is mostly done
-    const isPhasing = this.player.shattered || this.player.shatterT > 0.15;
-    if (!isPhasing) {
+    const isInvulnerable = this.player.shattered || this.player.shatterT > 0.15;
+    if (!isInvulnerable) {
       // Check obstacle collision (only when solid and visually recombined)
       const hit = this.world.checkObstacleCollision(
         this.player.group.position.x,

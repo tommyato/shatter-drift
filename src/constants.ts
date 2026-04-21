@@ -11,6 +11,20 @@ export const SHATTERED_COLLISION_RADIUS = 0.1
 export const PHASE_DRAIN_RATE = 0.25
 export const PHASE_RECHARGE_RATE = 0.15
 export const PHASE_MIN_THRESHOLD = 0.2
+/** Cooldown (seconds) after phase ends before it can reactivate.
+ *  Prevents superhuman frame-by-frame toggle exploits while being
+ *  invisible to normal human play (humans naturally gap >0.3s). */
+export const PHASE_POST_COOLDOWN = 0.3
+/** Minimum time (seconds) phase stays active once triggered.
+ *  Prevents ABS-style 1-frame pulse exploits — once you commit to phasing
+ *  you're locked in for this duration, draining energy the whole time.
+ *  Combined with PHASE_ACTIVATION_COST, this teaches the RL agent that
+ *  fewer, longer phases are more efficient than rapid toggling. */
+export const PHASE_MIN_DURATION = 0.4
+/** Flat energy cost deducted each time phase is activated.
+ *  Makes each toggle expensive: 10 short phases = 1.0 energy spent on
+ *  activation alone. Incentivizes holding phase longer per use. */
+export const PHASE_ACTIVATION_COST = 0.1
 
 export const ORB_SCORE = 100
 export const CLOSE_CALL_SCORE = 50

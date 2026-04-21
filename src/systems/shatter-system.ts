@@ -1,6 +1,9 @@
 import {
+	PHASE_ACTIVATION_COST,
 	PHASE_DRAIN_RATE,
+	PHASE_MIN_DURATION,
 	PHASE_MIN_THRESHOLD,
+	PHASE_POST_COOLDOWN,
 	PHASE_RECHARGE_RATE,
 } from '../constants'
 import { markCloseCall, type SimulationWorld } from '../sim-world'
@@ -10,14 +13,29 @@ export function createShatterSystem(world: SimulationWorld) {
 	return (dt: number) => {
 		if (!world.state.alive) {
 			world.state.shattered = false
+			world.state.phaseMinTimer = 0
 			return
 		}
 
 		const input = world.input.getState()
 		const wasShattered = world.state.shattered
-		const wantsToShatter = input.shatter && !world.state.phaseLocked
 
-		if (wantsToShatter) {
+		// Tick down post-shatter cooldown
+		if (world.state.phaseCooldown > 0) {
+			world.state.phaseCooldown = Math.max(0, world.state.phaseCooldown - dt)
+		}
+
+		// Tick down minimum-duration lock
+		if (world.state.phaseMinTimer > 0) {
+			world.state.phaseMinTimer = Math.max(0, world.state.phaseMinTimer - dt)
+		}
+
+		// Phase stays active while min-duration timer is running OR input is held
+		const wantsToShatter = input.shatter && !world.state.phaseLocked && world.state.phaseCooldown <= 0
+		const forcedByMinTimer = world.state.phaseMinTimer > 0 && !world.state.phaseLocked
+		const isPhasing = (wantsToShatter || forcedByMinTimer) && world.state.phaseEnergy > 0
+
+		if (isPhasing) {
 			world.state.phaseEnergy = Math.max(0, world.state.phaseEnergy - PHASE_DRAIN_RATE * dt)
 		} else {
 			world.state.phaseEnergy = Math.min(1, world.state.phaseEnergy + PHASE_RECHARGE_RATE * dt)
@@ -26,13 +44,28 @@ export function createShatterSystem(world: SimulationWorld) {
 		if (world.state.phaseEnergy <= 0) {
 			world.state.phaseEnergy = 0
 			world.state.phaseLocked = true
+			world.state.phaseMinTimer = 0
 			world.state.shattered = false
 		} else if (world.state.phaseLocked && world.state.phaseEnergy >= PHASE_MIN_THRESHOLD) {
 			world.state.phaseLocked = false
 		}
 
-		world.state.shattered = wantsToShatter && !world.state.phaseLocked && world.state.phaseEnergy > 0
+		world.state.shattered = isPhasing && !world.state.phaseLocked && world.state.phaseEnergy > 0
+
+		// Start post-shatter cooldown when phase ends
+		if (wasShattered && !world.state.shattered) {
+			world.state.phaseCooldown = PHASE_POST_COOLDOWN
+		}
+		// On fresh activation: apply activation cost and start min-duration lock
 		if (world.state.shattered && !wasShattered) {
+			world.state.phaseEnergy = Math.max(0, world.state.phaseEnergy - PHASE_ACTIVATION_COST)
+			world.state.phaseMinTimer = PHASE_MIN_DURATION
+			if (world.state.phaseEnergy <= 0) {
+				world.state.phaseEnergy = 0
+				world.state.phaseLocked = true
+				world.state.phaseMinTimer = 0
+				world.state.shattered = false
+			}
 			world.pushEvent({ type: 'shatter_activated' })
 		}
 
