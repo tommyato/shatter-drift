@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import collections
+import copy
 import json
 import os
 import signal
@@ -47,6 +49,14 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 import onnx
+
+# NOTE: If MPS memory pressure is still an issue after this script's
+# preallocation + periodic empty_cache, the next lever is
+# PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.7 in the relay's subprocess env
+# (scripts/training-relay.ts, where TOMMYATO_SIM_BRIDGE_PATH is set
+# around line 760 — inject via childEnv there). Must be set BEFORE
+# `import torch` — the MPS allocator reads it at first allocation, so
+# setting it inside main() has no effect.
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -147,6 +157,41 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
             reward += 0.02 * alignment * urgency
 
     return reward
+
+
+# ---------------------------------------------------------------------------
+# Bounded episode-return tracker — see Sprint 3 of
+# plans/rl-training-memory-hygiene-plan.md. Caps memory (deque bounded
+# at maxlen entries) while preserving the TRUE episode count via an
+# independent counter. Consumers of summary.json read num_episodes_total,
+# NOT len(tracker) — the deque is a sliding window for mean_last(n).
+# ---------------------------------------------------------------------------
+
+
+class EpisodeTracker:
+    """Bounded episode-return buffer with an independent total counter.
+
+    The deque caps memory; the counter preserves the true count. Don't
+    use len(tracker) as a "total episodes" proxy — that's the deque
+    size.
+    """
+
+    def __init__(self, maxlen: int = 200):
+        self._returns: collections.deque[float] = collections.deque(maxlen=maxlen)
+        self.num_episodes_total: int = 0
+
+    def record(self, ret: float) -> None:
+        self._returns.append(ret)
+        self.num_episodes_total += 1
+
+    def mean_last(self, n: int = 100) -> float:
+        if not self._returns:
+            return float("nan")
+        recent = list(self._returns)[-n:]
+        return float(np.mean(recent))
+
+    def __len__(self) -> int:
+        return len(self._returns)
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +365,11 @@ def export_onnx(model: ActorCritic, obs_dim: int, output_dir: Path) -> None:
         def forward(self, obs):
             return self.actor(self.trunk(obs))
 
-    policy = Policy(model.trunk, model.actor).cpu().eval()
+    # Deep-copy the subtrees BEFORE moving to CPU — Policy holds references,
+    # so .cpu() would mutate the live model's parameters in place and break
+    # the next rollout step when called mid-training (Sprint 4 periodic
+    # export). The deepcopy preserves model device state.
+    policy = Policy(copy.deepcopy(model.trunk), copy.deepcopy(model.actor)).cpu().eval()
     partial = output_dir / "model.onnx.partial"
     final = output_dir / "model.onnx"
     dummy = torch.zeros(1, obs_dim, dtype=torch.float32)
@@ -390,6 +439,16 @@ def main() -> int:
             if model_ref["model"] is not None:
                 ckpt = output_dir / "ckpt-sigterm.pt"
                 torch.save(model_ref["model"].state_dict(), ckpt)
+                # ONNX export on SIGTERM — see Sprint 4 of
+                # plans/rl-training-memory-hygiene-plan.md. If the graceful
+                # drain arrives mid-training, leave a loadable model.onnx
+                # so the relay/browser can use the interrupted run.
+                # ckpt-sigterm.pt is the fallback artifact.
+                if model_ref.get("obs_dim") is not None:
+                    try:
+                        export_onnx(model_ref["model"], model_ref["obs_dim"], output_dir)
+                    except Exception:
+                        pass
         finally:
             sys.exit(143)
 
@@ -486,15 +545,36 @@ def main() -> int:
     val_buf = torch.zeros(num_steps, device=device)
 
     obs_np, _ = env.reset()
-    next_obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
+    # Future-proofing guard — _parse_obs always returns float32, but if that
+    # pipeline ever drifts, silent float64→float32 casting through .copy_()
+    # into the preallocated MPS buffer below would be undetectable.
+    assert obs_np.dtype == np.float32, (
+        f"obs_np dtype must be float32 (preallocated MPS buffer would "
+        f"silently cast); got {obs_np.dtype}"
+    )
+    next_obs = torch.zeros(obs_dim, device=device, dtype=torch.float32)
+    next_obs.copy_(torch.from_numpy(obs_np))
     next_done = torch.zeros(1, device=device)
 
     global_step = 0
     start_time = time.time()
     num_updates = max(1, total_timesteps // num_steps)
-    episode_returns: list[float] = []
+    tracker = EpisodeTracker()
     current_episode_return = 0.0
     last_checkpoint_step = 0
+
+    # Preallocated scratch buffers — see Sprint 1 of
+    # plans/rl-training-memory-hygiene-plan.md.
+    advantages = torch.zeros(num_steps, device=device)
+    assert num_steps % num_minibatches == 0, (
+        "num_steps must divide evenly by num_minibatches; ragged final "
+        "minibatch not supported by mb_idx_buf preallocation"
+    )
+    minibatch_size = max(1, num_steps // num_minibatches)
+    mb_idx_buf = torch.empty(minibatch_size, dtype=torch.long, device=device)
+
+    # MPS allocator hygiene — clear the caching allocator every N updates.
+    MPS_CACHE_CLEAR_INTERVAL = 100  # updates
 
     # -----------------------------------------------------------------------
     # PPO training loop
@@ -522,22 +602,22 @@ def main() -> int:
             obs_np, reward, terminated, truncated, _info = env.step(int(action.item()))
             rew_buf[step] = float(reward)
             current_episode_return += float(reward)
-            next_obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
+            next_obs.copy_(torch.from_numpy(obs_np))
             done_flag = bool(terminated or truncated)
-            next_done = torch.tensor([1.0 if done_flag else 0.0], device=device)
+            next_done.fill_(1.0 if done_flag else 0.0)
 
             if done_flag:
-                episode_returns.append(current_episode_return)
+                tracker.record(current_episode_return)
                 writer.add_scalar("episode/return", current_episode_return, global_step)
                 current_episode_return = 0.0
                 obs_np, _ = env.reset()
-                next_obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
-                next_done = torch.zeros(1, device=device)
+                next_obs.copy_(torch.from_numpy(obs_np))
+                next_done.zero_()
 
         # -- GAE --
         with torch.no_grad():
             next_value = model.get_value(next_obs.unsqueeze(0)).squeeze(0)
-            advantages = torch.zeros_like(rew_buf)
+            advantages.zero_()
             lastgaelam = 0.0
             for t in reversed(range(num_steps)):
                 if t == num_steps - 1:
@@ -558,7 +638,6 @@ def main() -> int:
         b_ret = returns
         b_val = val_buf
 
-        minibatch_size = max(1, num_steps // num_minibatches)
         idx = np.arange(num_steps)
         policy_loss_acc = 0.0
         value_loss_acc = 0.0
@@ -567,20 +646,20 @@ def main() -> int:
             np.random.shuffle(idx)
             for start in range(0, num_steps, minibatch_size):
                 mb = idx[start : start + minibatch_size]
-                mb_idx = torch.as_tensor(mb, dtype=torch.long, device=device)
+                mb_idx_buf.copy_(torch.from_numpy(mb))
                 _, new_logp, entropy, new_value = model.get_action_and_value(
-                    b_obs.index_select(0, mb_idx), b_acts.index_select(0, mb_idx)
+                    b_obs.index_select(0, mb_idx_buf), b_acts.index_select(0, mb_idx_buf)
                 )
-                logratio = new_logp - b_logp.index_select(0, mb_idx)
+                logratio = new_logp - b_logp.index_select(0, mb_idx_buf)
                 ratio = logratio.exp()
-                adv_mb = b_adv.index_select(0, mb_idx)
+                adv_mb = b_adv.index_select(0, mb_idx_buf)
                 adv_mb = (adv_mb - adv_mb.mean()) / (adv_mb.std() + 1e-8)
 
                 pg_loss1 = -adv_mb * ratio
                 pg_loss2 = -adv_mb * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                v_loss = 0.5 * ((new_value - b_ret.index_select(0, mb_idx)) ** 2).mean()
+                v_loss = 0.5 * ((new_value - b_ret.index_select(0, mb_idx_buf)) ** 2).mean()
                 ent_loss = entropy.mean()
 
                 loss = pg_loss - ent_coef * ent_loss + vf_coef * v_loss
@@ -594,22 +673,30 @@ def main() -> int:
                 value_loss_acc += float(v_loss.item())
                 entropy_acc += float(ent_loss.item())
 
+        # MPS allocator cache hygiene — see Sprint 2 of
+        # plans/rl-training-memory-hygiene-plan.md.
+        if update % MPS_CACHE_CLEAR_INTERVAL == 0 and hasattr(torch, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
         writer.add_scalar("loss/policy", policy_loss_acc, global_step)
         writer.add_scalar("loss/value", value_loss_acc, global_step)
         writer.add_scalar("loss/entropy", entropy_acc, global_step)
-        if episode_returns:
-            writer.add_scalar("episode/return_mean_100", float(np.mean(episode_returns[-100:])), global_step)
+        if len(tracker) > 0:
+            writer.add_scalar("episode/return_mean_100", tracker.mean_last(100), global_step)
         steps_per_sec = global_step / max(1e-9, time.time() - start_time)
         writer.add_scalar("perf/steps_per_sec", steps_per_sec, global_step)
 
         if global_step - last_checkpoint_step >= checkpoint_interval_steps:
             ckpt_path = output_dir / f"ckpt-{global_step}.pt"
             torch.save(model.state_dict(), ckpt_path)
+            # Periodic ONNX export — see Sprint 4 of
+            # plans/rl-training-memory-hygiene-plan.md.
+            export_onnx(model, obs_dim, output_dir)
             last_checkpoint_step = global_step
             print(f"[shatter-drift] checkpoint step={global_step} path={ckpt_path.name}", flush=True)
 
         if update % 10 == 0 or update == 1 or update == num_updates:
-            mean_ret = float(np.mean(episode_returns[-100:])) if episode_returns else float("nan")
+            mean_ret = tracker.mean_last(100)
             print(
                 f"[shatter-drift] update={update}/{num_updates} step={global_step} "
                 f"mean_ret(100)={mean_ret:.3f} sps={steps_per_sec:.0f}",
@@ -625,7 +712,7 @@ def main() -> int:
     print("[shatter-drift] exporting ONNX", flush=True)
     export_onnx(model, obs_dim, output_dir)
 
-    final_return = float(np.mean(episode_returns[-100:])) if episode_returns else float("nan")
+    final_return = tracker.mean_last(100)
     summary = {
         "job_id": args.job_id,
         "game_dir": args.script_dir,
@@ -635,7 +722,7 @@ def main() -> int:
         "global_step": global_step,
         "wall_time_sec": time.time() - start_time,
         "final_return_mean_100": final_return,
-        "num_episodes": len(episode_returns),
+        "num_episodes": tracker.num_episodes_total,
         "device": str(device),
         "hyperparams": {
             "learning_rate": learning_rate,
