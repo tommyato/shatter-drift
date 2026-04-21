@@ -29552,6 +29552,9 @@ var PLAYER_MOVE_SPEED = 8;
 var PHASE_DRAIN_RATE = 0.25;
 var PHASE_RECHARGE_RATE = 0.15;
 var PHASE_MIN_THRESHOLD = 0.2;
+var PHASE_POST_COOLDOWN = 0.3;
+var PHASE_MIN_DURATION = 0.4;
+var PHASE_ACTIVATION_COST = 0.1;
 var ORB_SCORE = 100;
 var CLOSE_CALL_SCORE = 50;
 var COMBO_MAX = 10;
@@ -34047,11 +34050,9 @@ var OnnxAgent = class {
     observation[0] = this.clamp(state.playerX / PLAYABLE_HALF_WIDTH, -1, 1);
     observation[1] = state.shattered ? 1 : 0;
     observation[2] = this.clamp(state.speed / MAX_SPEED, 0, 1);
-    observation[3] = this.clamp(
-      state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_MIN_THRESHOLD : 0,
-      0,
-      1
-    );
+    const energyLock = state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_MIN_THRESHOLD : 0;
+    const cooldownLock = state.phaseCooldown > 0 ? state.phaseCooldown / PHASE_POST_COOLDOWN : 0;
+    observation[3] = this.clamp(Math.max(energyLock, cooldownLock), 0, 1);
     const upcoming = state.obstacles.filter((obstacle) => obstacle.active && obstacle.z >= state.playerZ).sort((a, b) => a.z - b.z).slice(0, LOOKAHEAD_OBSTACLES);
     upcoming.forEach((obstacle, index) => {
       const offset = 4 + index * 4;
@@ -37626,6 +37627,8 @@ var Game = class {
   // consecutive close calls without recombining
   phaseEnergy = 1;
   phaseLocked = false;
+  phaseCooldown = 0;
+  phaseMinTimer = 0;
   deathSlowMo = false;
   deathSlowMoTimer = 0;
   // Camera juice
@@ -38143,6 +38146,8 @@ var Game = class {
     this.phaseStreak = 0;
     this.phaseEnergy = 1;
     this.phaseLocked = false;
+    this.phaseCooldown = 0;
+    this.phaseMinTimer = 0;
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
@@ -38282,6 +38287,7 @@ var Game = class {
         shattered: this.player.shattered,
         phaseEnergy: this.phaseEnergy,
         phaseLocked: this.phaseLocked,
+        phaseCooldown: this.phaseCooldown,
         obstacles: [...this.world.obstacles, ...bossObstacles]
       });
       moveX = action === 1 || action === 4 ? -1 : action === 2 || action === 5 ? 1 : 0;
@@ -38301,8 +38307,16 @@ var Game = class {
       shatterInput = this.input.isDown("space") || this.input.isDown("click");
     }
     const wasShattered = this.wasShattered;
-    const wantsToPhase = shatterInput && !this.phaseLocked;
-    if (wantsToPhase) {
+    if (this.phaseCooldown > 0) {
+      this.phaseCooldown = Math.max(0, this.phaseCooldown - dt);
+    }
+    if (this.phaseMinTimer > 0) {
+      this.phaseMinTimer = Math.max(0, this.phaseMinTimer - dt);
+    }
+    const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0;
+    const forcedByMinTimer = this.phaseMinTimer > 0 && !this.phaseLocked;
+    const isPhasing = (wantsToPhase || forcedByMinTimer) && this.phaseEnergy > 0;
+    if (isPhasing) {
       this.phaseEnergy = Math.max(0, this.phaseEnergy - PHASE_DRAIN_RATE * dt);
     } else {
       this.phaseEnergy = Math.min(1, this.phaseEnergy + PHASE_RECHARGE_RATE * dt);
@@ -38310,14 +38324,26 @@ var Game = class {
     if (this.phaseEnergy <= 0) {
       this.phaseEnergy = 0;
       this.phaseLocked = true;
+      this.phaseMinTimer = 0;
       this.player.shattered = false;
     } else if (this.phaseLocked && this.phaseEnergy >= PHASE_MIN_THRESHOLD) {
       this.phaseLocked = false;
     }
-    this.player.shattered = shatterInput && !this.phaseLocked && this.phaseEnergy > 0;
+    this.player.shattered = isPhasing && !this.phaseLocked && this.phaseEnergy > 0;
+    if (wasShattered && !this.player.shattered) {
+      this.phaseCooldown = PHASE_POST_COOLDOWN;
+    }
     const isShattered = this.player.shattered;
     this.player.setShieldActive(this.powerups.hasActivePowerUp("shield" /* Shield */));
     if (isShattered && !wasShattered) {
+      this.phaseEnergy = Math.max(0, this.phaseEnergy - PHASE_ACTIVATION_COST);
+      this.phaseMinTimer = PHASE_MIN_DURATION;
+      if (this.phaseEnergy <= 0) {
+        this.phaseEnergy = 0;
+        this.phaseLocked = true;
+        this.phaseMinTimer = 0;
+        this.player.shattered = false;
+      }
       playShatter();
       this.postfx.triggerDistort(0.3);
       this.shockwave.trigger(
@@ -38572,8 +38598,8 @@ var Game = class {
     if (this.powerups.hasActivePowerUp("magnet" /* Magnet */)) {
       this.world.attractOrbs(this.player.group.position.x, this.playerZ, 6, dt);
     }
-    const isPhasing = this.player.shattered || this.player.shatterT > 0.15;
-    if (!isPhasing) {
+    const isInvulnerable = this.player.shattered || this.player.shatterT > 0.15;
+    if (!isInvulnerable) {
       const hit = this.world.checkObstacleCollision(
         this.player.group.position.x,
         this.playerZ,

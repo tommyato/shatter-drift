@@ -322,14 +322,15 @@ def layer_init(layer: nn.Linear, std: float = np.sqrt(2), bias: float = 0.0) -> 
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, obs_dim: int, n_actions: int, hidden: int = 64):
+    def __init__(self, obs_dim: int, n_actions: int, hidden: int = 64, num_layers: int = 2):
         super().__init__()
-        self.trunk = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, hidden)),
-            nn.Tanh(),
-            layer_init(nn.Linear(hidden, hidden)),
-            nn.Tanh(),
-        )
+        layers: list[nn.Module] = []
+        in_dim = obs_dim
+        for _ in range(num_layers):
+            layers.append(layer_init(nn.Linear(in_dim, hidden)))
+            layers.append(nn.Tanh())
+            in_dim = hidden
+        self.trunk = nn.Sequential(*layers)
         self.actor = layer_init(nn.Linear(hidden, n_actions), std=0.01)
         self.critic = layer_init(nn.Linear(hidden, 1), std=1.0)
 
@@ -476,6 +477,8 @@ def main() -> int:
     checkpoint_interval_steps = int(config.get("checkpoint_interval_steps", 50_000))
     max_episode_steps = int(config.get("max_episode_steps", 5_000))
     class_name = config.get("class_name")  # e.g. "PongSimulation" for neon-pong
+    hidden_size = int(config.get("hidden_size", 64))
+    num_layers = int(config.get("num_layers", 2))
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -524,7 +527,8 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # Model + optimizer + TB
     # -----------------------------------------------------------------------
-    model = ActorCritic(obs_dim, n_actions).to(device)
+    model = ActorCritic(obs_dim, n_actions, hidden=hidden_size, num_layers=num_layers).to(device)
+    print(f"[shatter-drift] network={num_layers}x{hidden_size} obs={obs_dim} actions={n_actions}", flush=True)
     model_ref["model"] = model
     model_ref["obs_dim"] = obs_dim
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, eps=1e-5)
@@ -735,6 +739,8 @@ def main() -> int:
             "num_minibatches": num_minibatches,
             "update_epochs": update_epochs,
             "max_episode_steps": max_episode_steps,
+            "hidden_size": hidden_size,
+            "num_layers": num_layers,
         },
     }
     with open(output_dir / "summary.json", "w", encoding="utf-8") as fh:

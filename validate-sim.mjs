@@ -76,10 +76,15 @@ section('Shatter mechanic');
   const obs = sim.getObservation();
   assert(obs[1] === 1, 'Shatter activates with action 3 (obs[1]=1)');
 
-  // Release shatter
+  // Release shatter — min-duration lock keeps it active initially
   sim.step(0);
+  const obsLocked = sim.getObservation();
+  assert(obsLocked[1] === 1, 'Shatter held by min-duration lock after release');
+
+  // Wait for min-duration + post-cooldown to expire (~0.4s + 0.3s = ~42 frames at 60fps)
+  for (let i = 0; i < 60; i++) sim.step(0);
   const obs2 = sim.getObservation();
-  assert(obs2[1] === 0, 'Shatter deactivates when released');
+  assert(obs2[1] === 0, 'Shatter deactivates after min-duration + cooldown expire');
 }
 
 // ==========================================================================
@@ -325,14 +330,30 @@ section('Speed ramp matches constants');
   const initialSpeed = obs0[2] * MAX_SPEED;
   assert(Math.abs(initialSpeed - 12) < 2, `Initial speed ~12 m/s (got ${initialSpeed.toFixed(1)})`);
 
-  // Run to ~300m with smart policy
+  // Run to ~300m with smart dodge-and-shatter policy
   sim.reset();
-  for (let i = 0; i < 60 * 60; i++) {
+  for (let i = 0; i < 60 * 90; i++) {
     const obs = sim.getObservation();
+    const playerX = obs[0];
     const nearestZ = obs[4];
+    const nearestCenter = obs[5];
+    const nearestType = obs[7];
     const cooldown = obs[3];
-    const shouldShatter = nearestZ > 0 && nearestZ < 0.15 && cooldown === 0;
-    sim.step(shouldShatter ? 3 : 0);
+
+    let action = 0;
+    if (nearestZ > 0 && nearestZ < 0.3) {
+      if (nearestType > 0.5) {
+        // Gate: navigate toward gap center
+        if (nearestCenter > playerX + 0.05) action = 2;
+        else if (nearestCenter < playerX - 0.05) action = 1;
+      } else if (cooldown === 0 && nearestZ < 0.15) {
+        action = 3; // shatter through bars when close + cooldown ready
+      } else {
+        // Dodge: move away from bar center
+        action = nearestCenter > 0 ? 1 : 2;
+      }
+    }
+    sim.step(action);
     if (!sim.getState().alive) { sim.reset(); continue; }
     if (sim.getState().distance > 300) break;
   }

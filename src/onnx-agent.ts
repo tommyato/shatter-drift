@@ -4,6 +4,7 @@ import {
   LOOKAHEAD_OBSTACLES,
   MAX_SPEED,
   PHASE_MIN_THRESHOLD,
+  PHASE_POST_COOLDOWN,
   PLAYABLE_HALF_WIDTH,
 } from "./constants";
 
@@ -35,6 +36,7 @@ export interface OnnxAgentState {
   shattered: boolean;
   phaseEnergy: number;
   phaseLocked: boolean;
+  phaseCooldown: number;
   obstacles: readonly Obstacle[];
 }
 
@@ -144,13 +146,14 @@ export class OnnxAgent {
     observation[0] = this.clamp(state.playerX / PLAYABLE_HALF_WIDTH, -1, 1);
     observation[1] = state.shattered ? 1 : 0;
     observation[2] = this.clamp(state.speed / MAX_SPEED, 0, 1);
-    observation[3] = this.clamp(
+    // Phase unavailability signal — combines energy lock and post-shatter cooldown.
+    // 0 = phase available, 1 = fully locked. Agent learns when shatter is usable.
+    const energyLock =
       state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD
         ? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_MIN_THRESHOLD
-        : 0,
-      0,
-      1,
-    );
+        : 0;
+    const cooldownLock = state.phaseCooldown > 0 ? state.phaseCooldown / PHASE_POST_COOLDOWN : 0;
+    observation[3] = this.clamp(Math.max(energyLock, cooldownLock), 0, 1);
 
     const upcoming = state.obstacles
       .filter((obstacle) => obstacle.active && obstacle.z >= state.playerZ)

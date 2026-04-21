@@ -8,6 +8,9 @@ var PLAYER_COLLISION_RADIUS = 0.25;
 var PHASE_DRAIN_RATE = 0.25;
 var PHASE_RECHARGE_RATE = 0.15;
 var PHASE_MIN_THRESHOLD = 0.2;
+var PHASE_POST_COOLDOWN = 0.3;
+var PHASE_MIN_DURATION = 0.4;
+var PHASE_ACTIVATION_COST = 0.1;
 var ORB_SCORE = 100;
 var CLOSE_CALL_SCORE = 50;
 var SPAWN_DISTANCE = 80;
@@ -322,6 +325,8 @@ function createInitialState() {
     shattered: false,
     phaseEnergy: 1,
     phaseLocked: false,
+    phaseCooldown: 0,
+    phaseMinTimer: 0,
     speed: 0,
     score: 0,
     alive: true,
@@ -395,11 +400,9 @@ function createSimulationWorld(input, random) {
       observation[0] = clamp(state.playerX / PLAYABLE_HALF_WIDTH, -1, 1);
       observation[1] = state.shattered ? 1 : 0;
       observation[2] = clamp(state.speed / MAX_SPEED, 0, 1);
-      observation[3] = clamp(
-        state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_MIN_THRESHOLD : 0,
-        0,
-        1
-      );
+      const energyLock = state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_MIN_THRESHOLD : 0;
+      const cooldownLock = state.phaseCooldown > 0 ? state.phaseCooldown / PHASE_POST_COOLDOWN : 0;
+      observation[3] = clamp(Math.max(energyLock, cooldownLock), 0, 1);
       const upcoming = state.obstacles.filter((obstacle) => obstacle.active && obstacle.z >= state.playerZ).sort((a, b) => a.z - b.z).slice(0, LOOKAHEAD_OBSTACLES);
       upcoming.forEach((obstacle, index) => {
         const offset = 4 + index * 4;
@@ -875,12 +878,21 @@ function createShatterSystem(world) {
   return (dt) => {
     if (!world.state.alive) {
       world.state.shattered = false;
+      world.state.phaseMinTimer = 0;
       return;
     }
     const input = world.input.getState();
     const wasShattered = world.state.shattered;
-    const wantsToShatter = input.shatter && !world.state.phaseLocked;
-    if (wantsToShatter) {
+    if (world.state.phaseCooldown > 0) {
+      world.state.phaseCooldown = Math.max(0, world.state.phaseCooldown - dt);
+    }
+    if (world.state.phaseMinTimer > 0) {
+      world.state.phaseMinTimer = Math.max(0, world.state.phaseMinTimer - dt);
+    }
+    const wantsToShatter = input.shatter && !world.state.phaseLocked && world.state.phaseCooldown <= 0;
+    const forcedByMinTimer = world.state.phaseMinTimer > 0 && !world.state.phaseLocked;
+    const isPhasing = (wantsToShatter || forcedByMinTimer) && world.state.phaseEnergy > 0;
+    if (isPhasing) {
       world.state.phaseEnergy = Math.max(0, world.state.phaseEnergy - PHASE_DRAIN_RATE * dt);
     } else {
       world.state.phaseEnergy = Math.min(1, world.state.phaseEnergy + PHASE_RECHARGE_RATE * dt);
@@ -888,12 +900,24 @@ function createShatterSystem(world) {
     if (world.state.phaseEnergy <= 0) {
       world.state.phaseEnergy = 0;
       world.state.phaseLocked = true;
+      world.state.phaseMinTimer = 0;
       world.state.shattered = false;
     } else if (world.state.phaseLocked && world.state.phaseEnergy >= PHASE_MIN_THRESHOLD) {
       world.state.phaseLocked = false;
     }
-    world.state.shattered = wantsToShatter && !world.state.phaseLocked && world.state.phaseEnergy > 0;
+    world.state.shattered = isPhasing && !world.state.phaseLocked && world.state.phaseEnergy > 0;
+    if (wasShattered && !world.state.shattered) {
+      world.state.phaseCooldown = PHASE_POST_COOLDOWN;
+    }
     if (world.state.shattered && !wasShattered) {
+      world.state.phaseEnergy = Math.max(0, world.state.phaseEnergy - PHASE_ACTIVATION_COST);
+      world.state.phaseMinTimer = PHASE_MIN_DURATION;
+      if (world.state.phaseEnergy <= 0) {
+        world.state.phaseEnergy = 0;
+        world.state.phaseLocked = true;
+        world.state.phaseMinTimer = 0;
+        world.state.shattered = false;
+      }
       world.pushEvent({ type: "shatter_activated" });
     }
     if (!world.state.shattered) {
