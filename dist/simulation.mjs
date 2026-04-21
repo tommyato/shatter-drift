@@ -1,7 +1,3 @@
-var __defProp = Object.defineProperty;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
-
 // src/constants.ts
 var PLAYABLE_HALF_WIDTH = 10;
 var LANE_WIDTH = 9;
@@ -92,12 +88,12 @@ function getContainerCache(container) {
   return cache;
 }
 var ContainerImpl = class _ContainerImpl {
+  bindings = /* @__PURE__ */ new Map();
+  parent;
+  rootResolvingSet;
+  resolvingChain;
+  destroyed = false;
   constructor(parent, rootResolvingSet, resolvingChain) {
-    __publicField(this, "bindings", /* @__PURE__ */ new Map());
-    __publicField(this, "parent");
-    __publicField(this, "rootResolvingSet");
-    __publicField(this, "resolvingChain");
-    __publicField(this, "destroyed", false);
     this.parent = parent;
     this.rootResolvingSet = rootResolvingSet;
     this.resolvingChain = resolvingChain;
@@ -418,7 +414,7 @@ function createSimulationWorld(input, random) {
           0,
           1
         );
-        observation[offset + 3] = obstacle.isGate ? 1 : 0;
+        observation[offset + 3] = obstacle.isGate ? 1 : obstacle.halfWidth >= PLAYABLE_HALF_WIDTH * 0.85 ? 0.5 : 0;
       });
       return observation;
     }
@@ -462,6 +458,30 @@ var ObstacleDespawnSystemToken = createToken("ObstacleDespawnSystem");
 var CollisionSystemToken = createToken("CollisionSystem");
 var ShatterSystemToken = createToken("ShatterSystem");
 var OrbSystemToken = createToken("OrbSystem");
+var BossAnimationSystemToken = createToken("BossAnimationSystem");
+
+// src/systems/boss-animation-system.ts
+function createBossAnimationSystem(world) {
+  return (dt) => {
+    for (const obstacle of world.state.obstacles) {
+      if (!obstacle.bossAnimation || !obstacle.active) continue;
+      const anim = obstacle.bossAnimation;
+      anim.timer += dt;
+      switch (anim.pattern) {
+        case "oscillate":
+          obstacle.x = anim.baseX + Math.sin(anim.timer * anim.speed + anim.phase) * 3;
+          break;
+        case "converge": {
+          const cycle = (Math.sin(anim.timer * anim.speed + anim.phase) + 1) / 2;
+          obstacle.x = anim.baseX * (0.3 + cycle * 0.7);
+          break;
+        }
+        case "static":
+          break;
+      }
+    }
+  };
+}
 
 // src/systems/collision-system.ts
 function findCollision(world) {
@@ -661,7 +681,8 @@ function getObstacleSpacing(world) {
   return 5 + world.random() * 4;
 }
 function spawnBossSpinningGate(world, bossZ) {
-  for (const zOff of [-6, -2, 2, 6]) {
+  ;
+  [-6, -2, 2, 6].forEach((zOff, i) => {
     world.state.obstacles.push({
       z: bossZ + zOff,
       x: 0,
@@ -672,21 +693,37 @@ function spawnBossSpinningGate(world, bossZ) {
       gapHalfWidth: 0,
       active: true,
       partiallyShattered: false,
-      passed: false
+      passed: false,
+      bossAnimation: { pattern: "static", baseX: 0, phase: i * Math.PI / 2, speed: 1.5 + i * 0.3, timer: 0 }
     });
-  }
+  });
 }
 function spawnBossConvergingWalls(world, bossZ) {
-  for (const zOff of [-5, 0, 5]) {
-    createGate(world, bossZ + zOff, 1.5);
+  for (let row = 0; row < 3; row++) {
+    for (const side of [-1, 1]) {
+      world.state.obstacles.push({
+        z: bossZ + row * 5 - 5,
+        x: side * 3,
+        halfWidth: 1.5,
+        halfHeight: 2,
+        isGate: false,
+        gapX: 0,
+        gapHalfWidth: 0,
+        active: true,
+        partiallyShattered: false,
+        passed: false,
+        bossAnimation: { pattern: "converge", baseX: side * 3, phase: row * 1.5, speed: 1.2, timer: 0 }
+      });
+    }
   }
 }
 function spawnBossOrbitalRings(world, bossZ) {
-  const zOffsets = [-6, -3, 0, 3, 6];
-  zOffsets.forEach((zOff, i) => {
+  ;
+  [-6, -3, 0, 3, 6].forEach((zOff, i) => {
+    const baseX = i % 2 === 0 ? -2 : 2;
     world.state.obstacles.push({
       z: bossZ + zOff,
-      x: i % 2 === 0 ? -2 : 2,
+      x: baseX,
       halfWidth: 0.75,
       halfHeight: 1.5,
       isGate: false,
@@ -694,15 +731,18 @@ function spawnBossOrbitalRings(world, bossZ) {
       gapHalfWidth: 0,
       active: true,
       partiallyShattered: false,
-      passed: false
+      passed: false,
+      bossAnimation: { pattern: "oscillate", baseX, phase: i * 1.2, speed: 2, timer: 0 }
     });
   });
 }
 function spawnBossLaserGrid(world, bossZ) {
-  for (const zOff of [-6, -2, 2, 6]) {
+  ;
+  [-6, -2, 2, 6].forEach((zOff, i) => {
+    const x = (world.random() - 0.5) * 4;
     world.state.obstacles.push({
       z: bossZ + zOff,
-      x: 0,
+      x,
       halfWidth: PLAYABLE_HALF_WIDTH,
       halfHeight: 0.4,
       isGate: false,
@@ -710,9 +750,10 @@ function spawnBossLaserGrid(world, bossZ) {
       gapHalfWidth: 0,
       active: true,
       partiallyShattered: false,
-      passed: false
+      passed: false,
+      bossAnimation: { pattern: "oscillate", baseX: x, phase: i * 2, speed: 1.5, timer: 0 }
     });
-  }
+  });
 }
 function spawnBossWave(world, bossZ) {
   switch (world.state.bossCount % 4) {
@@ -915,6 +956,7 @@ function createRuntime(config = {}) {
   container.bind(ShatterSystemToken).toFactory(createShatterSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(CollisionSystemToken).toFactory(createCollisionSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(OrbSystemToken).toFactory(createOrbSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(BossAnimationSystemToken).toFactory(createBossAnimationSystem).withDeps(SimulationWorldToken).asSingleton();
   const world = container.get(SimulationWorldToken);
   const playerMovementSystem = container.get(PlayerMovementSystemToken);
   const worldScrollSystem = container.get(WorldScrollSystemToken);
@@ -923,6 +965,7 @@ function createRuntime(config = {}) {
   const collisionSystem = container.get(CollisionSystemToken);
   const orbSystem = container.get(OrbSystemToken);
   const obstacleDespawnSystem = container.get(ObstacleDespawnSystemToken);
+  const bossAnimationSystem = container.get(BossAnimationSystemToken);
   const input = container.get(SimulationInputToken);
   return {
     container,
@@ -934,6 +977,7 @@ function createRuntime(config = {}) {
       shatterSystem(dt);
       playerMovementSystem(dt);
       obstacleSpawnSystem(dt);
+      bossAnimationSystem(dt);
       orbSystem(dt);
       collisionSystem(dt);
       obstacleDespawnSystem(dt);
@@ -955,9 +999,9 @@ function createRuntime(config = {}) {
 
 // src/simulation.ts
 var ShatterDriftSimulation = class {
+  config;
+  runtime;
   constructor(config = {}) {
-    __publicField(this, "config");
-    __publicField(this, "runtime");
     this.config = {
       fixedDt: Number.isFinite(config.fixedDt) && config.fixedDt !== void 0 ? Number(config.fixedDt) : null
     };
