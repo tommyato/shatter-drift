@@ -12,15 +12,15 @@ export const PHASE_DRAIN_RATE = 0.25
 export const PHASE_RECHARGE_RATE = 0.15
 export const PHASE_MIN_THRESHOLD = 0.2
 /** Cooldown (seconds) after phase ends before it can reactivate.
- *  Prevents superhuman frame-by-frame toggle exploits while being
- *  invisible to normal human play (humans naturally gap >0.3s). */
-export const PHASE_POST_COOLDOWN = 0.3
+ *  v5: dropped to 0 — same-tick double-activation is impossible because
+ *  input is sampled per-frame and `shatter_activated` only fires on the
+ *  rising edge. The reward function teaches phasing discipline instead. */
+export const PHASE_POST_COOLDOWN = 0
 /** Minimum time (seconds) phase stays active once triggered.
- *  Prevents ABS-style 1-frame pulse exploits — once you commit to phasing
- *  you're locked in for this duration, draining energy the whole time.
- *  Combined with PHASE_ACTIVATION_COST, this teaches the RL agent that
- *  fewer, longer phases are more efficient than rapid toggling. */
-export const PHASE_MIN_DURATION = 0.4
+ *  v5: dropped to 0 — the activation penalty in the RL reward function
+ *  teaches "hold phase, don't rapid-toggle" without forbidding the
+ *  legitimate fast-toggle case (walls 2-3 frames apart). */
+export const PHASE_MIN_DURATION = 0
 /** Flat energy cost deducted each time phase is activated.
  *  Makes each toggle expensive: 10 short phases = 1.0 energy spent on
  *  activation alone. Incentivizes holding phase longer per use. */

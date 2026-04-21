@@ -101,6 +101,12 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
     reward = 0.0
 
     # Event-based rewards (sparse)
+    # v5: phase is a TOOL, not a goal. shatter_activated fires on the rising
+    # edge → use it as a per-activation penalty so rapid-toggling is
+    # expensive but not catastrophic. wall_destroyed is the real payoff
+    # (slightly better than a gap so phase-through is a tactical equal,
+    # not a fallback). Death is bumped to -5.0 so it's a real loss, not
+    # something an episode can shrug off via survival bonus accumulation.
     for ev in events:
         t = ev.get("type")
         if t == "obstacle_passed":
@@ -110,11 +116,11 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
         elif t == "close_call":
             reward += 0.05
         elif t == "shatter_activated":
-            reward += 0.15  # encourage shattering — it's the core mechanic
+            reward -= 0.1  # per-activation cost — discourages random phasing
         elif t == "wall_destroyed":
-            reward += 0.1  # shattering through a wall is fine
+            reward += 0.6  # phase-through-wall is the correct use of phase
         elif t == "death":
-            reward -= 1.0
+            reward -= 5.0
 
     # Per-step survival bonus scaled by speed — faster survival is harder
     # and more valuable. At initial speed 12, this is 0.01; at speed 30
@@ -124,6 +130,12 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
         reward += 0.005 + 0.015 * speed_norm
     else:
         reward += 0.01
+
+    # v5: per-step phase cost. -0.003/frame = -0.18/sec while phased.
+    # Light pressure to drop phase when not needed, easily covered by
+    # one wall_destroyed (+0.6). Random open-air phase: pure loss.
+    if obs is not None and float(obs[1]) > 0.5:  # obs[1] = shattered (1/0)
+        reward -= 0.003
 
     # Proximity-based gap alignment shaping (CRITICAL for learning signal).
     # Wider window (0.6) and stronger magnitude (0.02) than v1.
@@ -154,7 +166,9 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
 
             # Stronger signal when obstacle is closer (closer = more urgent)
             urgency = 1.0 - nearest_z / 0.6
-            reward += 0.02 * alignment * urgency
+            # v5: bumped from 0.02 → 0.03 to give a stronger dense signal
+            # for "must-shatter wall is approaching → phase NOW".
+            reward += 0.03 * alignment * urgency
 
     return reward
 
