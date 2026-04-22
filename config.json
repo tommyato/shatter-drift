@@ -1,5 +1,5 @@
 {
-  "total_timesteps": 2000000,
+  "total_timesteps": 5000000,
   "num_steps": 256,
   "num_minibatches": 4,
   "update_epochs": 4,

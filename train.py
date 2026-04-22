@@ -155,9 +155,15 @@ def compute_reward(events: list[dict], state: dict, obs: np.ndarray | None = Non
                 gap_w = max(nearest_width, 0.05)
                 alignment = max(0.0, 1.0 - distance_to_gap / gap_w)
             elif nearest_is_gate > 0.25:
-                # Must-shatter (0.5): undodgeable — reward being in shattered state
+                # Must-shatter (0.5): reward phase ON + aimed at the wall center.
+                # v5 only rewarded is_shattered, giving zero positional guidance —
+                # the agent learned to phase but still dodged laterally instead of
+                # running through the wall. Combining phase state with distance-to-
+                # center teaches "phase ON and aimed AT the wall."
                 is_shattered = float(obs[1])
-                alignment = is_shattered  # 1.0 if phasing, 0.0 if not
+                dist_to_center = 1.0 - abs(player_x - nearest_center) / max(nearest_width, 0.05)
+                dist_to_center = max(0.0, min(1.0, dist_to_center))
+                alignment = is_shattered * dist_to_center
             else:
                 # Narrow bar (0.0): reward being away from the obstacle center
                 distance_from_bar = abs(player_x - nearest_center)
