@@ -33508,6 +33508,35 @@ function playWorldEvent() {
   osc.start(t);
   osc.stop(t + 2.1);
 }
+function playPhaseTierUp(tier) {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+  const tierNorm = tier >= 10 ? 1 : tier >= 5 ? 0.7 : tier >= 3 ? 0.4 : 0.2;
+  const subFreq = 55 + tierNorm * 30;
+  const sub = ctx.createOscillator();
+  sub.type = "sine";
+  sub.frequency.setValueAtTime(subFreq, t);
+  sub.frequency.exponentialRampToValueAtTime(subFreq * 0.45, t + 0.18);
+  const subGain = ctx.createGain();
+  subGain.gain.setValueAtTime(0.25 + tierNorm * 0.2, t);
+  subGain.gain.exponentialRampToValueAtTime(1e-3, t + 0.22);
+  sub.connect(subGain);
+  subGain.connect(masterGain);
+  sub.start(t);
+  sub.stop(t + 0.24);
+  const riseBase = 180 + tier * 28;
+  const rise = ctx.createOscillator();
+  rise.type = "triangle";
+  rise.frequency.setValueAtTime(riseBase, t + 0.04);
+  rise.frequency.exponentialRampToValueAtTime(riseBase * 2.8, t + 0.22);
+  const riseGain = ctx.createGain();
+  riseGain.gain.setValueAtTime(0.11 + tierNorm * 0.09, t + 0.04);
+  riseGain.gain.exponentialRampToValueAtTime(1e-3, t + 0.28);
+  rise.connect(riseGain);
+  connectWithSends(riseGain, { reverb: 0.4, delay: 0.15 });
+  rise.start(t + 0.04);
+  rise.stop(t + 0.3);
+}
 function setMasterVolume(vol) {
   const v = Math.max(0, Math.min(1, vol));
   if (masterGain) masterGain.gain.value = v * 0.5;
@@ -37641,6 +37670,8 @@ var Game = class {
   // visual slow-mo for close calls
   slowMoTimer = 0;
   fovBoost = 0;
+  cameraZKick = 0;
+  // brief push-toward-player on tier-up, decays ~150ms
   skillFactor = 1;
   personalBestTarget = 0;
   personalBestStage = 0;
@@ -38156,6 +38187,7 @@ var Game = class {
     this.slowMoFactor = 1;
     this.slowMoTimer = 0;
     this.fovBoost = 0;
+    this.cameraZKick = 0;
     this.targetFOV = 60;
     this.currentFOV = 60;
     this.targetCameraRoll = 0;
@@ -38692,7 +38724,7 @@ var Game = class {
         }
         if (this.playerZ - this.lastCloseCall > 3) {
           this.phaseStreak++;
-          const streakBonus = Math.min(this.phaseStreak, 5);
+          const streakBonus = this.phaseStreakMultiplier(this.phaseStreak);
           const puMultiplier2 = this.powerups.getScoreMultiplier();
           const phaseMultiplier = this.getPhaseMultiplier();
           const closeCallPoints = Math.round(CLOSE_CALL_SCORE * streakBonus * puMultiplier2 * phaseMultiplier);
@@ -38724,20 +38756,9 @@ var Game = class {
             debrisColor,
             8 + streakBonus * 3
           );
-          if (this.phaseStreak === 5) {
-            this.popups.showCenter("UNSTOPPABLE", "", "#ff44ff");
-            this.screenFlash.trigger(16729343, 0.2);
-            this.shake.trigger(0.4);
-          } else if (this.phaseStreak === 10) {
-            this.popups.showCenter("TRANSCENDENT", "", "#ff88ff");
-            this.screenFlash.trigger(16746751, 0.25);
-            this.shake.trigger(0.6);
-            this.shockwave.trigger(
-              new Vector3(this.player.group.position.x, 0, this.playerZ),
-              16729343,
-              10,
-              0.7
-            );
+          const prevTier = this.phaseStreakMultiplier(this.phaseStreak - 1);
+          if (streakBonus > prevTier) {
+            this.firePhaseTierUp(streakBonus);
           }
         }
       }
@@ -38750,9 +38771,11 @@ var Game = class {
     const targetCamPos = new Vector3(
       this.player.group.position.x * 0.3,
       this.cameraOffset.y,
-      this.playerZ + this.cameraOffset.z
+      this.playerZ + this.cameraOffset.z + this.cameraZKick
     );
     this.camera.position.lerp(targetCamPos, 1 - Math.exp(-5 * dt));
+    this.cameraZKick *= Math.exp(-dt / 0.15);
+    if (Math.abs(this.cameraZKick) < 0.01) this.cameraZKick = 0;
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(
       this.player.group.position.x * 0.5,
@@ -38779,13 +38802,22 @@ var Game = class {
     if (this.combo > 1) {
       const comboVal = Math.min(this.combo, COMBO_MAX);
       this.hudCombo.textContent = `x${comboVal}`;
+      this.hudCombo.style.color = "#ffcc00";
       this.hudCombo.style.opacity = "1";
       const comboScale = 1 + comboVal * 0.05;
       this.hudCombo.style.transform = `scale(${comboScale})`;
       this.hudCombo.style.textShadow = `0 0 ${10 + comboVal * 3}px rgba(255,204,0,${0.3 + comboVal * 0.07})`;
+    } else if (this.player.shattered && this.phaseStreak > 1) {
+      const phaseMult = this.phaseStreakMultiplier(this.phaseStreak);
+      this.hudCombo.textContent = `PHASE x${phaseMult}`;
+      this.hudCombo.style.color = "#ff44ff";
+      this.hudCombo.style.opacity = "1";
+      this.hudCombo.style.transform = `scale(${1 + phaseMult / 10 * 0.3})`;
+      this.hudCombo.style.textShadow = `0 0 ${10 + phaseMult * 2}px rgba(255,68,255,0.65)`;
     } else {
       this.hudCombo.style.opacity = "0";
       this.hudCombo.style.transform = "scale(1)";
+      this.hudCombo.style.color = "";
     }
     this.updatePowerUpHUD();
     updateAmbient(this.speed, true);
@@ -38839,6 +38871,42 @@ var Game = class {
   }
   getPhaseMultiplier() {
     return 1 + Math.min(this.phaseTimeAccum * 0.15, 1.5);
+  }
+  /** Tiered streak multiplier: ×2 at streak 2, ×3 at 3, ×5 at 5, ×10 at 10 */
+  phaseStreakMultiplier(streak) {
+    if (streak >= 10) return 10;
+    if (streak >= 5) return 5;
+    if (streak >= 3) return 3;
+    if (streak >= 2) return 2;
+    return 1;
+  }
+  /** Fire all visual/audio juice when the phase streak crosses a tier boundary */
+  firePhaseTierUp(tier) {
+    const tierColor = tier >= 10 ? 16746751 : tier >= 5 ? 16729343 : tier >= 3 ? 13387007 : 11158783;
+    const flashIntensity = tier >= 10 ? 0.3 : tier >= 5 ? 0.25 : tier >= 3 ? 0.2 : 0.15;
+    const distortAmount = tier >= 10 ? 0.8 : tier >= 5 ? 0.6 : tier >= 3 ? 0.45 : 0.3;
+    const kickAmount = tier >= 10 ? 1.8 : tier >= 5 ? 1.2 : tier >= 3 ? 0.8 : 0.5;
+    this.screenFlash.trigger(tierColor, flashIntensity);
+    this.cameraZKick = kickAmount;
+    this.postfx.triggerDistort(distortAmount);
+    playPhaseTierUp(tier);
+    if (tier >= 5) this.shake.trigger(tier >= 10 ? 0.6 : 0.4);
+    const popupColor = "#" + tierColor.toString(16).padStart(6, "0");
+    if (tier >= 10) {
+      this.popups.showCenter("PHASE x10", "TRANSCENDENT", popupColor);
+      this.shockwave.trigger(
+        new Vector3(this.player.group.position.x, 0, this.playerZ),
+        tierColor,
+        10,
+        0.7
+      );
+    } else if (tier >= 5) {
+      this.popups.showCenter("PHASE x5", "UNSTOPPABLE", popupColor);
+    } else if (tier >= 3) {
+      this.popups.showCenter("PHASE x3", "", popupColor);
+    } else {
+      this.popups.showCenter("PHASE x2", "", popupColor);
+    }
   }
   updatePersonalBestDrama() {
     if (this.personalBestTarget <= 0) {
