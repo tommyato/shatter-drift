@@ -819,6 +819,41 @@ export function playWorldEvent() {
   osc.stop(t + 2.1);
 }
 
+/** Phase tier-up stinger — bass thud + rising tone, scales with tier (2/3/5/10) */
+export function playPhaseTierUp(tier: number) {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+  const tierNorm = tier >= 10 ? 1.0 : tier >= 5 ? 0.7 : tier >= 3 ? 0.4 : 0.2;
+
+  // Sub-bass thud — felt more than heard
+  const subFreq = 55 + tierNorm * 30;
+  const sub = ctx.createOscillator();
+  sub.type = "sine";
+  sub.frequency.setValueAtTime(subFreq, t);
+  sub.frequency.exponentialRampToValueAtTime(subFreq * 0.45, t + 0.18);
+  const subGain = ctx.createGain();
+  subGain.gain.setValueAtTime(0.25 + tierNorm * 0.2, t);
+  subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+  sub.connect(subGain);
+  subGain.connect(masterGain!);
+  sub.start(t);
+  sub.stop(t + 0.24);
+
+  // Rising tone — celebration punch
+  const riseBase = 180 + tier * 28;
+  const rise = ctx.createOscillator();
+  rise.type = "triangle";
+  rise.frequency.setValueAtTime(riseBase, t + 0.04);
+  rise.frequency.exponentialRampToValueAtTime(riseBase * 2.8, t + 0.22);
+  const riseGain = ctx.createGain();
+  riseGain.gain.setValueAtTime(0.11 + tierNorm * 0.09, t + 0.04);
+  riseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+  rise.connect(riseGain);
+  connectWithSends(riseGain, { reverb: 0.4, delay: 0.15 });
+  rise.start(t + 0.04);
+  rise.stop(t + 0.3);
+}
+
 /** Stop all audio (cleanup) */
 /** Set master volume (0-1). Persists to localStorage. */
 export function setMasterVolume(vol: number) {

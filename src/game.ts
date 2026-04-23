@@ -6,7 +6,7 @@ import { Player } from "./player";
 import { World, type Obstacle } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
 import { PostFXPass } from "./postfx";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak, playPhaseTierUp } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { OnnxAgent } from "./onnx-agent";
@@ -321,6 +321,7 @@ export class Game {
   private slowMoFactor = 1; // visual slow-mo for close calls
   private slowMoTimer = 0;
   private fovBoost = 0;
+  private cameraZKick = 0; // brief push-toward-player on tier-up, decays ~150ms
   private skillFactor = 1;
   private personalBestTarget = 0;
   private personalBestStage = 0;
@@ -971,6 +972,7 @@ export class Game {
     this.slowMoFactor = 1;
     this.slowMoTimer = 0;
     this.fovBoost = 0;
+    this.cameraZKick = 0;
     this.targetFOV = 60; // launch starts narrow
     this.currentFOV = 60;
     this.targetCameraRoll = 0;
@@ -1644,7 +1646,7 @@ export class Game {
         }
         if (this.playerZ - this.lastCloseCall > 3) {
           this.phaseStreak++;
-          const streakBonus = Math.min(this.phaseStreak, 5); // up to 5x streak
+          const streakBonus = this.phaseStreakMultiplier(this.phaseStreak); // tiered ×2/×3/×5/×10
           const puMultiplier = this.powerups.getScoreMultiplier();
           const phaseMultiplier = this.getPhaseMultiplier();
           const closeCallPoints = Math.round(CLOSE_CALL_SCORE * streakBonus * puMultiplier * phaseMultiplier);
@@ -1685,19 +1687,10 @@ export class Game {
             debrisColor, 8 + streakBonus * 3
           );
 
-          // Dramatic announcements at streak milestones — only x5 and x10
-          if (this.phaseStreak === 5) {
-            this.popups.showCenter("UNSTOPPABLE", "", "#ff44ff");
-            this.screenFlash.trigger(0xff44ff, 0.2);
-            this.shake.trigger(0.4);
-          } else if (this.phaseStreak === 10) {
-            this.popups.showCenter("TRANSCENDENT", "", "#ff88ff");
-            this.screenFlash.trigger(0xff88ff, 0.25);
-            this.shake.trigger(0.6);
-            this.shockwave.trigger(
-              new THREE.Vector3(this.player.group.position.x, 0, this.playerZ),
-              0xff44ff, 10, 0.7
-            );
+          // Tier-up juice — fires only when streak crosses a new multiplier boundary
+          const prevTier = this.phaseStreakMultiplier(this.phaseStreak - 1);
+          if (streakBonus > prevTier) {
+            this.firePhaseTierUp(streakBonus);
           }
         }
       }
@@ -1715,9 +1708,12 @@ export class Game {
     const targetCamPos = new THREE.Vector3(
       this.player.group.position.x * 0.3,
       this.cameraOffset.y,
-      this.playerZ + this.cameraOffset.z
+      this.playerZ + this.cameraOffset.z + this.cameraZKick
     );
     this.camera.position.lerp(targetCamPos, 1 - Math.exp(-5 * dt));
+    // Decay the Z-kick over ~150ms
+    this.cameraZKick *= Math.exp(-dt / 0.15);
+    if (Math.abs(this.cameraZKick) < 0.01) this.cameraZKick = 0;
     // Keep up vector constant, apply roll via quaternion to avoid Euler gimbal ambiguity
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(
@@ -1758,14 +1754,24 @@ export class Game {
     if (this.combo > 1) {
       const comboVal = Math.min(this.combo, COMBO_MAX);
       this.hudCombo.textContent = `x${comboVal}`;
+      this.hudCombo.style.color = "#ffcc00";
       this.hudCombo.style.opacity = "1";
       // Scale and glow based on combo level
       const comboScale = 1 + comboVal * 0.05;
       this.hudCombo.style.transform = `scale(${comboScale})`;
       this.hudCombo.style.textShadow = `0 0 ${10 + comboVal * 3}px rgba(255,204,0,${0.3 + comboVal * 0.07})`;
+    } else if (this.player.shattered && this.phaseStreak > 1) {
+      // Show phase streak multiplier in the combo slot while phasing
+      const phaseMult = this.phaseStreakMultiplier(this.phaseStreak);
+      this.hudCombo.textContent = `PHASE x${phaseMult}`;
+      this.hudCombo.style.color = "#ff44ff";
+      this.hudCombo.style.opacity = "1";
+      this.hudCombo.style.transform = `scale(${1 + (phaseMult / 10) * 0.3})`;
+      this.hudCombo.style.textShadow = `0 0 ${10 + phaseMult * 2}px rgba(255,68,255,0.65)`;
     } else {
       this.hudCombo.style.opacity = "0";
       this.hudCombo.style.transform = "scale(1)";
+      this.hudCombo.style.color = "";
     }
 
     // Power-up HUD
@@ -1833,6 +1839,45 @@ export class Game {
 
   private getPhaseMultiplier(): number {
     return 1 + Math.min(this.phaseTimeAccum * 0.15, 1.5);
+  }
+
+  /** Tiered streak multiplier: ×2 at streak 2, ×3 at 3, ×5 at 5, ×10 at 10 */
+  private phaseStreakMultiplier(streak: number): number {
+    if (streak >= 10) return 10;
+    if (streak >= 5) return 5;
+    if (streak >= 3) return 3;
+    if (streak >= 2) return 2;
+    return 1;
+  }
+
+  /** Fire all visual/audio juice when the phase streak crosses a tier boundary */
+  private firePhaseTierUp(tier: number) {
+    const tierColor = tier >= 10 ? 0xff88ff : tier >= 5 ? 0xff44ff : tier >= 3 ? 0xcc44ff : 0xaa44ff;
+    const flashIntensity = tier >= 10 ? 0.3 : tier >= 5 ? 0.25 : tier >= 3 ? 0.2 : 0.15;
+    const distortAmount = tier >= 10 ? 0.8 : tier >= 5 ? 0.6 : tier >= 3 ? 0.45 : 0.3;
+    const kickAmount = tier >= 10 ? 1.8 : tier >= 5 ? 1.2 : tier >= 3 ? 0.8 : 0.5;
+
+    this.screenFlash.trigger(tierColor, flashIntensity);
+    this.cameraZKick = kickAmount;
+    this.postfx.triggerDistort(distortAmount);
+    playPhaseTierUp(tier);
+
+    if (tier >= 5) this.shake.trigger(tier >= 10 ? 0.6 : 0.4);
+
+    const popupColor = "#" + tierColor.toString(16).padStart(6, "0");
+    if (tier >= 10) {
+      this.popups.showCenter("PHASE x10", "TRANSCENDENT", popupColor);
+      this.shockwave.trigger(
+        new THREE.Vector3(this.player.group.position.x, 0, this.playerZ),
+        tierColor, 10, 0.7
+      );
+    } else if (tier >= 5) {
+      this.popups.showCenter("PHASE x5", "UNSTOPPABLE", popupColor);
+    } else if (tier >= 3) {
+      this.popups.showCenter("PHASE x3", "", popupColor);
+    } else {
+      this.popups.showCenter("PHASE x2", "", popupColor);
+    }
   }
 
   private updatePersonalBestDrama() {
