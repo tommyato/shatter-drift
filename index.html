@@ -146,6 +146,18 @@
       transition: height 0.08s linear, background-color 0.12s ease, box-shadow 0.12s ease;
     }
 
+    #hud-graze-label {
+      position: absolute;
+      left: 26px;
+      bottom: 22%;
+      font-family: 'Orbitron', monospace;
+      font-size: 6px;
+      letter-spacing: 1.5px;
+      color: rgba(0, 153, 204, 0.5);
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
     #hud-powerup {
       position: absolute;
       top: 48px;
@@ -626,6 +638,7 @@
       <div id="hud-boss-warning"></div>
       <div id="hud-phase-meter"><div id="hud-phase-fill"></div></div>
       <div id="hud-graze-meter"><div id="hud-graze-fill"></div></div>
+      <div id="hud-graze-label">NEAR MISS</div>
       <div id="daily-banner" class="hidden"></div>
       <div id="hud-state-indicator" class="whole">SOLID</div>
       <div id="center-message">

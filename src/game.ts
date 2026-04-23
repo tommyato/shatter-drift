@@ -321,9 +321,13 @@ export class Game {
   private phaseLocked = false;
   private phaseCooldown = 0;
   private phaseMinTimer = 0;
-  private phaseMeter = 0;           // 0..100 — earned by grazing obstacles
+  private phaseMeter = 50;          // 0..100 — earned by grazing obstacles; seeded at 50 so first run isn't a brick wall
   private grazeThrottleTimer = 0;   // prevents audio/particle spam during sustained graze
   private rejectionThrottleTimer = 0; // throttles rejection SFX
+  private meterFlashTimer = 0;      // 0..0.15 — graze flash animation (scale+alpha burst)
+  private meterRejectionTimer = 0;  // 0..0.3 — red rejection flash
+  private nearMissHintObstacleTimer = 0; // seconds since last obstacle-in-range; drives NEAR MISS TO CHARGE hint
+  private nearMissHintEl: HTMLElement | null = null;
   private deathSlowMo = false;
   private deathSlowMoTimer = 0;
 
@@ -557,6 +561,25 @@ export class Game {
     this.hudPhaseFill = document.getElementById("hud-phase-fill")!;
     this.hudGrazeMeter = document.getElementById("hud-graze-meter")!;
     this.hudGrazeFill = document.getElementById("hud-graze-fill")!;
+
+    // "NEAR MISS TO CHARGE" pulsing hint — appears near the meter when meter is low and an obstacle is approaching
+    this.nearMissHintEl = document.createElement("div");
+    this.nearMissHintEl.textContent = "NEAR MISS TO CHARGE";
+    this.nearMissHintEl.style.cssText = [
+      "position: fixed",
+      "left: 26px",
+      "bottom: calc(22% + 24px)",
+      "font-family: 'Orbitron', monospace",
+      "font-size: 7px",
+      "letter-spacing: 1.5px",
+      "color: #00ccff",
+      "white-space: nowrap",
+      "pointer-events: none",
+      "opacity: 0",
+      "z-index: 20",
+    ].join(";");
+    document.body.appendChild(this.nearMissHintEl);
+
     this.titleOverlay = document.getElementById("title-overlay")!;
     this.centerMessage = document.getElementById("center-message")!;
     this.centerTitle = document.getElementById("center-title")!;
@@ -1012,9 +1035,12 @@ export class Game {
     this.phaseLocked = false;
     this.phaseCooldown = 0;
     this.phaseMinTimer = 0;
-    this.phaseMeter = 0;
+    this.phaseMeter = 50;
     this.grazeThrottleTimer = 0;
     this.rejectionThrottleTimer = 0;
+    this.meterFlashTimer = 0;
+    this.meterRejectionTimer = 0;
+    this.nearMissHintObstacleTimer = 0;
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
@@ -1245,6 +1271,8 @@ export class Game {
     // Tick throttle timers
     if (this.grazeThrottleTimer > 0) this.grazeThrottleTimer = Math.max(0, this.grazeThrottleTimer - dt);
     if (this.rejectionThrottleTimer > 0) this.rejectionThrottleTimer = Math.max(0, this.rejectionThrottleTimer - dt);
+    if (this.meterFlashTimer > 0) this.meterFlashTimer = Math.max(0, this.meterFlashTimer - dt);
+    if (this.meterRejectionTimer > 0) this.meterRejectionTimer = Math.max(0, this.meterRejectionTimer - dt);
 
     // --- Graze detection: fills phaseMeter while skimming obstacles (not while phased) ---
     if (!this.player.shattered) {
@@ -1259,8 +1287,24 @@ export class Game {
           );
           playGrazeWhoosh();
           this.grazeThrottleTimer = 0.18; // ~5 times/sec max
+          // Flash meter bar and show NEAR MISS +15 float
+          this.meterFlashTimer = 0.15;
+          this.popups.showAt3D(
+            "NEAR MISS +15", this.player.group.position.x, this.playerZ, this.camera,
+            "#00ccff", 14
+          );
         }
       }
+
+      // Near-miss hint proximity tracking: obstacle within 1.5× graze band keeps hint alive for 2s
+      if (this.phaseMeter < 30 && grazeDist < GRAZE_BAND * 1.5) {
+        this.nearMissHintObstacleTimer = 2.0;
+      } else {
+        this.nearMissHintObstacleTimer = Math.max(0, this.nearMissHintObstacleTimer - dt);
+      }
+    } else {
+      // While phased, drain the hint timer (can't graze while shattered)
+      this.nearMissHintObstacleTimer = Math.max(0, this.nearMissHintObstacleTimer - dt);
     }
 
     // Tick post-shatter cooldown
@@ -1278,6 +1322,7 @@ export class Game {
     if (shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && !hasMeterForPhase && this.rejectionThrottleTimer <= 0) {
       playPhaseRejected();
       this.rejectionThrottleTimer = 0.5;
+      this.meterRejectionTimer = 0.3; // red meter flash
     }
 
     // Phase stays active while min-duration timer is running OR input is held AND meter available
@@ -2125,7 +2170,14 @@ export class Game {
 
     this.hudGrazeFill.style.height = `${fillPct}%`;
 
-    if (ready) {
+    // Rejection flash overrides all other colour states (red pulse)
+    if (this.meterRejectionTimer > 0) {
+      const t = this.meterRejectionTimer / 0.3;
+      const pulse = Math.sin(t * Math.PI); // 0 → peak → 0
+      this.hudGrazeFill.style.background = "#ff3030";
+      this.hudGrazeFill.style.boxShadow = `0 0 ${4 + pulse * 10}px rgba(255,48,48,${0.3 + pulse * 0.5})`;
+      this.hudGrazeMeter.style.opacity = String(0.6 + pulse * 0.4);
+    } else if (ready) {
       const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
       this.hudGrazeFill.style.background = "#00ccff";
       this.hudGrazeFill.style.boxShadow = `0 0 ${6 + pulse * 4}px rgba(0,204,255,${0.5 + pulse * 0.3})`;
@@ -2138,6 +2190,27 @@ export class Game {
       this.hudGrazeFill.style.background = "#0099cc";
       this.hudGrazeFill.style.boxShadow = "0 0 4px rgba(0,153,204,0.3)";
       this.hudGrazeMeter.style.opacity = fillPct > 5 ? "0.5" : "0.25";
+    }
+
+    // Graze flash: brief scale bounce on the meter container (1.0 → 1.1 → 1.0 over 150ms)
+    if (this.meterFlashTimer > 0) {
+      const t = this.meterFlashTimer / 0.15; // 1 → 0
+      const scaleY = 1 + 0.1 * Math.sin(t * Math.PI);
+      this.hudGrazeMeter.style.transform = `scaleY(${scaleY.toFixed(3)})`;
+      this.hudGrazeMeter.style.transformOrigin = "bottom center";
+    } else {
+      this.hudGrazeMeter.style.transform = "";
+    }
+
+    // "NEAR MISS TO CHARGE" hint: pulsing, shown when meter < 30% and obstacle recently in range
+    if (this.nearMissHintEl) {
+      const showHint = this.phaseMeter < 30 && this.nearMissHintObstacleTimer > 0;
+      if (showHint) {
+        const hintPulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.00785); // 0.8s period
+        this.nearMissHintEl.style.opacity = String(hintPulse);
+      } else {
+        this.nearMissHintEl.style.opacity = "0";
+      }
     }
   }
 

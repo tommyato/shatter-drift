@@ -37758,12 +37758,19 @@ var Game = class {
   phaseLocked = false;
   phaseCooldown = 0;
   phaseMinTimer = 0;
-  phaseMeter = 0;
-  // 0..100 — earned by grazing obstacles
+  phaseMeter = 50;
+  // 0..100 — earned by grazing obstacles; seeded at 50 so first run isn't a brick wall
   grazeThrottleTimer = 0;
   // prevents audio/particle spam during sustained graze
   rejectionThrottleTimer = 0;
   // throttles rejection SFX
+  meterFlashTimer = 0;
+  // 0..0.15 — graze flash animation (scale+alpha burst)
+  meterRejectionTimer = 0;
+  // 0..0.3 — red rejection flash
+  nearMissHintObstacleTimer = 0;
+  // seconds since last obstacle-in-range; drives NEAR MISS TO CHARGE hint
+  nearMissHintEl = null;
   deathSlowMo = false;
   deathSlowMoTimer = 0;
   // Cosmic Rift gravity flip
@@ -37951,6 +37958,22 @@ var Game = class {
     this.hudPhaseFill = document.getElementById("hud-phase-fill");
     this.hudGrazeMeter = document.getElementById("hud-graze-meter");
     this.hudGrazeFill = document.getElementById("hud-graze-fill");
+    this.nearMissHintEl = document.createElement("div");
+    this.nearMissHintEl.textContent = "NEAR MISS TO CHARGE";
+    this.nearMissHintEl.style.cssText = [
+      "position: fixed",
+      "left: 26px",
+      "bottom: calc(22% + 24px)",
+      "font-family: 'Orbitron', monospace",
+      "font-size: 7px",
+      "letter-spacing: 1.5px",
+      "color: #00ccff",
+      "white-space: nowrap",
+      "pointer-events: none",
+      "opacity: 0",
+      "z-index: 20"
+    ].join(";");
+    document.body.appendChild(this.nearMissHintEl);
     this.titleOverlay = document.getElementById("title-overlay");
     this.centerMessage = document.getElementById("center-message");
     this.centerTitle = document.getElementById("center-title");
@@ -38315,9 +38338,12 @@ var Game = class {
     this.phaseLocked = false;
     this.phaseCooldown = 0;
     this.phaseMinTimer = 0;
-    this.phaseMeter = 0;
+    this.phaseMeter = 50;
     this.grazeThrottleTimer = 0;
     this.rejectionThrottleTimer = 0;
+    this.meterFlashTimer = 0;
+    this.meterRejectionTimer = 0;
+    this.nearMissHintObstacleTimer = 0;
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
@@ -38485,6 +38511,8 @@ var Game = class {
     const wasShattered = this.wasShattered;
     if (this.grazeThrottleTimer > 0) this.grazeThrottleTimer = Math.max(0, this.grazeThrottleTimer - dt);
     if (this.rejectionThrottleTimer > 0) this.rejectionThrottleTimer = Math.max(0, this.rejectionThrottleTimer - dt);
+    if (this.meterFlashTimer > 0) this.meterFlashTimer = Math.max(0, this.meterFlashTimer - dt);
+    if (this.meterRejectionTimer > 0) this.meterRejectionTimer = Math.max(0, this.meterRejectionTimer - dt);
     if (!this.player.shattered) {
       const grazeDist = this.checkGrazeProximity();
       if (grazeDist > 0 && grazeDist < GRAZE_BAND) {
@@ -38497,8 +38525,24 @@ var Game = class {
           );
           playGrazeWhoosh();
           this.grazeThrottleTimer = 0.18;
+          this.meterFlashTimer = 0.15;
+          this.popups.showAt3D(
+            "NEAR MISS +15",
+            this.player.group.position.x,
+            this.playerZ,
+            this.camera,
+            "#00ccff",
+            14
+          );
         }
       }
+      if (this.phaseMeter < 30 && grazeDist < GRAZE_BAND * 1.5) {
+        this.nearMissHintObstacleTimer = 2;
+      } else {
+        this.nearMissHintObstacleTimer = Math.max(0, this.nearMissHintObstacleTimer - dt);
+      }
+    } else {
+      this.nearMissHintObstacleTimer = Math.max(0, this.nearMissHintObstacleTimer - dt);
     }
     if (this.phaseCooldown > 0) {
       this.phaseCooldown = Math.max(0, this.phaseCooldown - dt);
@@ -38510,6 +38554,7 @@ var Game = class {
     if (shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && !hasMeterForPhase && this.rejectionThrottleTimer <= 0) {
       playPhaseRejected();
       this.rejectionThrottleTimer = 0.5;
+      this.meterRejectionTimer = 0.3;
     }
     const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && hasMeterForPhase;
     const forcedByMinTimer = this.phaseMinTimer > 0 && !this.phaseLocked;
@@ -39207,7 +39252,13 @@ var Game = class {
     const ready = this.phaseMeter >= GRAZE_PHASE_COST;
     const isGrazing = !this.player.shattered && this.grazeThrottleTimer > 0;
     this.hudGrazeFill.style.height = `${fillPct}%`;
-    if (ready) {
+    if (this.meterRejectionTimer > 0) {
+      const t = this.meterRejectionTimer / 0.3;
+      const pulse = Math.sin(t * Math.PI);
+      this.hudGrazeFill.style.background = "#ff3030";
+      this.hudGrazeFill.style.boxShadow = `0 0 ${4 + pulse * 10}px rgba(255,48,48,${0.3 + pulse * 0.5})`;
+      this.hudGrazeMeter.style.opacity = String(0.6 + pulse * 0.4);
+    } else if (ready) {
       const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 6e-3);
       this.hudGrazeFill.style.background = "#00ccff";
       this.hudGrazeFill.style.boxShadow = `0 0 ${6 + pulse * 4}px rgba(0,204,255,${0.5 + pulse * 0.3})`;
@@ -39220,6 +39271,23 @@ var Game = class {
       this.hudGrazeFill.style.background = "#0099cc";
       this.hudGrazeFill.style.boxShadow = "0 0 4px rgba(0,153,204,0.3)";
       this.hudGrazeMeter.style.opacity = fillPct > 5 ? "0.5" : "0.25";
+    }
+    if (this.meterFlashTimer > 0) {
+      const t = this.meterFlashTimer / 0.15;
+      const scaleY = 1 + 0.1 * Math.sin(t * Math.PI);
+      this.hudGrazeMeter.style.transform = `scaleY(${scaleY.toFixed(3)})`;
+      this.hudGrazeMeter.style.transformOrigin = "bottom center";
+    } else {
+      this.hudGrazeMeter.style.transform = "";
+    }
+    if (this.nearMissHintEl) {
+      const showHint = this.phaseMeter < 30 && this.nearMissHintObstacleTimer > 0;
+      if (showHint) {
+        const hintPulse = 0.5 + 0.5 * Math.sin(performance.now() * 785e-5);
+        this.nearMissHintEl.style.opacity = String(hintPulse);
+      } else {
+        this.nearMissHintEl.style.opacity = "0";
+      }
     }
   }
   applyBiomeColors() {
