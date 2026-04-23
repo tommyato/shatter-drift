@@ -37478,6 +37478,56 @@ function makeNameTexture(name, color) {
   return tex;
 }
 
+// src/systems/gravity-flip-scheduler.ts
+var RIFT_FLIP_WARNING_DURATION = 1.5;
+var RIFT_FLIP_ACTIVE_DURATION = 3;
+var RIFT_FLIP_INTERVAL = 150;
+var RIFT_FLIP_JITTER = 30;
+var COSMIC_RIFT_START_DISTANCE = 1800;
+function createRiftFlipState() {
+  return {
+    phase: "idle",
+    timer: 0,
+    nextFlipDistance: COSMIC_RIFT_START_DISTANCE + 100
+    // first flip ~100m into biome
+  };
+}
+function updateRiftFlip(state, dt, distance, biomeIndex, canTrigger, rng) {
+  const events = [];
+  if (biomeIndex !== 4 || distance < COSMIC_RIFT_START_DISTANCE) {
+    if (state.phase !== "idle") {
+      if (state.phase === "active") events.push({ type: "rift_flip_end" });
+      state.phase = "idle";
+      state.timer = 0;
+    }
+    state.nextFlipDistance = Math.max(state.nextFlipDistance, COSMIC_RIFT_START_DISTANCE + 100);
+    return events;
+  }
+  state.timer = Math.max(0, state.timer - dt);
+  if (state.phase === "idle") {
+    const warningTriggerDistance = state.nextFlipDistance - 20;
+    if (distance >= warningTriggerDistance && canTrigger) {
+      state.phase = "warning";
+      state.timer = RIFT_FLIP_WARNING_DURATION;
+      events.push({ type: "rift_flip_warning" });
+    }
+  } else if (state.phase === "warning") {
+    if (state.timer <= 0) {
+      state.phase = "active";
+      state.timer = RIFT_FLIP_ACTIVE_DURATION;
+      events.push({ type: "rift_flip_start" });
+    }
+  } else if (state.phase === "active") {
+    if (state.timer <= 0) {
+      state.phase = "idle";
+      const jitter = (rng() - 0.5) * 2 * RIFT_FLIP_JITTER;
+      state.nextFlipDistance = distance + RIFT_FLIP_INTERVAL + jitter;
+      events.push({ type: "rift_flip_end" });
+    }
+  }
+  return events;
+}
+
 // src/game.ts
 var SpeedLines = class {
   el;
@@ -37716,6 +37766,13 @@ var Game = class {
   // throttles rejection SFX
   deathSlowMo = false;
   deathSlowMoTimer = 0;
+  // Cosmic Rift gravity flip
+  riftFlip = createRiftFlipState();
+  // Smoothed camera-up lerp (0 = upright, 1 = fully inverted)
+  riftFlipLerp = 0;
+  // HUD warning element — shows "RIFT" glyph during the 1.5s warning window
+  riftWarningEl = null;
+  riftWarningTimer = 0;
   // Camera juice
   baseFOV = 75;
   targetFOV = 75;
@@ -37833,6 +37890,25 @@ var Game = class {
     this.postfx.setResolution(window.innerWidth, window.innerHeight);
     this.composer.addPass(this.postfx.pass);
     this.input.init(this.renderer.domElement);
+    this.riftWarningEl = document.createElement("div");
+    this.riftWarningEl.textContent = "\u27F3 RIFT";
+    this.riftWarningEl.style.cssText = [
+      "position:fixed",
+      "top:18%",
+      "left:50%",
+      "transform:translateX(-50%)",
+      "font-family:'Orbitron',system-ui,sans-serif",
+      "font-size:clamp(28px,4vw,56px)",
+      "font-weight:900",
+      "letter-spacing:0.3em",
+      "color:#ff44ff",
+      "text-shadow:0 0 20px #ff44ff,0 0 40px #ff44ff,0 0 80px #ff00ff",
+      "opacity:0",
+      "transition:opacity 0.15s ease-out",
+      "pointer-events:none",
+      "z-index:50"
+    ].join(";");
+    document.body.appendChild(this.riftWarningEl);
     this.player = new Player();
     this.scene.add(this.player.group);
     this.biomes = new BiomeManager();
@@ -38245,6 +38321,10 @@ var Game = class {
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
+    this.riftFlip = createRiftFlipState();
+    this.riftFlipLerp = 0;
+    this.riftWarningTimer = 0;
+    if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
     this.player.laneX = 0;
     this.player.shattered = false;
     this.slowMoFactor = 1;
@@ -38525,6 +38605,47 @@ var Game = class {
       }, 800);
     }
     this.applyBiomeColors();
+    const canTriggerFlip = !this.player.shattered;
+    const riftEvents = updateRiftFlip(
+      this.riftFlip,
+      dt,
+      this.playerZ,
+      this.biomes.biomeIndex,
+      canTriggerFlip,
+      Math.random
+    );
+    for (const ev of riftEvents) {
+      if (ev.type === "rift_flip_warning") {
+        this.riftWarningTimer = 1.5;
+        if (this.riftWarningEl) this.riftWarningEl.style.opacity = "1";
+        this.postfx.triggerDistort(0.3);
+      } else if (ev.type === "rift_flip_start") {
+        this.riftWarningTimer = 0;
+        if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
+        this.screenFlash.trigger(16729343, 0.25);
+        this.postfx.triggerDistort(0.6);
+        this.shake.trigger(0.2);
+      } else if (ev.type === "rift_flip_end") {
+        this.screenFlash.trigger(16729343, 0.2);
+        this.postfx.triggerDistort(0.5);
+      }
+    }
+    if (this.riftWarningTimer > 0) {
+      this.riftWarningTimer = Math.max(0, this.riftWarningTimer - dt);
+      if (this.riftWarningEl) {
+        const pulse = 0.5 + 0.5 * Math.abs(Math.sin(this.riftWarningTimer * Math.PI * 3));
+        this.riftWarningEl.style.opacity = String(pulse);
+      }
+      if (this.riftWarningTimer === 0 && this.riftFlip.phase !== "warning" && this.riftWarningEl) {
+        this.riftWarningEl.style.opacity = "0";
+      }
+    }
+    const targetFlipLerp = this.riftFlip.phase === "active" ? 1 : 0;
+    this.riftFlipLerp = MathUtils.lerp(
+      this.riftFlipLerp,
+      targetFlipLerp,
+      1 - Math.exp(-6 * dt)
+    );
     this.powerups.update(dt, this.playerZ, this.player.group.position.x);
     this.bossWaves.update(dt, this.playerZ);
     const gateResult = this.speedGates.update(dt, this.playerZ, this.player.group.position.x);
@@ -38863,7 +38984,8 @@ var Game = class {
     this.camera.position.lerp(targetCamPos, 1 - Math.exp(-5 * dt));
     this.cameraZKick *= Math.exp(-dt / 0.15);
     if (Math.abs(this.cameraZKick) < 0.01) this.cameraZKick = 0;
-    this.camera.up.set(0, 1, 0);
+    const upY = 1 - 2 * this.riftFlipLerp;
+    this.camera.up.set(0, upY, 0);
     this.camera.lookAt(
       this.player.group.position.x * 0.5,
       0.5,

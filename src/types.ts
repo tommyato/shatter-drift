@@ -39,6 +39,10 @@ export type GameEvent =
 	| { type: 'shatter_activated' }
 	| { type: 'wall_destroyed' }
 	| { type: 'death' }
+	| { type: 'pattern_emitted'; pattern: string; obstacleCount: number; startZ: number }
+	| { type: 'rift_flip_warning' }
+	| { type: 'rift_flip_start' }
+	| { type: 'rift_flip_end' }
 
 export interface SimulationInputState {
 	horizontal: number

@@ -22,3 +22,15 @@ await esbuild({
 	platform: 'node',
 	sourcemap: false,
 })
+
+// Standalone bundle of the gravity-flip scheduler so verify-patterns.mjs can
+// unit-test the pure logic without needing the whole sim.
+await esbuild({
+	entryPoints: ['src/systems/gravity-flip-scheduler.ts'],
+	outfile: 'dist/rift-flip-scheduler.mjs',
+	bundle: true,
+	format: 'esm',
+	target: 'node18',
+	platform: 'node',
+	sourcemap: false,
+})

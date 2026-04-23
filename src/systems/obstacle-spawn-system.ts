@@ -4,13 +4,25 @@ import {
 	ORB_SPACING,
 	PLAYABLE_HALF_WIDTH,
 	SPAWN_DISTANCE,
+	clamp,
 } from '../constants'
 import type { SimulationObstacle, SimulationWorld } from '../sim-world'
+import {
+	type ObstacleSpec,
+	type PatternCtx,
+	biomeFromDistance,
+	pickNextPattern,
+} from './obstacle-patterns'
 
 const BOSS_WAVE_INTERVAL = 500
 
-function createGate(world: SimulationWorld, z: number, gapHalfWidth: number): void {
-	const gapX = (world.random() - 0.5) * 5
+function createGate(
+	world: SimulationWorld,
+	z: number,
+	gapHalfWidth: number,
+	gapXOverride?: number,
+): void {
+	const gapX = gapXOverride ?? (world.random() - 0.5) * 5
 	const leftWidth = gapX - gapHalfWidth + PLAYABLE_HALF_WIDTH
 	const rightStart = gapX + gapHalfWidth
 	const rightWidth = PLAYABLE_HALF_WIDTH - rightStart
@@ -60,9 +72,9 @@ function createPillar(world: SimulationWorld, z: number, x?: number, width?: num
 	})
 }
 
-function createWideBar(world: SimulationWorld, z: number): void {
+function createWideBar(world: SimulationWorld, z: number, gapXOverride?: number): void {
 	const gapSide = world.random() < 0.5 ? -1 : 1
-	const gapX = gapSide * (2 + world.random() * 2)
+	const gapX = gapXOverride ?? gapSide * (2 + world.random() * 2)
 	const gapHalfWidth = 2
 	const gapLeft = gapX - gapHalfWidth
 	const gapRight = gapX + gapHalfWidth
@@ -96,35 +108,44 @@ function createWideBar(world: SimulationWorld, z: number): void {
 	})
 }
 
-function spawnObstacle(world: SimulationWorld, z: number): void {
-	const type = world.random()
-	if (type < 0.4) {
-		createGate(world, z, 2.25)
-		return
-	}
-	if (type < 0.7) {
-		createPillar(world, z)
-		return
-	}
-	if (type < 0.85) {
-		const spread = 2 + world.random() * 2
-		const offset = (world.random() - 0.5) * 2
-		createPillar(world, z, offset - spread, 1 + world.random())
-		createPillar(world, z, offset + spread, 1 + world.random())
-		return
-	}
-	createWideBar(world, z)
+/** Phase-only wall: full-width pillar (halfWidth = PLAYABLE_HALF_WIDTH). Must be phased through.
+ *  Composes the existing pillar vocabulary — no new obstacle type. */
+function createPhaseWall(world: SimulationWorld, z: number): void {
+	world.state.obstacles.push({
+		z,
+		x: 0,
+		halfWidth: PLAYABLE_HALF_WIDTH,
+		halfHeight: 1.5,
+		isGate: false,
+		gapX: 0,
+		gapHalfWidth: 0,
+		active: true,
+		partiallyShattered: false,
+		passed: false,
+	})
 }
 
-function spawnOrbCluster(world: SimulationWorld, z: number): void {
-	const count = 1 + Math.floor(world.random() * 3)
-	const baseX = (world.random() - 0.5) * 6
-	for (let index = 0; index < count; index += 1) {
-		world.state.orbs.push({
-			x: baseX + (index - (count - 1) / 2) * 1.5,
-			z: z + index * 1.5,
-			active: true,
-		})
+function materializeSpec(world: SimulationWorld, z: number, spec: ObstacleSpec): void {
+	switch (spec.kind) {
+		case 'gate':
+			createGate(world, z, spec.gapHalfWidth ?? 2.25, spec.gapX)
+			return
+		case 'pillar':
+			createPillar(world, z, spec.x, spec.width)
+			return
+		case 'dual-pillar': {
+			const spread = 2 + world.random() * 2
+			const offset = (world.random() - 0.5) * 2
+			createPillar(world, z, offset - spread, 1 + world.random())
+			createPillar(world, z, offset + spread, 1 + world.random())
+			return
+		}
+		case 'wide-bar':
+			createWideBar(world, z, spec.gapX)
+			return
+		case 'phase-wall':
+			createPhaseWall(world, z)
+			return
 	}
 }
 
@@ -159,7 +180,7 @@ function spawnBossSpinningGate(world: SimulationWorld, bossZ: number): void {
 			active: true,
 			partiallyShattered: false,
 			passed: false,
-			bossAnimation: { pattern: 'static', baseX: 0, phase: i * Math.PI / 2, speed: 1.5 + i * 0.3, timer: 0 },
+			bossAnimation: { pattern: 'static', baseX: 0, phase: (i * Math.PI) / 2, speed: 1.5 + i * 0.3, timer: 0 },
 		})
 	})
 }
@@ -242,6 +263,49 @@ function spawnBossWave(world: SimulationWorld, bossZ: number): void {
 	}
 }
 
+function spawnOrbCluster(world: SimulationWorld, z: number): void {
+	const count = 1 + Math.floor(world.random() * 3)
+	const baseX = (world.random() - 0.5) * 6
+	for (let index = 0; index < count; index += 1) {
+		world.state.orbs.push({
+			x: baseX + (index - (count - 1) / 2) * 1.5,
+			z: z + index * 1.5,
+			active: true,
+		})
+	}
+}
+
+/** Emit a choreographed pattern at the current spawn cursor. Advances the cursor by
+ *  pattern.length plus a randomized breather (1.0–2.0× distance-adaptive spacing).
+ *  Returns the z-delta the cursor advanced. Breather calibrated so that mean
+ *  obstacle density matches the pre-patterns IID baseline (~0.081 obstacles/m
+ *  over 2000m, within ±15%). */
+function emitPattern(world: SimulationWorld): number {
+	const startZ = world.state.nextObstacleZ
+	const ctx: PatternCtx = {
+		playerZ: world.state.playerZ,
+		biome: biomeFromDistance(startZ),
+		difficultyT: clamp(startZ / 2000, 0, 1),
+	}
+	const pattern = pickNextPattern(ctx, world.random, world.state.lastPatternName)
+	const specs = pattern.emit(world.random, ctx)
+
+	for (const spec of specs) {
+		materializeSpec(world, startZ + spec.dz, spec)
+	}
+
+	world.state.lastPatternName = pattern.name
+	world.pushEvent({
+		type: 'pattern_emitted',
+		pattern: pattern.name,
+		obstacleCount: specs.length,
+		startZ,
+	})
+
+	const breather = getObstacleSpacing(world) * (1.0 + world.random())
+	return pattern.length + breather
+}
+
 export function createObstacleSpawnSystem(world: SimulationWorld) {
 	return (_dt: number) => {
 		if (world.state.nextObstacleZ === 0) {
@@ -252,8 +316,8 @@ export function createObstacleSpawnSystem(world: SimulationWorld) {
 		}
 
 		while (world.state.nextObstacleZ < world.state.playerZ + SPAWN_DISTANCE) {
-			spawnObstacle(world, world.state.nextObstacleZ)
-			world.state.nextObstacleZ += getObstacleSpacing(world)
+			const advance = emitPattern(world)
+			world.state.nextObstacleZ += advance
 		}
 
 		while (world.state.nextOrbZ < world.state.playerZ + SPAWN_DISTANCE) {
@@ -323,4 +387,3 @@ export function destroyObstacle(
 
 	return true
 }
-

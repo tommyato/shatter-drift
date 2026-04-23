@@ -337,7 +337,14 @@ function createInitialState() {
     lastCloseCallZ: -10,
     nextBossZ: 500,
     // matches BOSS_INTERVAL in bosswaves.ts
-    bossCount: 0
+    bossCount: 0,
+    lastPatternName: null,
+    riftFlip: {
+      phase: "idle",
+      timer: 0,
+      nextFlipDistance: 1900
+      // first flip ~100m into Cosmic Rift (1800m start)
+    }
   };
 }
 function createSimulationWorld(input, random) {
@@ -462,6 +469,7 @@ var CollisionSystemToken = createToken("CollisionSystem");
 var ShatterSystemToken = createToken("ShatterSystem");
 var OrbSystemToken = createToken("OrbSystem");
 var BossAnimationSystemToken = createToken("BossAnimationSystem");
+var RiftFlipSystemToken = createToken("RiftFlipSystem");
 
 // src/systems/boss-animation-system.ts
 function createBossAnimationSystem(world) {
@@ -551,10 +559,156 @@ function createObstacleDespawnSystem(world) {
   };
 }
 
+// src/systems/obstacle-patterns.ts
+var weave = {
+  name: "weave",
+  length: 48,
+  obstacleCount: 6,
+  emit(rng, _ctx) {
+    const startSide = rng() < 0.5 ? -1 : 1;
+    const specs = [];
+    for (let i = 0; i < 6; i++) {
+      const side = startSide * (i % 2 === 0 ? 1 : -1);
+      const x = i === 0 ? side * (0.8 + rng() * 0.4) : side * (2 + rng() * 1.5);
+      specs.push({ kind: "pillar", dz: i * 8, x, width: 1.2 + rng() * 0.8 });
+    }
+    return specs;
+  }
+};
+var wallSandwich = {
+  name: "wall-sandwich",
+  length: 30,
+  obstacleCount: 3,
+  emit(rng, _ctx) {
+    return [
+      { kind: "gate", dz: 0, gapX: (rng() - 0.5) * 5 },
+      { kind: "phase-wall", dz: 12 },
+      { kind: "gate", dz: 24, gapX: (rng() - 0.5) * 5 }
+    ];
+  }
+};
+var shotgun = {
+  name: "shotgun",
+  length: 60,
+  // 25 compression + 35 breather built-in
+  obstacleCount: 5,
+  emit(rng, _ctx) {
+    const specs = [];
+    for (let i = 0; i < 5; i++) {
+      const pick = rng();
+      if (pick < 0.5) {
+        specs.push({ kind: "pillar", dz: i * 5, x: (rng() - 0.5) * 6 });
+      } else if (pick < 0.8) {
+        specs.push({ kind: "gate", dz: i * 5, gapX: (rng() - 0.5) * 5 });
+      } else {
+        specs.push({ kind: "dual-pillar", dz: i * 5 });
+      }
+    }
+    return specs;
+  }
+};
+var crescendo = {
+  name: "crescendo",
+  length: 115,
+  obstacleCount: 8,
+  emit(rng, _ctx) {
+    const specs = [];
+    let dz = 0;
+    for (let i = 0; i < 7; i++) {
+      const spacing = 20 - 12 * i / 6;
+      specs.push({
+        kind: rng() < 0.5 ? "pillar" : "gate",
+        dz,
+        x: (rng() - 0.5) * 6,
+        gapX: (rng() - 0.5) * 4
+      });
+      dz += spacing;
+    }
+    specs.push({ kind: "phase-wall", dz });
+    return specs;
+  }
+};
+var falseSafety = {
+  name: "false-safety",
+  length: 38,
+  obstacleCount: 4,
+  emit(rng, _ctx) {
+    return [
+      { kind: "gate", dz: 0, gapX: (rng() - 0.5) * 5 },
+      { kind: "pillar", dz: 10, x: (rng() - 0.5) * 5 },
+      { kind: "gate", dz: 20, gapX: (rng() - 0.5) * 5 },
+      { kind: "phase-wall", dz: 26 }
+      // surprise, 6 units after the gate — tight
+    ];
+  }
+};
+var twinGates = {
+  name: "twin-gates",
+  length: 16,
+  obstacleCount: 2,
+  emit(rng, _ctx) {
+    const offset = 2 + rng() * 1.5;
+    const side = rng() < 0.5 ? -1 : 1;
+    return [
+      { kind: "gate", dz: 0, gapX: side * offset, gapHalfWidth: 2.25 },
+      { kind: "gate", dz: 8, gapX: -side * offset, gapHalfWidth: 2.25 }
+    ];
+  }
+};
+var PATTERNS = [
+  weave,
+  wallSandwich,
+  shotgun,
+  crescendo,
+  falseSafety,
+  twinGates
+];
+function pickNextPattern(ctx, rng, lastPatternName) {
+  const t = ctx.difficultyT;
+  const weights = {
+    weave: 0.15 + t * 0.9,
+    "wall-sandwich": 0.8 - t * 0.3,
+    shotgun: 0.05 + t * 1.2,
+    crescendo: 0.05 + t * 1.2,
+    "false-safety": 0.3 + t * 0.4,
+    "twin-gates": 1 - t * 0.5
+  };
+  if (ctx.biome === 4) {
+    weights["shotgun"] += 0.2;
+    weights["crescendo"] += 0.2;
+  } else if (ctx.biome === 0) {
+    weights["twin-gates"] += 0.3;
+    weights["wall-sandwich"] += 0.2;
+  }
+  if (lastPatternName && weights[lastPatternName] !== void 0) {
+    weights[lastPatternName] = 0;
+  }
+  let total = 0;
+  for (const k of Object.keys(weights)) {
+    weights[k] = Math.max(0, weights[k]);
+    total += weights[k];
+  }
+  if (total <= 0) return twinGates;
+  let r = rng() * total;
+  for (const pat of PATTERNS) {
+    const w = weights[pat.name] ?? 0;
+    if (r < w) return pat;
+    r -= w;
+  }
+  return PATTERNS[PATTERNS.length - 1];
+}
+function biomeFromDistance(distance) {
+  if (distance < 300) return 0;
+  if (distance < 700) return 1;
+  if (distance < 1200) return 2;
+  if (distance < 1800) return 3;
+  return 4;
+}
+
 // src/systems/obstacle-spawn-system.ts
 var BOSS_WAVE_INTERVAL = 500;
-function createGate(world, z, gapHalfWidth) {
-  const gapX = (world.random() - 0.5) * 5;
+function createGate(world, z, gapHalfWidth, gapXOverride) {
+  const gapX = gapXOverride ?? (world.random() - 0.5) * 5;
   const leftWidth = gapX - gapHalfWidth + PLAYABLE_HALF_WIDTH;
   const rightStart = gapX + gapHalfWidth;
   const rightWidth = PLAYABLE_HALF_WIDTH - rightStart;
@@ -602,9 +756,9 @@ function createPillar(world, z, x, width) {
     passed: false
   });
 }
-function createWideBar(world, z) {
+function createWideBar(world, z, gapXOverride) {
   const gapSide = world.random() < 0.5 ? -1 : 1;
-  const gapX = gapSide * (2 + world.random() * 2);
+  const gapX = gapXOverride ?? gapSide * (2 + world.random() * 2);
   const gapHalfWidth = 2;
   const gapLeft = gapX - gapHalfWidth;
   const gapRight = gapX + gapHalfWidth;
@@ -637,34 +791,41 @@ function createWideBar(world, z) {
     wallSegments
   });
 }
-function spawnObstacle(world, z) {
-  const type = world.random();
-  if (type < 0.4) {
-    createGate(world, z, 2.25);
-    return;
-  }
-  if (type < 0.7) {
-    createPillar(world, z);
-    return;
-  }
-  if (type < 0.85) {
-    const spread = 2 + world.random() * 2;
-    const offset = (world.random() - 0.5) * 2;
-    createPillar(world, z, offset - spread, 1 + world.random());
-    createPillar(world, z, offset + spread, 1 + world.random());
-    return;
-  }
-  createWideBar(world, z);
+function createPhaseWall(world, z) {
+  world.state.obstacles.push({
+    z,
+    x: 0,
+    halfWidth: PLAYABLE_HALF_WIDTH,
+    halfHeight: 1.5,
+    isGate: false,
+    gapX: 0,
+    gapHalfWidth: 0,
+    active: true,
+    partiallyShattered: false,
+    passed: false
+  });
 }
-function spawnOrbCluster(world, z) {
-  const count = 1 + Math.floor(world.random() * 3);
-  const baseX = (world.random() - 0.5) * 6;
-  for (let index = 0; index < count; index += 1) {
-    world.state.orbs.push({
-      x: baseX + (index - (count - 1) / 2) * 1.5,
-      z: z + index * 1.5,
-      active: true
-    });
+function materializeSpec(world, z, spec) {
+  switch (spec.kind) {
+    case "gate":
+      createGate(world, z, spec.gapHalfWidth ?? 2.25, spec.gapX);
+      return;
+    case "pillar":
+      createPillar(world, z, spec.x, spec.width);
+      return;
+    case "dual-pillar": {
+      const spread = 2 + world.random() * 2;
+      const offset = (world.random() - 0.5) * 2;
+      createPillar(world, z, offset - spread, 1 + world.random());
+      createPillar(world, z, offset + spread, 1 + world.random());
+      return;
+    }
+    case "wide-bar":
+      createWideBar(world, z, spec.gapX);
+      return;
+    case "phase-wall":
+      createPhaseWall(world, z);
+      return;
   }
 }
 function getObstacleSpacing(world) {
@@ -774,6 +935,39 @@ function spawnBossWave(world, bossZ) {
       break;
   }
 }
+function spawnOrbCluster(world, z) {
+  const count = 1 + Math.floor(world.random() * 3);
+  const baseX = (world.random() - 0.5) * 6;
+  for (let index = 0; index < count; index += 1) {
+    world.state.orbs.push({
+      x: baseX + (index - (count - 1) / 2) * 1.5,
+      z: z + index * 1.5,
+      active: true
+    });
+  }
+}
+function emitPattern(world) {
+  const startZ = world.state.nextObstacleZ;
+  const ctx = {
+    playerZ: world.state.playerZ,
+    biome: biomeFromDistance(startZ),
+    difficultyT: clamp(startZ / 2e3, 0, 1)
+  };
+  const pattern = pickNextPattern(ctx, world.random, world.state.lastPatternName);
+  const specs = pattern.emit(world.random, ctx);
+  for (const spec of specs) {
+    materializeSpec(world, startZ + spec.dz, spec);
+  }
+  world.state.lastPatternName = pattern.name;
+  world.pushEvent({
+    type: "pattern_emitted",
+    pattern: pattern.name,
+    obstacleCount: specs.length,
+    startZ
+  });
+  const breather = getObstacleSpacing(world) * (1 + world.random());
+  return pattern.length + breather;
+}
 function createObstacleSpawnSystem(world) {
   return (_dt) => {
     if (world.state.nextObstacleZ === 0) {
@@ -783,8 +977,8 @@ function createObstacleSpawnSystem(world) {
       world.state.nextOrbZ = INITIAL_ORB_Z;
     }
     while (world.state.nextObstacleZ < world.state.playerZ + SPAWN_DISTANCE) {
-      spawnObstacle(world, world.state.nextObstacleZ);
-      world.state.nextObstacleZ += getObstacleSpacing(world);
+      const advance = emitPattern(world);
+      world.state.nextObstacleZ += advance;
     }
     while (world.state.nextOrbZ < world.state.playerZ + SPAWN_DISTANCE) {
       spawnOrbCluster(world, world.state.nextOrbZ);
@@ -870,6 +1064,67 @@ function createPlayerMovementSystem(world) {
       -PLAYABLE_HALF_WIDTH,
       PLAYABLE_HALF_WIDTH
     );
+  };
+}
+
+// src/systems/gravity-flip-scheduler.ts
+var RIFT_FLIP_WARNING_DURATION = 1.5;
+var RIFT_FLIP_ACTIVE_DURATION = 3;
+var RIFT_FLIP_INTERVAL = 150;
+var RIFT_FLIP_JITTER = 30;
+var COSMIC_RIFT_START_DISTANCE = 1800;
+function updateRiftFlip(state, dt, distance, biomeIndex, canTrigger, rng) {
+  const events = [];
+  if (biomeIndex !== 4 || distance < COSMIC_RIFT_START_DISTANCE) {
+    if (state.phase !== "idle") {
+      if (state.phase === "active") events.push({ type: "rift_flip_end" });
+      state.phase = "idle";
+      state.timer = 0;
+    }
+    state.nextFlipDistance = Math.max(state.nextFlipDistance, COSMIC_RIFT_START_DISTANCE + 100);
+    return events;
+  }
+  state.timer = Math.max(0, state.timer - dt);
+  if (state.phase === "idle") {
+    const warningTriggerDistance = state.nextFlipDistance - 20;
+    if (distance >= warningTriggerDistance && canTrigger) {
+      state.phase = "warning";
+      state.timer = RIFT_FLIP_WARNING_DURATION;
+      events.push({ type: "rift_flip_warning" });
+    }
+  } else if (state.phase === "warning") {
+    if (state.timer <= 0) {
+      state.phase = "active";
+      state.timer = RIFT_FLIP_ACTIVE_DURATION;
+      events.push({ type: "rift_flip_start" });
+    }
+  } else if (state.phase === "active") {
+    if (state.timer <= 0) {
+      state.phase = "idle";
+      const jitter = (rng() - 0.5) * 2 * RIFT_FLIP_JITTER;
+      state.nextFlipDistance = distance + RIFT_FLIP_INTERVAL + jitter;
+      events.push({ type: "rift_flip_end" });
+    }
+  }
+  return events;
+}
+
+// src/systems/rift-flip-system.ts
+function createRiftFlipSystem(world) {
+  return (dt) => {
+    const biome = biomeFromDistance(world.state.playerZ);
+    const canTrigger = !world.state.shattered;
+    const events = updateRiftFlip(
+      world.state.riftFlip,
+      dt,
+      world.state.playerZ,
+      biome,
+      canTrigger,
+      world.random
+    );
+    for (const event of events) {
+      world.pushEvent({ type: event.type });
+    }
   };
 }
 
@@ -981,6 +1236,7 @@ function createRuntime(config = {}) {
   container.bind(CollisionSystemToken).toFactory(createCollisionSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(OrbSystemToken).toFactory(createOrbSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(BossAnimationSystemToken).toFactory(createBossAnimationSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(RiftFlipSystemToken).toFactory(createRiftFlipSystem).withDeps(SimulationWorldToken).asSingleton();
   const world = container.get(SimulationWorldToken);
   const playerMovementSystem = container.get(PlayerMovementSystemToken);
   const worldScrollSystem = container.get(WorldScrollSystemToken);
@@ -990,6 +1246,7 @@ function createRuntime(config = {}) {
   const orbSystem = container.get(OrbSystemToken);
   const obstacleDespawnSystem = container.get(ObstacleDespawnSystemToken);
   const bossAnimationSystem = container.get(BossAnimationSystemToken);
+  const riftFlipSystem = container.get(RiftFlipSystemToken);
   const input = container.get(SimulationInputToken);
   return {
     container,
@@ -1005,6 +1262,7 @@ function createRuntime(config = {}) {
       orbSystem(dt);
       collisionSystem(dt);
       obstacleDespawnSystem(dt);
+      riftFlipSystem(dt);
     },
     setAction(action) {
       input.setAction(action);

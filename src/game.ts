@@ -30,6 +30,12 @@ import { RunHistoryTracker } from "./stats";
 import { fetchLeaderboard, submitScore, getPlayerName, setPlayerName, fetchGhosts, submitGhost, fetchGhostUploadThreshold, type LeaderboardEntry } from "./leaderboard";
 import { GhostRecorder, GhostManager } from "./ghost";
 import {
+  createRiftFlipState,
+  updateRiftFlip,
+  RIFT_FLIP_ACTIVE_DURATION,
+  type RiftFlipState,
+} from "./systems/gravity-flip-scheduler";
+import {
   CLOSE_CALL_SCORE,
   COMBO_MAX,
   INITIAL_SPEED,
@@ -321,6 +327,14 @@ export class Game {
   private deathSlowMo = false;
   private deathSlowMoTimer = 0;
 
+  // Cosmic Rift gravity flip
+  private riftFlip: RiftFlipState = createRiftFlipState();
+  // Smoothed camera-up lerp (0 = upright, 1 = fully inverted)
+  private riftFlipLerp = 0;
+  // HUD warning element — shows "RIFT" glyph during the 1.5s warning window
+  private riftWarningEl: HTMLElement | null = null;
+  private riftWarningTimer = 0;
+
   // Camera juice
   private baseFOV = 75;
   private targetFOV = 75;
@@ -462,6 +476,27 @@ export class Game {
 
     // Input
     this.input.init(this.renderer.domElement);
+
+    // Rift-flip HUD warning glyph (shown during the 1.5s warning window)
+    this.riftWarningEl = document.createElement("div");
+    this.riftWarningEl.textContent = "⟳ RIFT";
+    this.riftWarningEl.style.cssText = [
+      "position:fixed",
+      "top:18%",
+      "left:50%",
+      "transform:translateX(-50%)",
+      "font-family:'Orbitron',system-ui,sans-serif",
+      "font-size:clamp(28px,4vw,56px)",
+      "font-weight:900",
+      "letter-spacing:0.3em",
+      "color:#ff44ff",
+      "text-shadow:0 0 20px #ff44ff,0 0 40px #ff44ff,0 0 80px #ff00ff",
+      "opacity:0",
+      "transition:opacity 0.15s ease-out",
+      "pointer-events:none",
+      "z-index:50",
+    ].join(";");
+    document.body.appendChild(this.riftWarningEl);
 
     // Player
     this.player = new Player();
@@ -983,6 +1018,10 @@ export class Game {
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
+    this.riftFlip = createRiftFlipState();
+    this.riftFlipLerp = 0;
+    this.riftWarningTimer = 0;
+    if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
     this.player.laneX = 0;
     this.player.shattered = false;
     this.slowMoFactor = 1;
@@ -1358,6 +1397,54 @@ export class Game {
       }, 800); // slight delay so biome name shows first
     }
     this.applyBiomeColors();
+
+    // Cosmic Rift gravity-flip zones — visual inversion every ~150m inside
+    // biome 4. Never fires mid-phase (wouldn't be fair). Camera.up interpolates
+    // smoothly between upright and inverted so the transition doesn't snap.
+    const canTriggerFlip = !this.player.shattered;
+    const riftEvents = updateRiftFlip(
+      this.riftFlip,
+      dt,
+      this.playerZ,
+      this.biomes.biomeIndex,
+      canTriggerFlip,
+      Math.random,
+    );
+    for (const ev of riftEvents) {
+      if (ev.type === "rift_flip_warning") {
+        this.riftWarningTimer = 1.5;
+        if (this.riftWarningEl) this.riftWarningEl.style.opacity = "1";
+        this.postfx.triggerDistort(0.3);
+      } else if (ev.type === "rift_flip_start") {
+        this.riftWarningTimer = 0;
+        if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
+        this.screenFlash.trigger(0xff44ff, 0.25);
+        this.postfx.triggerDistort(0.6);
+        this.shake.trigger(0.2);
+      } else if (ev.type === "rift_flip_end") {
+        this.screenFlash.trigger(0xff44ff, 0.2);
+        this.postfx.triggerDistort(0.5);
+      }
+    }
+    // Drive HUD warning pulse: fade out after timer expires
+    if (this.riftWarningTimer > 0) {
+      this.riftWarningTimer = Math.max(0, this.riftWarningTimer - dt);
+      if (this.riftWarningEl) {
+        // Pulse opacity 0.5–1.0 every 0.3s during warning
+        const pulse = 0.5 + 0.5 * Math.abs(Math.sin(this.riftWarningTimer * Math.PI * 3));
+        this.riftWarningEl.style.opacity = String(pulse);
+      }
+      if (this.riftWarningTimer === 0 && this.riftFlip.phase !== "warning" && this.riftWarningEl) {
+        this.riftWarningEl.style.opacity = "0";
+      }
+    }
+    // Smooth camera-up flip: lerp to 1 when active, 0 otherwise.
+    const targetFlipLerp = this.riftFlip.phase === "active" ? 1 : 0;
+    this.riftFlipLerp = THREE.MathUtils.lerp(
+      this.riftFlipLerp,
+      targetFlipLerp,
+      1 - Math.exp(-6 * dt),
+    );
 
     // Update power-ups
     this.powerups.update(dt, this.playerZ, this.player.group.position.x);
@@ -1760,8 +1847,12 @@ export class Game {
     // Decay the Z-kick over ~150ms
     this.cameraZKick *= Math.exp(-dt / 0.15);
     if (Math.abs(this.cameraZKick) < 0.01) this.cameraZKick = 0;
-    // Keep up vector constant, apply roll via quaternion to avoid Euler gimbal ambiguity
-    this.camera.up.set(0, 1, 0);
+    // Keep up vector constant, apply roll via quaternion to avoid Euler gimbal ambiguity.
+    // Cosmic Rift gravity-flip: lerp up vector Y from +1 (upright) to -1 (inverted)
+    // while the flip zone is active. Gameplay math (collisions, player X) is unchanged —
+    // only visuals invert. Use 1 - 2*lerp so 0→+1 and 1→-1.
+    const upY = 1 - 2 * this.riftFlipLerp;
+    this.camera.up.set(0, upY, 0);
     this.camera.lookAt(
       this.player.group.position.x * 0.5,
       0.5,

@@ -49,6 +49,14 @@ export interface SimulationState {
 	lastCloseCallZ: number
 	nextBossZ: number
 	bossCount: number
+	/** Last pattern emitted by the obstacle spawn system — never repeats back-to-back. */
+	lastPatternName: string | null
+	/** Cosmic Rift gravity-flip scheduler state. */
+	riftFlip: {
+		phase: 'idle' | 'warning' | 'active'
+		timer: number
+		nextFlipDistance: number
+	}
 }
 
 export interface SimulationWorld {
@@ -82,6 +90,12 @@ function createInitialState(): SimulationState {
 		lastCloseCallZ: -10,
 		nextBossZ: 500, // matches BOSS_INTERVAL in bosswaves.ts
 		bossCount: 0,
+		lastPatternName: null,
+		riftFlip: {
+			phase: 'idle',
+			timer: 0,
+			nextFlipDistance: 1900, // first flip ~100m into Cosmic Rift (1800m start)
+		},
 	}
 }
 

@@ -10,6 +10,7 @@ import {
 	OrbSystemToken,
 	PlayerMovementSystemToken,
 	RandomToken,
+	RiftFlipSystemToken,
 	ShatterSystemToken,
 	SimulationInputToken,
 	SimulationWorldToken,
@@ -22,6 +23,7 @@ import { createObstacleDespawnSystem } from './systems/obstacle-despawn-system'
 import { createObstacleSpawnSystem } from './systems/obstacle-spawn-system'
 import { createOrbSystem } from './systems/orb-system'
 import { createPlayerMovementSystem } from './systems/player-movement-system'
+import { createRiftFlipSystem } from './systems/rift-flip-system'
 import { createShatterSystem } from './systems/shatter-system'
 import { createWorldScrollSystem } from './systems/world-scroll-system'
 
@@ -90,6 +92,11 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 		.toFactory(createBossAnimationSystem)
 		.withDeps(SimulationWorldToken)
 		.asSingleton()
+	container
+		.bind(RiftFlipSystemToken)
+		.toFactory(createRiftFlipSystem)
+		.withDeps(SimulationWorldToken)
+		.asSingleton()
 
 	const world = container.get(SimulationWorldToken)
 	const playerMovementSystem = container.get(PlayerMovementSystemToken)
@@ -100,6 +107,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 	const orbSystem = container.get(OrbSystemToken)
 	const obstacleDespawnSystem = container.get(ObstacleDespawnSystemToken)
 	const bossAnimationSystem = container.get(BossAnimationSystemToken)
+	const riftFlipSystem = container.get(RiftFlipSystemToken)
 	const input = container.get(SimulationInputToken)
 
 	return {
@@ -116,6 +124,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 			orbSystem(dt)
 			collisionSystem(dt)
 			obstacleDespawnSystem(dt)
+			riftFlipSystem(dt)
 		},
 		setAction(action: number) {
 			input.setAction(action)
