@@ -33192,6 +33192,52 @@ function playCloseCall() {
   src.start(t);
   src.stop(t + dur);
 }
+function playGrazeWhoosh() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+  const dur = 0.12;
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const p = i / data.length;
+    const env = Math.sin(p * Math.PI) * (1 - p * 0.5);
+    data[i] = (Math.random() * 2 - 1) * env * 0.3;
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(2200, t);
+  filter.frequency.exponentialRampToValueAtTime(800, t + dur);
+  filter.Q.value = 1.5;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.09, t);
+  gain.gain.linearRampToValueAtTime(0, t + dur);
+  src.connect(filter);
+  filter.connect(gain);
+  connectWithSends(gain, { reverb: 0.2 });
+  src.start(t);
+  src.stop(t + dur);
+}
+function playPhaseRejected() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  osc.type = "square";
+  osc.frequency.setValueAtTime(320, t);
+  osc.frequency.exponentialRampToValueAtTime(160, t + 0.07);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.06, t);
+  gain.gain.exponentialRampToValueAtTime(1e-3, t + 0.08);
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 600;
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+  osc.start(t);
+  osc.stop(t + 0.09);
+}
 function playDeath() {
   if (!ctx || !masterGain) return;
   const t = ctx.currentTime;
@@ -37579,6 +37625,10 @@ var ScreenFlash = class {
     }
   }
 };
+var GRAZE_PHASE_COST = 30;
+var GRAZE_FILL_RATE = 20;
+var GRAZE_BAND = 2.7;
+var GRAZE_Z_RANGE = 5;
 var BIOME_MILESTONES = [
   { name: "THE VOID", startDistance: 0 },
   { name: "CRYSTAL CAVES", startDistance: 300 },
@@ -37658,6 +37708,12 @@ var Game = class {
   phaseLocked = false;
   phaseCooldown = 0;
   phaseMinTimer = 0;
+  phaseMeter = 0;
+  // 0..100 — earned by grazing obstacles
+  grazeThrottleTimer = 0;
+  // prevents audio/particle spam during sustained graze
+  rejectionThrottleTimer = 0;
+  // throttles rejection SFX
   deathSlowMo = false;
   deathSlowMoTimer = 0;
   // Camera juice
@@ -37694,6 +37750,8 @@ var Game = class {
   hud;
   hudPhaseMeter;
   hudPhaseFill;
+  hudGrazeMeter;
+  hudGrazeFill;
   titleOverlay;
   centerMessage;
   centerTitle;
@@ -37815,6 +37873,8 @@ var Game = class {
     this.hud = document.getElementById("hud");
     this.hudPhaseMeter = document.getElementById("hud-phase-meter");
     this.hudPhaseFill = document.getElementById("hud-phase-fill");
+    this.hudGrazeMeter = document.getElementById("hud-graze-meter");
+    this.hudGrazeFill = document.getElementById("hud-graze-fill");
     this.titleOverlay = document.getElementById("title-overlay");
     this.centerMessage = document.getElementById("center-message");
     this.centerTitle = document.getElementById("center-title");
@@ -38179,6 +38239,9 @@ var Game = class {
     this.phaseLocked = false;
     this.phaseCooldown = 0;
     this.phaseMinTimer = 0;
+    this.phaseMeter = 0;
+    this.grazeThrottleTimer = 0;
+    this.rejectionThrottleTimer = 0;
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
@@ -38208,6 +38271,7 @@ var Game = class {
     this.player.applySkin(this.unlocks.getSelectedCrystal());
     this.player.group.visible = true;
     this.updatePhaseHud();
+    this.updateGrazeMeterHud();
     this.onnxAgent?.reset();
     this.hud.classList.add("hidden");
     this.titleOverlay.classList.add("hidden");
@@ -38339,13 +38403,35 @@ var Game = class {
       shatterInput = this.input.isDown("space") || this.input.isDown("click");
     }
     const wasShattered = this.wasShattered;
+    if (this.grazeThrottleTimer > 0) this.grazeThrottleTimer = Math.max(0, this.grazeThrottleTimer - dt);
+    if (this.rejectionThrottleTimer > 0) this.rejectionThrottleTimer = Math.max(0, this.rejectionThrottleTimer - dt);
+    if (!this.player.shattered) {
+      const grazeDist = this.checkGrazeProximity();
+      if (grazeDist > 0 && grazeDist < GRAZE_BAND) {
+        this.phaseMeter = Math.min(100, this.phaseMeter + GRAZE_FILL_RATE * dt);
+        if (this.grazeThrottleTimer <= 0) {
+          this.trail.emit(
+            new Vector3(this.player.group.position.x, 0.5, this.playerZ),
+            4,
+            0.5
+          );
+          playGrazeWhoosh();
+          this.grazeThrottleTimer = 0.18;
+        }
+      }
+    }
     if (this.phaseCooldown > 0) {
       this.phaseCooldown = Math.max(0, this.phaseCooldown - dt);
     }
     if (this.phaseMinTimer > 0) {
       this.phaseMinTimer = Math.max(0, this.phaseMinTimer - dt);
     }
-    const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0;
+    const hasMeterForPhase = this.phaseMeter >= GRAZE_PHASE_COST;
+    if (shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && !hasMeterForPhase && this.rejectionThrottleTimer <= 0) {
+      playPhaseRejected();
+      this.rejectionThrottleTimer = 0.5;
+    }
+    const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && hasMeterForPhase;
     const forcedByMinTimer = this.phaseMinTimer > 0 && !this.phaseLocked;
     const isPhasing = (wantsToPhase || forcedByMinTimer) && this.phaseEnergy > 0;
     if (isPhasing) {
@@ -38368,6 +38454,7 @@ var Game = class {
     const isShattered = this.player.shattered;
     this.player.setShieldActive(this.powerups.hasActivePowerUp("shield" /* Shield */));
     if (isShattered && !wasShattered) {
+      this.phaseMeter = Math.max(0, this.phaseMeter - GRAZE_PHASE_COST);
       this.phaseEnergy = Math.max(0, this.phaseEnergy - PHASE_ACTIVATION_COST);
       this.phaseMinTimer = PHASE_MIN_DURATION;
       if (this.phaseEnergy <= 0) {
@@ -38799,6 +38886,7 @@ var Game = class {
     this.hudDistance.textContent = `${this.distance}m`;
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
     this.updatePhaseHud();
+    this.updateGrazeMeterHud();
     if (this.combo > 1) {
       const comboVal = Math.min(this.combo, COMBO_MAX);
       this.hudCombo.textContent = `x${comboVal}`;
@@ -38969,6 +39057,48 @@ var Game = class {
     this.hudPhaseFill.style.background = "#00ffcc";
     this.hudPhaseFill.style.boxShadow = "0 0 10px rgba(0,255,204,0.45)";
     this.hudPhaseMeter.style.opacity = isFull ? "0.16" : "0.45";
+  }
+  /** Compute closest-edge distance from player to any nearby non-colliding obstacle.
+   *  Returns Infinity if no obstacle is in the Z range. */
+  checkGrazeProximity() {
+    const px = this.player.group.position.x;
+    const pz = this.playerZ;
+    let minDist = Infinity;
+    for (const obs of this.world.obstacles) {
+      if (!obs.active) continue;
+      const dz = Math.abs(pz - obs.z);
+      if (dz > GRAZE_Z_RANGE) continue;
+      if (obs.isGate && obs.wallSegments) {
+        for (const seg of obs.wallSegments) {
+          const dist = Math.abs(px - seg.x) - seg.halfWidth;
+          if (dist < minDist) minDist = dist;
+        }
+      } else if (!obs.isGate) {
+        const dist = Math.abs(px - obs.x) - obs.halfWidth;
+        if (dist < minDist) minDist = dist;
+      }
+    }
+    return minDist;
+  }
+  updateGrazeMeterHud() {
+    const fillPct = this.phaseMeter;
+    const ready = this.phaseMeter >= GRAZE_PHASE_COST;
+    const isGrazing = !this.player.shattered && this.grazeThrottleTimer > 0;
+    this.hudGrazeFill.style.height = `${fillPct}%`;
+    if (ready) {
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 6e-3);
+      this.hudGrazeFill.style.background = "#00ccff";
+      this.hudGrazeFill.style.boxShadow = `0 0 ${6 + pulse * 4}px rgba(0,204,255,${0.5 + pulse * 0.3})`;
+      this.hudGrazeMeter.style.opacity = String(0.7 + pulse * 0.25);
+    } else if (isGrazing) {
+      this.hudGrazeFill.style.background = "#00eeff";
+      this.hudGrazeFill.style.boxShadow = "0 0 8px rgba(0,238,255,0.6)";
+      this.hudGrazeMeter.style.opacity = "0.85";
+    } else {
+      this.hudGrazeFill.style.background = "#0099cc";
+      this.hudGrazeFill.style.boxShadow = "0 0 4px rgba(0,153,204,0.3)";
+      this.hudGrazeMeter.style.opacity = fillPct > 5 ? "0.5" : "0.25";
+    }
   }
   applyBiomeColors() {
     const c = this.biomes.colors;

@@ -6,7 +6,7 @@ import { Player } from "./player";
 import { World, type Obstacle } from "./world";
 import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
 import { PostFXPass } from "./postfx";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak, playPhaseTierUp } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak, playPhaseTierUp, playGrazeWhoosh, playPhaseRejected } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { OnnxAgent } from "./onnx-agent";
@@ -224,6 +224,12 @@ enum GameState {
   GameOver,
 }
 
+// --- Graze meter tuning ---
+const GRAZE_PHASE_COST = 30;       // units consumed per phase activation
+const GRAZE_FILL_RATE = 20;        // units per second while grazing
+const GRAZE_BAND = 2.7;            // world-unit proximity to obstacle edge (~0.3 × lane width)
+const GRAZE_Z_RANGE = 5;           // how far ahead/behind to check for graze obstacles
+
 // --- Game tuning ---
 const BIOME_MILESTONES = [
   { name: "THE VOID", startDistance: 0 },
@@ -309,6 +315,9 @@ export class Game {
   private phaseLocked = false;
   private phaseCooldown = 0;
   private phaseMinTimer = 0;
+  private phaseMeter = 0;           // 0..100 — earned by grazing obstacles
+  private grazeThrottleTimer = 0;   // prevents audio/particle spam during sustained graze
+  private rejectionThrottleTimer = 0; // throttles rejection SFX
   private deathSlowMo = false;
   private deathSlowMoTimer = 0;
 
@@ -346,6 +355,8 @@ export class Game {
   private hud!: HTMLElement;
   private hudPhaseMeter!: HTMLElement;
   private hudPhaseFill!: HTMLElement;
+  private hudGrazeMeter!: HTMLElement;
+  private hudGrazeFill!: HTMLElement;
   private titleOverlay!: HTMLElement;
   private centerMessage!: HTMLElement;
   private centerTitle!: HTMLElement;
@@ -509,6 +520,8 @@ export class Game {
     this.hud = document.getElementById("hud")!;
     this.hudPhaseMeter = document.getElementById("hud-phase-meter")!;
     this.hudPhaseFill = document.getElementById("hud-phase-fill")!;
+    this.hudGrazeMeter = document.getElementById("hud-graze-meter")!;
+    this.hudGrazeFill = document.getElementById("hud-graze-fill")!;
     this.titleOverlay = document.getElementById("title-overlay")!;
     this.centerMessage = document.getElementById("center-message")!;
     this.centerTitle = document.getElementById("center-title")!;
@@ -964,6 +977,9 @@ export class Game {
     this.phaseLocked = false;
     this.phaseCooldown = 0;
     this.phaseMinTimer = 0;
+    this.phaseMeter = 0;
+    this.grazeThrottleTimer = 0;
+    this.rejectionThrottleTimer = 0;
     this.phaseTimeAccum = 0;
     this.phaseBonusFlashTimer = 0;
     this.phaseBonusFlashValue = 1;
@@ -999,6 +1015,7 @@ export class Game {
     this.player.applySkin(this.unlocks.getSelectedCrystal());
     this.player.group.visible = true;
     this.updatePhaseHud();
+    this.updateGrazeMeterHud();
     this.onnxAgent?.reset();
 
     // Hide title + customize immediately; HUD revealed when launch completes
@@ -1186,6 +1203,27 @@ export class Game {
 
     const wasShattered = this.wasShattered;
 
+    // Tick throttle timers
+    if (this.grazeThrottleTimer > 0) this.grazeThrottleTimer = Math.max(0, this.grazeThrottleTimer - dt);
+    if (this.rejectionThrottleTimer > 0) this.rejectionThrottleTimer = Math.max(0, this.rejectionThrottleTimer - dt);
+
+    // --- Graze detection: fills phaseMeter while skimming obstacles (not while phased) ---
+    if (!this.player.shattered) {
+      const grazeDist = this.checkGrazeProximity();
+      if (grazeDist > 0 && grazeDist < GRAZE_BAND) {
+        this.phaseMeter = Math.min(100, this.phaseMeter + GRAZE_FILL_RATE * dt);
+        if (this.grazeThrottleTimer <= 0) {
+          // Cyan spark puff at player position
+          this.trail.emit(
+            new THREE.Vector3(this.player.group.position.x, 0.5, this.playerZ),
+            4, 0.5
+          );
+          playGrazeWhoosh();
+          this.grazeThrottleTimer = 0.18; // ~5 times/sec max
+        }
+      }
+    }
+
     // Tick post-shatter cooldown
     if (this.phaseCooldown > 0) {
       this.phaseCooldown = Math.max(0, this.phaseCooldown - dt);
@@ -1196,8 +1234,15 @@ export class Game {
       this.phaseMinTimer = Math.max(0, this.phaseMinTimer - dt);
     }
 
-    // Phase stays active while min-duration timer is running OR input is held
-    const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0;
+    // Rejection feedback: Space pressed but graze meter too low
+    const hasMeterForPhase = this.phaseMeter >= GRAZE_PHASE_COST;
+    if (shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && !hasMeterForPhase && this.rejectionThrottleTimer <= 0) {
+      playPhaseRejected();
+      this.rejectionThrottleTimer = 0.5;
+    }
+
+    // Phase stays active while min-duration timer is running OR input is held AND meter available
+    const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && hasMeterForPhase;
     const forcedByMinTimer = this.phaseMinTimer > 0 && !this.phaseLocked;
     const isPhasing = (wantsToPhase || forcedByMinTimer) && this.phaseEnergy > 0;
 
@@ -1227,8 +1272,9 @@ export class Game {
     // Shield visual indicator
     this.player.setShieldActive(this.powerups.hasActivePowerUp(PowerUpType.Shield));
 
-    // On fresh activation: apply activation cost and start min-duration lock
+    // On fresh activation: consume graze meter, apply activation cost, start min-duration lock
     if (isShattered && !wasShattered) {
+      this.phaseMeter = Math.max(0, this.phaseMeter - GRAZE_PHASE_COST);
       this.phaseEnergy = Math.max(0, this.phaseEnergy - PHASE_ACTIVATION_COST);
       this.phaseMinTimer = PHASE_MIN_DURATION;
       if (this.phaseEnergy <= 0) {
@@ -1750,6 +1796,7 @@ export class Game {
     this.hudDistance.textContent = `${this.distance}m`;
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
     this.updatePhaseHud();
+    this.updateGrazeMeterHud();
 
     if (this.combo > 1) {
       const comboVal = Math.min(this.combo, COMBO_MAX);
@@ -1952,6 +1999,55 @@ export class Game {
     this.hudPhaseFill.style.background = "#00ffcc";
     this.hudPhaseFill.style.boxShadow = "0 0 10px rgba(0,255,204,0.45)";
     this.hudPhaseMeter.style.opacity = isFull ? "0.16" : "0.45";
+  }
+
+  /** Compute closest-edge distance from player to any nearby non-colliding obstacle.
+   *  Returns Infinity if no obstacle is in the Z range. */
+  private checkGrazeProximity(): number {
+    const px = this.player.group.position.x;
+    const pz = this.playerZ;
+    let minDist = Infinity;
+
+    for (const obs of this.world.obstacles) {
+      if (!obs.active) continue;
+      const dz = Math.abs(pz - obs.z);
+      if (dz > GRAZE_Z_RANGE) continue;
+
+      if (obs.isGate && obs.wallSegments) {
+        for (const seg of obs.wallSegments) {
+          const dist = Math.abs(px - seg.x) - seg.halfWidth;
+          if (dist < minDist) minDist = dist;
+        }
+      } else if (!obs.isGate) {
+        const dist = Math.abs(px - obs.x) - obs.halfWidth;
+        if (dist < minDist) minDist = dist;
+      }
+    }
+
+    return minDist;
+  }
+
+  private updateGrazeMeterHud() {
+    const fillPct = this.phaseMeter; // 0..100
+    const ready = this.phaseMeter >= GRAZE_PHASE_COST;
+    const isGrazing = !this.player.shattered && this.grazeThrottleTimer > 0;
+
+    this.hudGrazeFill.style.height = `${fillPct}%`;
+
+    if (ready) {
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
+      this.hudGrazeFill.style.background = "#00ccff";
+      this.hudGrazeFill.style.boxShadow = `0 0 ${6 + pulse * 4}px rgba(0,204,255,${0.5 + pulse * 0.3})`;
+      this.hudGrazeMeter.style.opacity = String(0.7 + pulse * 0.25);
+    } else if (isGrazing) {
+      this.hudGrazeFill.style.background = "#00eeff";
+      this.hudGrazeFill.style.boxShadow = "0 0 8px rgba(0,238,255,0.6)";
+      this.hudGrazeMeter.style.opacity = "0.85";
+    } else {
+      this.hudGrazeFill.style.background = "#0099cc";
+      this.hudGrazeFill.style.boxShadow = "0 0 4px rgba(0,153,204,0.3)";
+      this.hudGrazeMeter.style.opacity = fillPct > 5 ? "0.5" : "0.25";
+    }
   }
 
   private applyBiomeColors() {

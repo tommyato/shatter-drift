@@ -417,6 +417,64 @@ export function playCloseCall() {
   src.stop(t + dur);
 }
 
+/** Graze whoosh — subtle near-miss feedback when player skims an obstacle */
+export function playGrazeWhoosh() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  const dur = 0.12;
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const p = i / data.length;
+    const env = Math.sin(p * Math.PI) * (1 - p * 0.5);
+    data[i] = (Math.random() * 2 - 1) * env * 0.3;
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(2200, t);
+  filter.frequency.exponentialRampToValueAtTime(800, t + dur);
+  filter.Q.value = 1.5;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.09, t);
+  gain.gain.linearRampToValueAtTime(0, t + dur);
+
+  src.connect(filter);
+  filter.connect(gain);
+  connectWithSends(gain, { reverb: 0.2 });
+  src.start(t);
+  src.stop(t + dur);
+}
+
+/** Phase rejected — short click blip when meter is too low */
+export function playPhaseRejected() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  const osc = ctx.createOscillator();
+  osc.type = "square";
+  osc.frequency.setValueAtTime(320, t);
+  osc.frequency.exponentialRampToValueAtTime(160, t + 0.07);
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.06, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 600;
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain!);
+  osc.start(t);
+  osc.stop(t + 0.09);
+}
+
 /** Death sound — low boom + crash */
 export function playDeath() {
   if (!ctx || !masterGain) return;
