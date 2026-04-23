@@ -167,15 +167,23 @@ ghostsDb.exec(`
   CREATE INDEX IF NOT EXISTS idx_ghosts_game_score ON ghosts(game_id, score DESC);
 `);
 
+// Additive migration: add `seed` column for per-game tower-layout playback
+// (CC needs it; SD ignores it). NULL on existing rows — clients fall back
+// to their own default seed when the column is absent.
+const ghostCols = ghostsDb.prepare(`PRAGMA table_info(ghosts)`).all();
+if (!ghostCols.some((c) => c.name === "seed")) {
+  ghostsDb.exec(`ALTER TABLE ghosts ADD COLUMN seed INTEGER`);
+}
+
 const GHOST_MAX_FRAMES = 18000; // ~5 min at 60fps
 const GHOSTS_PER_GAME = 20;     // keep top N per game_id
 
 const stmtInsertGhost = ghostsDb.prepare(`
-  INSERT INTO ghosts (id, game_id, name, score, distance, grade, frames, ts)
-  VALUES (@id, @game_id, @name, @score, @distance, @grade, @frames, @ts)
+  INSERT INTO ghosts (id, game_id, name, score, distance, grade, frames, ts, seed)
+  VALUES (@id, @game_id, @name, @score, @distance, @grade, @frames, @ts, @seed)
 `);
 const stmtSelectTopGhosts = ghostsDb.prepare(`
-  SELECT id, game_id, name, score, distance, grade, frames, ts
+  SELECT id, game_id, name, score, distance, grade, frames, ts, seed
   FROM ghosts
   WHERE game_id = ?
   ORDER BY score DESC, ts DESC
@@ -210,6 +218,9 @@ function rowToGhost(row) {
     grade: row.grade,
     frames,
     ts: row.ts,
+    // Pass through seed when the row has one (CC ghosts); omit for legacy rows
+    // so clients can apply their own fallback (CHALLENGE_SEED for CC).
+    ...(row.seed != null ? { seed: row.seed } : {}),
   };
 }
 
@@ -230,6 +241,7 @@ function insertGhostAndTrim(ghost, gameId) {
       grade: ghost.grade,
       frames: JSON.stringify(ghost.frames),
       ts: ghost.ts,
+      seed: ghost.seed,
     });
     stmtDeleteOverflow.run(gameId, gameId, GHOSTS_PER_GAME);
   });
@@ -276,6 +288,7 @@ function migrateLegacyGhostsJson() {
           grade: typeof g.grade === "string" ? g.grade.slice(0, 4) : "",
           frames: JSON.stringify(frames),
           ts: Number.isFinite(g.ts) ? g.ts : Date.now(),
+          seed: typeof g.seed === "number" && isFinite(g.seed) ? Math.trunc(g.seed) : null,
         });
       }
       stmtDeleteOverflow.run("shatter-drift", "shatter-drift", GHOSTS_PER_GAME);
@@ -447,7 +460,7 @@ async function handlePostGhostForGame(req, res, gameId) {
     return sendJSON(res, 400, { error: "Invalid JSON" });
   }
 
-  const { name, score, distance, grade, frames } = body;
+  const { name, score, distance, grade, frames, seed } = body;
   if (!Array.isArray(frames) || frames.length > GHOST_MAX_FRAMES) {
     return sendJSON(res, 400, { error: "Invalid frames" });
   }
@@ -464,6 +477,12 @@ async function handlePostGhostForGame(req, res, gameId) {
     grade: typeof grade === "string" ? grade.slice(0, 4) : "",
     frames,
     ts: Date.now(),
+    // Optional per-ghost seed for tower-layout playback (CC). Coerced to a
+    // safe 32-bit integer; null when client omits the field (SD).
+    seed:
+      typeof seed === "number" && isFinite(seed)
+        ? Math.trunc(seed)
+        : null,
   };
 
   try {
