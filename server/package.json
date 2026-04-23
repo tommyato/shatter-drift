@@ -1,0 +1,13 @@
+{
+  "name": "shatter-drift-api",
+  "version": "1.1.0",
+  "description": "Scores + multi-game ghost API server for tommyato games (deployed to api.tommyato.com).",
+  "private": true,
+  "main": "daily-api-patch.js",
+  "scripts": {
+    "start": "node daily-api-patch.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0"
+  }
+}

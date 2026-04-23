@@ -3,11 +3,11 @@
  *
  * Deploy to /root/shatter-drift-api/index.js on the droplet (67.205.167.181).
  *
- * Changes from original:
- *   + GET  /daily-scores?date=YYYY-MM-DD&limit=N
- *   + POST /daily-scores  { date, name, score, distance, grade, biome }
- *     Scores are stored in scores-daily-YYYY-MM-DD.json (one file per day).
- *     Same rate-limiting and validation as regular scores.
+ * Routes:
+ *   GET/POST  /scores                       (flat-file, SD only)
+ *   GET/POST  /daily-scores                 (flat-file, SD only, per-day)
+ *   GET/POST  /games/:gameId/ghosts         (SQLite, multi-game, canonical)
+ *   GET/POST  /ghosts                       (DEPRECATED — thin alias for /games/shatter-drift/ghosts)
  */
 
 "use strict";
@@ -15,6 +15,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const Database = require("better-sqlite3");
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
@@ -66,12 +67,15 @@ function sendJSON(res, status, body) {
   res.end(payload);
 }
 
-function readBody(req) {
+// Ghost POSTs carry frame arrays — allow a much larger body than score POSTs.
+const GHOST_BODY_MAX = 4 * 1024 * 1024; // 4 MiB
+
+function readBody(req, maxBytes = 4096) {
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 4096) reject(new Error("Body too large"));
+      if (body.length > maxBytes) reject(new Error("Body too large"));
     });
     req.on("end", () => resolve(body));
     req.on("error", reject);
@@ -94,8 +98,13 @@ function sanitizeName(name) {
   return name.replace(/[^\w\s\-_.!]/g, "").slice(0, 16).trim() || "ANON";
 }
 
+const GAME_ID_RE = /^[a-z0-9-]{1,32}$/;
+function isValidGameId(id) {
+  return typeof id === "string" && GAME_ID_RE.test(id);
+}
+
 // ---------------------------------------------------------------------------
-// Score file I/O
+// Score file I/O (flat-file — /scores and /daily-scores only)
 // ---------------------------------------------------------------------------
 
 function scoresFile(name) {
@@ -138,7 +147,163 @@ function getRank(scores, name, score) {
 }
 
 // ---------------------------------------------------------------------------
-// Route handlers
+// SQLite ghost storage (multi-game, canonical)
+// ---------------------------------------------------------------------------
+
+const GHOSTS_DB_PATH = path.join(DATA_DIR, "ghosts.sqlite");
+const ghostsDb = new Database(GHOSTS_DB_PATH);
+ghostsDb.pragma("journal_mode = WAL");
+ghostsDb.exec(`
+  CREATE TABLE IF NOT EXISTS ghosts (
+    id TEXT PRIMARY KEY,
+    game_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    score INTEGER NOT NULL,
+    distance INTEGER NOT NULL DEFAULT 0,
+    grade TEXT DEFAULT '',
+    frames TEXT NOT NULL,
+    ts INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_ghosts_game_score ON ghosts(game_id, score DESC);
+`);
+
+const GHOST_MAX_FRAMES = 18000; // ~5 min at 60fps
+const GHOSTS_PER_GAME = 20;     // keep top N per game_id
+
+const stmtInsertGhost = ghostsDb.prepare(`
+  INSERT INTO ghosts (id, game_id, name, score, distance, grade, frames, ts)
+  VALUES (@id, @game_id, @name, @score, @distance, @grade, @frames, @ts)
+`);
+const stmtSelectTopGhosts = ghostsDb.prepare(`
+  SELECT id, game_id, name, score, distance, grade, frames, ts
+  FROM ghosts
+  WHERE game_id = ?
+  ORDER BY score DESC, ts DESC
+  LIMIT ?
+`);
+const stmtCountGhostsForGame = ghostsDb.prepare(`
+  SELECT COUNT(*) AS n FROM ghosts WHERE game_id = ?
+`);
+const stmtDeleteOverflow = ghostsDb.prepare(`
+  DELETE FROM ghosts
+  WHERE game_id = ?
+    AND id NOT IN (
+      SELECT id FROM ghosts
+      WHERE game_id = ?
+      ORDER BY score DESC, ts DESC
+      LIMIT ?
+    )
+`);
+
+function rowToGhost(row) {
+  let frames;
+  try {
+    frames = JSON.parse(row.frames);
+  } catch {
+    frames = [];
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    score: row.score,
+    distance: row.distance,
+    grade: row.grade,
+    frames,
+    ts: row.ts,
+  };
+}
+
+function getTopGhosts(gameId, limit) {
+  const rows = stmtSelectTopGhosts.all(gameId, limit);
+  return rows.map(rowToGhost);
+}
+
+function insertGhostAndTrim(ghost, gameId) {
+  // Single transaction: insert then prune overflow for this game_id.
+  const tx = ghostsDb.transaction(() => {
+    stmtInsertGhost.run({
+      id: ghost.id,
+      game_id: gameId,
+      name: ghost.name,
+      score: ghost.score,
+      distance: ghost.distance,
+      grade: ghost.grade,
+      frames: JSON.stringify(ghost.frames),
+      ts: ghost.ts,
+    });
+    stmtDeleteOverflow.run(gameId, gameId, GHOSTS_PER_GAME);
+  });
+  tx();
+}
+
+// ---------------------------------------------------------------------------
+// One-time migration from legacy ghosts.json → sqlite (game_id='shatter-drift')
+// ---------------------------------------------------------------------------
+
+function migrateLegacyGhostsJson() {
+  const legacyFile = scoresFile("ghosts");
+  if (!fs.existsSync(legacyFile)) return;
+  const existing = stmtCountGhostsForGame.get("shatter-drift").n;
+  if (existing > 0) {
+    console.log(
+      `[ghosts] legacy ghosts.json found but SD already has ${existing} rows — leaving legacy file in place, skipping import.`,
+    );
+    return;
+  }
+  let legacy;
+  try {
+    legacy = JSON.parse(fs.readFileSync(legacyFile, "utf8"));
+  } catch (err) {
+    console.warn("[ghosts] legacy ghosts.json unreadable:", err.message);
+    return;
+  }
+  if (!Array.isArray(legacy) || legacy.length === 0) {
+    console.log("[ghosts] legacy ghosts.json is empty — nothing to migrate.");
+  } else {
+    const tx = ghostsDb.transaction((rows) => {
+      for (const g of rows) {
+        if (!g || typeof g !== "object") continue;
+        const frames = Array.isArray(g.frames) ? g.frames : [];
+        const id = typeof g.id === "string" && g.id
+          ? g.id
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        stmtInsertGhost.run({
+          id,
+          game_id: "shatter-drift",
+          name: sanitizeName(g.name),
+          score: Math.round(Number(g.score) || 0),
+          distance: Math.round(Number(g.distance) || 0),
+          grade: typeof g.grade === "string" ? g.grade.slice(0, 4) : "",
+          frames: JSON.stringify(frames),
+          ts: Number.isFinite(g.ts) ? g.ts : Date.now(),
+        });
+      }
+      stmtDeleteOverflow.run("shatter-drift", "shatter-drift", GHOSTS_PER_GAME);
+    });
+    try {
+      tx(legacy);
+      console.log(`[ghosts] migrated ${legacy.length} entries from ghosts.json → sqlite (game_id=shatter-drift).`);
+    } catch (err) {
+      console.warn("[ghosts] migration failed:", err.message);
+      return;
+    }
+  }
+  // Rename the legacy file so it's not re-imported. Idempotency guard above
+  // also protects against re-runs, but renaming keeps DATA_DIR clean.
+  const today = new Date().toISOString().slice(0, 10);
+  const renamed = `${legacyFile}.migrated-${today}`;
+  try {
+    fs.renameSync(legacyFile, renamed);
+    console.log(`[ghosts] renamed legacy file → ${path.basename(renamed)}`);
+  } catch (err) {
+    console.warn("[ghosts] failed to rename legacy file:", err.message);
+  }
+}
+
+migrateLegacyGhostsJson();
+
+// ---------------------------------------------------------------------------
+// Score route handlers
 // ---------------------------------------------------------------------------
 
 // GET /scores?limit=N
@@ -254,28 +419,30 @@ async function handlePostDailyScore(req, res) {
 }
 
 // ---------------------------------------------------------------------------
-// Ghost endpoints
+// Ghost endpoints — multi-game (canonical)
 // ---------------------------------------------------------------------------
 
-const GHOST_MAX_FRAMES = 18000; // ~5 min at 60fps
-
-// GET /ghosts?limit=N
-function handleGetGhosts(req, res, params) {
-  const limit = parseLimit(params.get("limit"), 10);
-  const file = scoresFile("ghosts");
-  const ghosts = readScores(file);
-  ghosts.sort((a, b) => b.score - a.score);
-  sendJSON(res, 200, { ghosts: ghosts.slice(0, limit) });
+// GET /games/:gameId/ghosts?limit=N
+function handleGetGhostsForGame(req, res, params, gameId) {
+  if (!isValidGameId(gameId)) {
+    return sendJSON(res, 400, { error: "Invalid gameId" });
+  }
+  const limit = parseLimit(params.get("limit"), 20);
+  const ghosts = getTopGhosts(gameId, limit);
+  sendJSON(res, 200, { ghosts });
 }
 
-// POST /ghosts
-async function handlePostGhost(req, res) {
+// POST /games/:gameId/ghosts
+async function handlePostGhostForGame(req, res, gameId) {
+  if (!isValidGameId(gameId)) {
+    return sendJSON(res, 400, { error: "Invalid gameId" });
+  }
   const ip = getClientIP(req);
   if (isRateLimited(ip)) return sendJSON(res, 429, { error: "Rate limited" });
 
   let body;
   try {
-    body = JSON.parse(await readBody(req));
+    body = JSON.parse(await readBody(req, GHOST_BODY_MAX));
   } catch {
     return sendJSON(res, 400, { error: "Invalid JSON" });
   }
@@ -299,19 +466,39 @@ async function handlePostGhost(req, res) {
     ts: Date.now(),
   };
 
-  const file = scoresFile("ghosts");
-  let ghosts = readScores(file);
-  ghosts.push(ghost);
-  ghosts.sort((a, b) => b.score - a.score);
-  if (ghosts.length > 20) ghosts.length = 20; // keep top 20 ghosts
-  writeScores(file, ghosts);
+  try {
+    insertGhostAndTrim(ghost, gameId);
+  } catch (err) {
+    console.error("[ghosts] insert failed:", err);
+    return sendJSON(res, 500, { error: "Insert failed" });
+  }
 
   sendJSON(res, 200, { id });
+}
+
+// -----------------------------------------------------------------
+// DEPRECATED: legacy /ghosts endpoints (SD-only, pre-multi-game).
+// Kept alive until 2026-07-23 to let cached clients drain.
+// New clients should use /games/:gameId/ghosts.
+// REMOVE this block and its handlers after 2026-07-23.
+// -----------------------------------------------------------------
+
+function handleGetGhostsLegacy(req, res, params) {
+  // Thin alias for /games/shatter-drift/ghosts
+  return handleGetGhostsForGame(req, res, params, "shatter-drift");
+}
+
+async function handlePostGhostLegacy(req, res) {
+  // Thin alias for /games/shatter-drift/ghosts
+  return handlePostGhostForGame(req, res, "shatter-drift");
 }
 
 // ---------------------------------------------------------------------------
 // HTTP server
 // ---------------------------------------------------------------------------
+
+// /games/:gameId/ghosts — capture gameId.
+const GAMES_GHOSTS_RE = /^\/games\/([^/]+)\/ghosts$/;
 
 const server = http.createServer(async (req, res) => {
   // CORS preflight
@@ -339,9 +526,16 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "POST") return await handlePostDailyScore(req, res);
     }
 
+    const ghostsMatch = pathname.match(GAMES_GHOSTS_RE);
+    if (ghostsMatch) {
+      const gameId = ghostsMatch[1];
+      if (req.method === "GET") return handleGetGhostsForGame(req, res, params, gameId);
+      if (req.method === "POST") return await handlePostGhostForGame(req, res, gameId);
+    }
+
     if (pathname === "/ghosts") {
-      if (req.method === "GET") return handleGetGhosts(req, res, params);
-      if (req.method === "POST") return await handlePostGhost(req, res);
+      if (req.method === "GET") return handleGetGhostsLegacy(req, res, params);
+      if (req.method === "POST") return await handlePostGhostLegacy(req, res);
     }
 
     sendJSON(res, 404, { error: "Not found" });
@@ -354,4 +548,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Shatter Drift API listening on port ${PORT}`);
   console.log(`Data directory: ${DATA_DIR}`);
+  console.log(`Ghosts DB: ${GHOSTS_DB_PATH}`);
 });
