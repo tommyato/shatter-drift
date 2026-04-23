@@ -37160,7 +37160,7 @@ async function submitScore(entry, options) {
 }
 async function fetchGhosts(limit = 3) {
   try {
-    const res = await fetch(`${API_URL}/ghosts?limit=${limit}`, {
+    const res = await fetch(`${API_URL}/games/shatter-drift/ghosts?limit=${limit}`, {
       signal: AbortSignal.timeout(5e3)
     });
     if (!res.ok) return [];
@@ -37172,7 +37172,7 @@ async function fetchGhosts(limit = 3) {
 }
 async function submitGhost(entry) {
   try {
-    const res = await fetch(`${API_URL}/ghosts`, {
+    const res = await fetch(`${API_URL}/games/shatter-drift/ghosts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(entry),
@@ -37187,11 +37187,10 @@ async function submitGhost(entry) {
 }
 async function fetchGhostUploadThreshold() {
   try {
-    const scores = await fetchLeaderboard(20);
+    const scores = await fetchLeaderboard(10);
     if (scores.length < 10) return 0;
     const sorted = scores.slice().sort((a, b) => b.score - a.score);
-    const idx = Math.max(0, Math.floor(sorted.length / 2) - 1);
-    return sorted[idx]?.score || 0;
+    return sorted[9]?.score || 0;
   } catch {
     return 0;
   }

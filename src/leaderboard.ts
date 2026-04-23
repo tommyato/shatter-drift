@@ -130,7 +130,7 @@ import type { GhostFrame, GhostRecord } from "./ghost";
 /** Fetch up to N top-ranked ghost recordings. Silent on failure. */
 export async function fetchGhosts(limit = 3): Promise<GhostRecord[]> {
   try {
-    const res = await fetch(`${API_URL}/ghosts?limit=${limit}`, {
+    const res = await fetch(`${API_URL}/games/shatter-drift/ghosts?limit=${limit}`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return [];
@@ -150,7 +150,7 @@ export async function submitGhost(entry: {
   frames: GhostFrame[];
 }): Promise<string | null> {
   try {
-    const res = await fetch(`${API_URL}/ghosts`, {
+    const res = await fetch(`${API_URL}/games/shatter-drift/ghosts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(entry),
@@ -164,15 +164,16 @@ export async function submitGhost(entry: {
   }
 }
 
-/** Fetch current score threshold (top N cutoff) so client can decide whether to upload a ghost. */
+/** Fetch current score threshold so client can decide whether to upload a ghost.
+ *  Returns the 10th-place score (or 0 if fewer than 10 scores exist). Runs
+ *  below this cutoff aren't interesting enough to keep — SD-side gate that
+ *  matches the server-side top-20 retention. */
 export async function fetchGhostUploadThreshold(): Promise<number> {
   try {
-    const scores = await fetchLeaderboard(20);
+    const scores = await fetchLeaderboard(10);
     if (scores.length < 10) return 0; // not enough data, upload anything
-    // Upload if we're in the top 50% of the leaderboard.
     const sorted = scores.slice().sort((a, b) => b.score - a.score);
-    const idx = Math.max(0, Math.floor(sorted.length / 2) - 1);
-    return sorted[idx]?.score || 0;
+    return sorted[9]?.score || 0;
   } catch {
     return 0;
   }
