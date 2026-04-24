@@ -34,3 +34,15 @@ await esbuild({
 	platform: 'node',
 	sourcemap: false,
 })
+
+// Harness bundle — loaded dynamically via ?_harness=1 (browser, ESM).
+// NOT inlined into index.html so normal users never download this code.
+await esbuild({
+	entryPoints: ['src/harness.ts'],
+	outfile: 'dist/harness.js',
+	bundle: true,
+	format: 'esm',
+	target: 'es2022',
+	platform: 'browser',
+	sourcemap: false,
+})
