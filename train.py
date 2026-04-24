@@ -420,6 +420,123 @@ def export_onnx(model: ActorCritic, obs_dim: int, output_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Checkpoint helpers
+# ---------------------------------------------------------------------------
+
+def _verify_shapes(ckpt_sd: dict, current_sd: dict, path: Path) -> None:
+    """Raise RuntimeError if tensor shapes in ckpt_sd don't match current_sd.
+
+    Checks both directions — extra keys in the checkpoint AND missing keys
+    (compared to the current model) are both architecture mismatches.
+    """
+    for key, tensor in ckpt_sd.items():
+        if key not in current_sd:
+            raise RuntimeError(
+                f"[load_checkpoint] Architecture mismatch: checkpoint key '{key}' "
+                f"not found in current model (path={path.name}). "
+                "Check hidden_size / num_layers in your config."
+            )
+        if tensor.shape != current_sd[key].shape:
+            raise RuntimeError(
+                f"[load_checkpoint] Architecture mismatch: key '{key}' — "
+                f"checkpoint shape {tuple(tensor.shape)} vs current model "
+                f"{tuple(current_sd[key].shape)} (path={path.name}). "
+                "Check hidden_size / num_layers in your config."
+            )
+    for key in current_sd:
+        if key not in ckpt_sd:
+            raise RuntimeError(
+                f"[load_checkpoint] Architecture mismatch: current model key '{key}' "
+                f"not found in checkpoint (path={path.name}). "
+                "Check hidden_size / num_layers in your config."
+            )
+
+
+def save_checkpoint(
+    path: Path,
+    model: ActorCritic,
+    optimizer: optim.Adam,
+    global_step: int,
+    tracker: EpisodeTracker,
+    config_snapshot: dict,
+) -> None:
+    """Save a rich checkpoint dict for later resume.
+
+    Format: {"model": state_dict, "optimizer": state_dict, "global_step": int,
+             "tracker_returns": list, "num_episodes_total": int,
+             "config_snapshot": dict}
+    """
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "global_step": global_step,
+            "tracker_returns": list(tracker._returns),
+            "num_episodes_total": tracker.num_episodes_total,
+            "config_snapshot": config_snapshot,
+        },
+        path,
+    )
+
+
+def load_checkpoint(
+    path: Path,
+    model: ActorCritic,
+    optimizer: optim.Adam,
+    device: torch.device,
+) -> tuple[int, int, list[float]]:
+    """Load a checkpoint from *path* into *model* and *optimizer*.
+
+    Returns ``(resumed_global_step, resumed_num_episodes, resumed_returns)``.
+
+    Two formats supported:
+    - **New format** (dict with ``"model"`` key): full restore — weights,
+      optimizer moments, global_step, and tracker state.
+    - **Old format** (plain state_dict, no ``"model"`` key): model weights
+      only.  Optimizer stays at its freshly-initialized state; global_step
+      resets to 0.  A warning is printed explaining the loss.
+
+    Raises ``RuntimeError`` on architecture mismatch (shape differences).
+    """
+    raw = torch.load(path, map_location=device, weights_only=False)
+
+    if not isinstance(raw, dict):
+        raise RuntimeError(
+            f"[load_checkpoint] Unrecognized checkpoint format: "
+            f"expected dict, got {type(raw).__name__} (path={path.name})"
+        )
+
+    if "model" in raw:
+        # ---- New rich format ------------------------------------------------
+        model_sd = raw["model"]
+        _verify_shapes(model_sd, model.state_dict(), path)
+        model.load_state_dict(model_sd)
+        optimizer.load_state_dict(raw["optimizer"])
+        resumed_global_step = int(raw.get("global_step", 0))
+        resumed_num_episodes = int(raw.get("num_episodes_total", 0))
+        resumed_returns: list[float] = list(raw.get("tracker_returns", []))
+        print(
+            f"[load_checkpoint] Loaded new-format checkpoint: "
+            f"step={resumed_global_step} episodes={resumed_num_episodes} "
+            f"path={path.name}",
+            flush=True,
+        )
+        return resumed_global_step, resumed_num_episodes, resumed_returns
+    else:
+        # ---- Old format: plain state_dict -----------------------------------
+        print(
+            "[load_checkpoint] WARNING: Old-format checkpoint detected "
+            "(plain state_dict — no optimizer state saved). "
+            "Optimizer will be reset to initial state and training will "
+            f"restart from global_step=0. path={path.name}",
+            flush=True,
+        )
+        _verify_shapes(raw, model.state_dict(), path)
+        model.load_state_dict(raw)
+        return 0, 0, []
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -452,14 +569,39 @@ def main() -> int:
     atexit.register(_write_exit_code)
 
     # SIGTERM handler — save a final checkpoint (if we have a model), exit 143.
-    model_ref: dict[str, Any] = {"model": None, "obs_dim": None}
+    # model_ref is populated progressively as setup proceeds; the handler
+    # guards against partial initialisation below.
+    model_ref: dict[str, Any] = {
+        "model": None,
+        "obs_dim": None,
+        "optimizer": None,
+        "tracker": None,
+        "global_step": 0,
+        "config_snapshot": {},
+    }
 
     def _sigterm(_signum, _frame):
         exit_status["code"] = 143
         try:
             if model_ref["model"] is not None:
                 ckpt = output_dir / "ckpt-sigterm.pt"
-                torch.save(model_ref["model"].state_dict(), ckpt)
+                # Use rich format once optimizer + tracker are ready;
+                # fall back to plain state_dict if SIGTERM fires during
+                # early setup before they exist.
+                if (
+                    model_ref.get("optimizer") is not None
+                    and model_ref.get("tracker") is not None
+                ):
+                    save_checkpoint(
+                        ckpt,
+                        model_ref["model"],
+                        model_ref["optimizer"],
+                        model_ref.get("global_step", 0),
+                        model_ref["tracker"],
+                        model_ref.get("config_snapshot", {}),
+                    )
+                else:
+                    torch.save(model_ref["model"].state_dict(), ckpt)
                 # ONNX export on SIGTERM — see Sprint 4 of
                 # plans/rl-training-memory-hygiene-plan.md. If the graceful
                 # drain arrives mid-training, leave a loadable model.onnx
@@ -499,6 +641,9 @@ def main() -> int:
     class_name = config.get("class_name")  # e.g. "PongSimulation" for neon-pong
     hidden_size = int(config.get("hidden_size", 64))
     num_layers = int(config.get("num_layers", 2))
+    # Optional path to a .pt checkpoint to resume from (config-driven only;
+    # no CLI flag — the relay only knows how to pass configs).
+    resume_from_checkpoint: str | None = config.get("resume_from_checkpoint") or None
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -556,6 +701,30 @@ def main() -> int:
     tb_dir.mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(str(tb_dir))
 
+    # Snapshot of config for embedding in checkpoints (immutable after this).
+    config_snapshot = dict(config)
+    model_ref["config_snapshot"] = config_snapshot
+    model_ref["optimizer"] = optimizer
+
+    # -----------------------------------------------------------------------
+    # Checkpoint resume (if requested)
+    # -----------------------------------------------------------------------
+    resume_meta: dict[str, Any] = {}
+    if resume_from_checkpoint:
+        _ckpt_resume_path = Path(resume_from_checkpoint)
+        if not _ckpt_resume_path.exists():
+            raise FileNotFoundError(
+                f"resume_from_checkpoint path not found: {_ckpt_resume_path}"
+            )
+        print(f"[shatter-drift] resuming from checkpoint: {_ckpt_resume_path}", flush=True)
+        res_step, res_eps, res_returns = load_checkpoint(
+            _ckpt_resume_path, model, optimizer, device
+        )
+        resume_meta["resumed_from"] = str(_ckpt_resume_path.resolve())
+        resume_meta["resumed_global_step"] = res_step
+    else:
+        res_step, res_eps, res_returns = 0, 0, []
+
     # -----------------------------------------------------------------------
     # Rollout buffers (single-env, no vectorization — MPS memory is
     # unified with the model so there's no copy-out bottleneck; the sim
@@ -580,12 +749,52 @@ def main() -> int:
     next_obs.copy_(torch.from_numpy(obs_np))
     next_done = torch.zeros(1, device=device)
 
-    global_step = 0
+    global_step = res_step
+    _remaining_steps = total_timesteps - global_step
+
+    # If the checkpoint already covers all requested timesteps, there is
+    # nothing to train.  Export ONNX, write summary, and exit cleanly.
+    if _remaining_steps <= 0:
+        print(
+            f"[shatter-drift] global_step ({global_step}) >= total_timesteps "
+            f"({total_timesteps}). Nothing left to train — exiting cleanly.",
+            flush=True,
+        )
+        _tracker_early = EpisodeTracker()
+        _tracker_early.num_episodes_total = res_eps
+        _tracker_early._returns.extend(res_returns)
+        writer.flush()
+        writer.close()
+        export_onnx(model, obs_dim, output_dir)
+        _summary_early: dict[str, Any] = {
+            "job_id": args.job_id,
+            "game_dir": args.script_dir,
+            "dt": dt,
+            "seed": seed,
+            "total_timesteps": total_timesteps,
+            "global_step": global_step,
+            "wall_time_sec": 0.0,
+            "final_return_mean_100": _tracker_early.mean_last(100),
+            "num_episodes": res_eps,
+            "device": str(device),
+            **resume_meta,
+        }
+        with open(output_dir / "summary.json", "w", encoding="utf-8") as _fh:
+            json.dump(_summary_early, _fh, indent=2)
+        env.close()
+        exit_status["code"] = 0
+        return 0
+
+    num_updates = max(1, _remaining_steps // num_steps)
     start_time = time.time()
-    num_updates = max(1, total_timesteps // num_steps)
     tracker = EpisodeTracker()
+    if res_eps > 0 or res_returns:
+        tracker.num_episodes_total = res_eps
+        tracker._returns.extend(res_returns)
+    model_ref["tracker"] = tracker
     current_episode_return = 0.0
-    last_checkpoint_step = 0
+    # Don't trigger an immediate checkpoint at the very first step of a resume.
+    last_checkpoint_step = global_step
 
     # Preallocated scratch buffers — see Sprint 1 of
     # plans/rl-training-memory-hygiene-plan.md.
@@ -613,6 +822,7 @@ def main() -> int:
         # -- Rollout --
         for step in range(num_steps):
             global_step += 1
+            model_ref["global_step"] = global_step  # keep SIGTERM handler current
             obs_buf[step] = next_obs
             done_buf[step] = next_done
 
@@ -712,7 +922,7 @@ def main() -> int:
 
         if global_step - last_checkpoint_step >= checkpoint_interval_steps:
             ckpt_path = output_dir / f"ckpt-{global_step}.pt"
-            torch.save(model.state_dict(), ckpt_path)
+            save_checkpoint(ckpt_path, model, optimizer, global_step, tracker, config_snapshot)
             # Periodic ONNX export — see Sprint 4 of
             # plans/rl-training-memory-hygiene-plan.md.
             export_onnx(model, obs_dim, output_dir)
@@ -748,6 +958,7 @@ def main() -> int:
         "final_return_mean_100": final_return,
         "num_episodes": tracker.num_episodes_total,
         "device": str(device),
+        **resume_meta,
         "hyperparams": {
             "learning_rate": learning_rate,
             "gamma": gamma,
