@@ -4,10 +4,11 @@
  * Deploy to /root/shatter-drift-api/index.js on the droplet (67.205.167.181).
  *
  * Routes:
- *   GET/POST  /scores                       (flat-file, SD only)
- *   GET/POST  /daily-scores                 (flat-file, SD only, per-day)
- *   GET/POST  /games/:gameId/ghosts         (SQLite, multi-game, canonical)
- *   GET/POST  /ghosts                       (DEPRECATED — thin alias for /games/shatter-drift/ghosts)
+ *   GET/POST  /scores                                  (flat-file, SD only)
+ *   GET/POST  /daily-scores                            (flat-file, SD only, per-day)
+ *   GET/POST  /games/:gameId/ghosts                    (SQLite, multi-game, canonical)
+ *   GET/POST  /games/:gameId/leaderboards/:slug        (SQLite, multi-game, multi-board)
+ *   GET/POST  /ghosts                                  (DEPRECATED — thin alias for /games/shatter-drift/ghosts)
  */
 
 "use strict";
@@ -42,6 +43,25 @@ function isRateLimited(ip) {
   bucket.count++;
   return bucket.count > RATE_MAX;
 }
+
+// Per-route IP buckets for /leaderboards (60 GET/min, 20 POST/min).
+// Same semantics as `express-rate-limit` with a fixed 60s window; kept inline
+// because the rest of the server uses raw `http`, not Express.
+function makeBucketLimiter(maxPerMinute) {
+  const buckets = new Map(); // ip => { count, windowStart }
+  return function isOverLimit(ip) {
+    const now = Date.now();
+    let bucket = buckets.get(ip);
+    if (!bucket || now - bucket.windowStart > 60_000) {
+      bucket = { count: 0, windowStart: now };
+      buckets.set(ip, bucket);
+    }
+    bucket.count++;
+    return bucket.count > maxPerMinute;
+  };
+}
+const leaderboardGetLimited = makeBucketLimiter(60);
+const leaderboardPostLimited = makeBucketLimiter(20);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -177,6 +197,76 @@ if (!ghostCols.some((c) => c.name === "seed")) {
 
 const GHOST_MAX_FRAMES = 18000; // ~5 min at 60fps
 const GHOSTS_PER_GAME = 20;     // keep top N per game_id
+
+// ---------------------------------------------------------------------------
+// SQLite leaderboards (multi-game, multi-board)
+// ---------------------------------------------------------------------------
+//
+// Shared sqlite handle with `ghosts` (same DB file). Additive — does not touch
+// the ghosts table. Schema runs on every boot; idempotent.
+
+ghostsDb.exec(`
+  CREATE TABLE IF NOT EXISTS leaderboards (
+    game_id  TEXT NOT NULL,
+    slug     TEXT NOT NULL,
+    username TEXT NOT NULL,
+    score    INTEGER NOT NULL,
+    ts       INTEGER NOT NULL,
+    PRIMARY KEY (game_id, slug, username)
+  );
+  CREATE INDEX IF NOT EXISTS idx_lb_top ON leaderboards(game_id, slug, score DESC);
+`);
+
+const LEADERBOARD_MAX_LIMIT = 500;
+const LEADERBOARD_DEFAULT_LIMIT = 100;
+const LEADERBOARD_USERNAME_MAX = 32;
+const LEADERBOARD_SCORE_CAP = 1e12;
+const LEADERBOARD_SLUG_RE = /^[a-z0-9-]{1,64}$/;
+
+const stmtUpsertLeaderboard = ghostsDb.prepare(`
+  INSERT INTO leaderboards (game_id, slug, username, score, ts)
+  VALUES (@game_id, @slug, @username, @score, @ts)
+  ON CONFLICT(game_id, slug, username) DO UPDATE SET
+    score = MAX(leaderboards.score, excluded.score),
+    ts    = CASE WHEN excluded.score > leaderboards.score THEN excluded.ts ELSE leaderboards.ts END
+`);
+const stmtSelectLeaderboardTop = ghostsDb.prepare(`
+  SELECT username, score, ts
+  FROM leaderboards
+  WHERE game_id = ? AND slug = ?
+  ORDER BY score DESC, ts ASC
+  LIMIT ?
+`);
+const stmtSelectLeaderboardScore = ghostsDb.prepare(`
+  SELECT score, ts
+  FROM leaderboards
+  WHERE game_id = ? AND slug = ? AND username = ?
+`);
+const stmtSelectLeaderboardRank = ghostsDb.prepare(`
+  SELECT 1 + COUNT(*) AS rank
+  FROM leaderboards
+  WHERE game_id = ? AND slug = ?
+    AND (score > ? OR (score = ? AND ts < ?))
+`);
+
+function isValidSlug(s) {
+  return typeof s === "string" && LEADERBOARD_SLUG_RE.test(s);
+}
+
+// daily-score is special: server stamps it with the current UTC date so
+// clients don't have to coordinate. Other slugs are stored verbatim.
+function resolveLeaderboardSlug(slug) {
+  if (slug === "daily-score") {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
+    return `daily-score-${today}`;
+  }
+  return slug;
+}
+
+function sanitizeLeaderboardUsername(name) {
+  if (typeof name !== "string") return "";
+  return name.trim().slice(0, LEADERBOARD_USERNAME_MAX);
+}
 
 const stmtInsertGhost = ghostsDb.prepare(`
   INSERT INTO ghosts (id, game_id, name, score, distance, grade, frames, ts, seed)
@@ -495,6 +585,98 @@ async function handlePostGhostForGame(req, res, gameId) {
   sendJSON(res, 200, { id });
 }
 
+// ---------------------------------------------------------------------------
+// Leaderboard endpoints — multi-game, multi-board
+// ---------------------------------------------------------------------------
+
+// GET /games/:gameId/leaderboards/:slug?limit=N
+function handleGetLeaderboard(req, res, params, gameId, slug) {
+  if (!isValidGameId(gameId)) {
+    return sendJSON(res, 400, { error: "Invalid gameId" });
+  }
+  if (!isValidSlug(slug)) {
+    return sendJSON(res, 400, { error: "Invalid slug" });
+  }
+  const ip = getClientIP(req);
+  if (leaderboardGetLimited(ip)) return sendJSON(res, 429, { error: "Rate limited" });
+
+  const limit = parseLimit(params.get("limit"), LEADERBOARD_MAX_LIMIT);
+  const finalLimit = Math.min(
+    Number.isFinite(limit) && limit > 0 ? limit : LEADERBOARD_DEFAULT_LIMIT,
+    LEADERBOARD_MAX_LIMIT,
+  );
+  const resolvedSlug = resolveLeaderboardSlug(slug);
+  const rows = stmtSelectLeaderboardTop.all(gameId, resolvedSlug, finalLimit);
+  // The endpoint contract returns the array directly, not { entries: [...] }.
+  sendJSON(res, 200, rows);
+}
+
+// POST /games/:gameId/leaderboards/:slug
+async function handlePostLeaderboard(req, res, gameId, slug) {
+  if (!isValidGameId(gameId)) {
+    return sendJSON(res, 400, { error: "Invalid gameId" });
+  }
+  if (!isValidSlug(slug)) {
+    return sendJSON(res, 400, { error: "Invalid slug" });
+  }
+  const ip = getClientIP(req);
+  if (leaderboardPostLimited(ip)) return sendJSON(res, 429, { error: "Rate limited" });
+
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    return sendJSON(res, 400, { error: "Invalid JSON" });
+  }
+
+  const username = sanitizeLeaderboardUsername(body && body.username);
+  if (!username) {
+    return sendJSON(res, 400, { error: "Invalid username" });
+  }
+
+  const rawScore = body && body.score;
+  if (
+    typeof rawScore !== "number" ||
+    !Number.isFinite(rawScore) ||
+    rawScore < 0 ||
+    rawScore > LEADERBOARD_SCORE_CAP ||
+    !Number.isInteger(rawScore)
+  ) {
+    return sendJSON(res, 400, { error: "Invalid score" });
+  }
+
+  const score = rawScore;
+  const ts = Date.now();
+  const resolvedSlug = resolveLeaderboardSlug(slug);
+
+  try {
+    stmtUpsertLeaderboard.run({
+      game_id: gameId,
+      slug: resolvedSlug,
+      username,
+      score,
+      ts,
+    });
+  } catch (err) {
+    console.error("[leaderboards] upsert failed:", err);
+    return sendJSON(res, 500, { error: "Insert failed" });
+  }
+
+  // Look up the row that won (might be the existing higher score), then rank.
+  const row = stmtSelectLeaderboardScore.get(gameId, resolvedSlug, username);
+  const finalScore = row ? row.score : score;
+  const finalTs = row ? row.ts : ts;
+  const rankRow = stmtSelectLeaderboardRank.get(
+    gameId,
+    resolvedSlug,
+    finalScore,
+    finalScore,
+    finalTs,
+  );
+  const rank = rankRow ? rankRow.rank : 1;
+  sendJSON(res, 200, { rank });
+}
+
 // -----------------------------------------------------------------
 // DEPRECATED: legacy /ghosts endpoints (SD-only, pre-multi-game).
 // Kept alive until 2026-07-23 to let cached clients drain.
@@ -518,6 +700,8 @@ async function handlePostGhostLegacy(req, res) {
 
 // /games/:gameId/ghosts — capture gameId.
 const GAMES_GHOSTS_RE = /^\/games\/([^/]+)\/ghosts$/;
+// /games/:gameId/leaderboards/:slug — capture gameId + slug.
+const GAMES_LEADERBOARDS_RE = /^\/games\/([^/]+)\/leaderboards\/([^/]+)$/;
 
 const server = http.createServer(async (req, res) => {
   // CORS preflight
@@ -550,6 +734,14 @@ const server = http.createServer(async (req, res) => {
       const gameId = ghostsMatch[1];
       if (req.method === "GET") return handleGetGhostsForGame(req, res, params, gameId);
       if (req.method === "POST") return await handlePostGhostForGame(req, res, gameId);
+    }
+
+    const leaderboardsMatch = pathname.match(GAMES_LEADERBOARDS_RE);
+    if (leaderboardsMatch) {
+      const gameId = leaderboardsMatch[1];
+      const slug = leaderboardsMatch[2];
+      if (req.method === "GET") return handleGetLeaderboard(req, res, params, gameId, slug);
+      if (req.method === "POST") return await handlePostLeaderboard(req, res, gameId, slug);
     }
 
     if (pathname === "/ghosts") {
