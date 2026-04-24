@@ -27,6 +27,12 @@ import { UnlockManager, TRAIL_STYLES, CRYSTAL_SKINS, type TrailStyle, type Cryst
 import { AfterimageTrail } from "./afterimage";
 import { RibbonTrail } from "./ribbon";
 import { RunHistoryTracker } from "./stats";
+import {
+  pickRandomContracts,
+  ContractHUD,
+  type ContractCtx,
+  type ContractInstance,
+} from "./contracts";
 import { fetchLeaderboard, submitScore, getPlayerName, setPlayerName, fetchGhosts, submitGhost, fetchGhostUploadThreshold, type LeaderboardEntry } from "./leaderboard";
 import { GhostRecorder, GhostManager } from "./ghost";
 import {
@@ -407,6 +413,12 @@ export class Game {
   private ghostUploadThreshold = 0;
   private ghostToggle = true;
 
+  // Run contracts — three randomized goals per run, award score bonuses on completion
+  private contracts: ContractInstance[] = [];
+  private contractHUD!: ContractHUD;
+  private powerupsCollected = 0;
+  private bestPhaseStreak = 0;
+
   // Daily Challenge mode
   private isDailyMode = false;
   private dailyDateKey = ""; // YYYYMMDD
@@ -542,6 +554,7 @@ export class Game {
     this.afterimage = new AfterimageTrail(this.scene);
     this.ribbon = new RibbonTrail(this.scene);
     this.runHistory = new RunHistoryTracker();
+    this.contractHUD = new ContractHUD();
 
     // Ghost racing — load persisted toggle and kick off async fetch
     const storedGhostToggle = localStorage.getItem("shatterDriftGhostToggle");
@@ -1031,6 +1044,10 @@ export class Game {
     this.playTime = 0;
     this.closeCallCount = 0;
     this.phaseStreak = 0;
+    this.powerupsCollected = 0;
+    this.bestPhaseStreak = 0;
+    this.contracts = pickRandomContracts(3);
+    this.contractHUD.hide();
     this.phaseEnergy = 1;
     this.phaseLocked = false;
     this.phaseCooldown = 0;
@@ -1176,6 +1193,7 @@ export class Game {
 
       // Reveal HUD
       this.hud.classList.remove("hidden");
+      this.contractHUD.show();
 
       // Daily banner
       if (this.dailyBanner) {
@@ -1697,6 +1715,7 @@ export class Game {
     );
     if (collectedPU) {
       this.powerups.activatePowerUp(collectedPU.type);
+      this.powerupsCollected++;
       const config = this.powerups.getConfig(collectedPU.type);
       this.screenFlash.trigger(config.color, 0.2);
       playPowerUp();
@@ -1824,6 +1843,9 @@ export class Game {
         }
         if (this.playerZ - this.lastCloseCall > 3) {
           this.phaseStreak++;
+          if (this.phaseStreak > this.bestPhaseStreak) {
+            this.bestPhaseStreak = this.phaseStreak;
+          }
           const streakBonus = this.phaseStreakMultiplier(this.phaseStreak); // tiered ×2/×3/×5/×10
           const puMultiplier = this.powerups.getScoreMultiplier();
           const phaseMultiplier = this.getPhaseMultiplier();
@@ -1926,6 +1948,36 @@ export class Game {
     const pfxVignette = speedNorm * 0.5 + (this.biomes.isTransitioning ? 0.3 : 0);
     this.postfx.setVignette(pfxVignette);
     this.postfx.setBiomeTint(this.biomes.colors.playerTrail, 0.12);
+
+    // --- Contracts ---
+    const contractCtx: ContractCtx = {
+      distance: this.distance,
+      maxCombo: this.maxCombo,
+      wallsShattered: this.closeCallCount,
+      bestPhaseStreak: this.bestPhaseStreak,
+      powerupsCollected: this.powerupsCollected,
+    };
+    for (const inst of this.contracts) {
+      if (inst.complete) {
+        if (inst.celebrateTimer > 0) {
+          inst.celebrateTimer = Math.max(0, inst.celebrateTimer - dt);
+        }
+        continue;
+      }
+      inst.progress = inst.def.progress(contractCtx);
+      if (inst.progress >= inst.def.target) {
+        inst.complete = true;
+        inst.celebrateTimer = 1.5;
+        this.score += inst.def.reward;
+        playChallengeComplete();
+        this.popups.showCenter(
+          `+${inst.def.reward.toLocaleString()} · ${inst.def.label}`,
+          "CONTRACT COMPLETE",
+          "#00ffcc"
+        );
+      }
+    }
+    this.contractHUD.render(this.contracts);
 
     // Update HUD
     this.hudScore.textContent = String(this.score);
@@ -2240,6 +2292,9 @@ export class Game {
 
     // Ghost racing — stop recording immediately so we capture a clean set of frames
     this.ghostRecorder.stop();
+
+    // Hide contracts HUD on death
+    this.contractHUD.hide();
 
     // Hide tutorial immediately on death
     this.tutorial.reset();

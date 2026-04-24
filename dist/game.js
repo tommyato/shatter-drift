@@ -37117,6 +37117,238 @@ var RunHistoryTracker = class {
   }
 };
 
+// src/contracts.ts
+var CONTRACT_POOL = [
+  // --- reach (distance milestone) ---
+  {
+    id: "reach-500",
+    label: "Reach 500m",
+    target: 500,
+    reward: 300,
+    category: "reach",
+    progress: (ctx2) => ctx2.distance,
+    format: (p, t) => `${Math.min(Math.floor(p), t)}/${t}m`
+  },
+  {
+    id: "reach-1500",
+    label: "Reach 1,500m",
+    target: 1500,
+    reward: 800,
+    category: "reach",
+    progress: (ctx2) => ctx2.distance,
+    format: (p, t) => `${Math.min(Math.floor(p), t)}/${t}m`
+  },
+  {
+    id: "reach-3000",
+    label: "Reach 3,000m",
+    target: 3e3,
+    reward: 2e3,
+    category: "reach",
+    progress: (ctx2) => ctx2.distance,
+    format: (p, t) => `${Math.min(Math.floor(p), t)}/${t}m`
+  },
+  // --- shatter (walls phased through = close calls) ---
+  {
+    id: "shatter-5",
+    label: "Phase through 5 walls",
+    target: 5,
+    reward: 250,
+    category: "shatter",
+    progress: (ctx2) => ctx2.wallsShattered
+  },
+  {
+    id: "shatter-15",
+    label: "Phase through 15 walls",
+    target: 15,
+    reward: 600,
+    category: "shatter",
+    progress: (ctx2) => ctx2.wallsShattered
+  },
+  {
+    id: "shatter-30",
+    label: "Phase through 30 walls",
+    target: 30,
+    reward: 1500,
+    category: "shatter",
+    progress: (ctx2) => ctx2.wallsShattered
+  },
+  // --- combo (orb streak) ---
+  {
+    id: "combo-x5",
+    label: "Hit a 5x combo",
+    target: 5,
+    reward: 300,
+    category: "combo",
+    progress: (ctx2) => ctx2.maxCombo,
+    format: (p, t) => `x${Math.min(Math.floor(p), t)}/x${t}`
+  },
+  {
+    id: "combo-x10",
+    label: "Hit a 10x combo",
+    target: 10,
+    reward: 800,
+    category: "combo",
+    progress: (ctx2) => ctx2.maxCombo,
+    format: (p, t) => `x${Math.min(Math.floor(p), t)}/x${t}`
+  },
+  // --- powerups (any power-up collected) ---
+  {
+    id: "powerups-3",
+    label: "Collect 3 power-ups",
+    target: 3,
+    reward: 250,
+    category: "powerups",
+    progress: (ctx2) => ctx2.powerupsCollected
+  },
+  {
+    id: "powerups-5",
+    label: "Collect 5 power-ups",
+    target: 5,
+    reward: 500,
+    category: "powerups",
+    progress: (ctx2) => ctx2.powerupsCollected
+  },
+  // --- phase-streak (consecutive walls phased in one phase session) ---
+  {
+    id: "phase-streak-3",
+    label: "Chain 3 phases in a row",
+    target: 3,
+    reward: 400,
+    category: "phase-streak",
+    progress: (ctx2) => ctx2.bestPhaseStreak
+  },
+  {
+    id: "phase-streak-5",
+    label: "Chain 5 phases in a row",
+    target: 5,
+    reward: 1e3,
+    category: "phase-streak",
+    progress: (ctx2) => ctx2.bestPhaseStreak
+  }
+];
+function pickRandomContracts(count) {
+  let pool = [...CONTRACT_POOL];
+  const picked = [];
+  for (let i = 0; i < count && pool.length > 0; i += 1) {
+    const idx = Math.floor(Math.random() * pool.length);
+    const [def] = pool.splice(idx, 1);
+    picked.push({ def, progress: 0, complete: false, celebrateTimer: 0 });
+    pool = pool.filter((p) => p.category !== def.category);
+  }
+  return picked;
+}
+function formatContractProgress(instance) {
+  const { def, progress } = instance;
+  if (def.format) {
+    return def.format(progress, def.target);
+  }
+  return `${Math.min(Math.floor(progress), def.target)}/${def.target}`;
+}
+var ContractHUD = class {
+  container;
+  rows = [];
+  labelEls = [];
+  progressEls = [];
+  boxEls = [];
+  constructor() {
+    this.container = document.createElement("div");
+    this.container.id = "contract-hud";
+    this.container.style.cssText = [
+      "position:fixed",
+      "top:72px",
+      "left:28px",
+      "display:flex",
+      "flex-direction:column",
+      "gap:6px",
+      "pointer-events:none",
+      "z-index:20",
+      "opacity:0",
+      "transition:opacity 0.3s"
+    ].join(";");
+    document.body.appendChild(this.container);
+    for (let i = 0; i < 3; i++) {
+      const row = document.createElement("div");
+      row.style.cssText = [
+        "display:flex",
+        "align-items:center",
+        "gap:5px",
+        "font-family:'Orbitron',monospace",
+        "font-size:9px",
+        "letter-spacing:1px",
+        "color:#556677",
+        "transition:color 0.25s,text-shadow 0.25s"
+      ].join(";");
+      const box = document.createElement("span");
+      box.textContent = "\u25A2";
+      box.style.cssText = "flex-shrink:0;transition:color 0.25s,text-shadow 0.25s";
+      const label = document.createElement("span");
+      label.style.cssText = "transition:text-decoration 0.1s";
+      const dot = document.createElement("span");
+      dot.textContent = "\xB7";
+      dot.style.cssText = "flex-shrink:0;opacity:0.5";
+      const prog = document.createElement("span");
+      prog.style.cssText = "opacity:0.8";
+      row.appendChild(box);
+      row.appendChild(label);
+      row.appendChild(dot);
+      row.appendChild(prog);
+      this.container.appendChild(row);
+      this.rows.push(row);
+      this.labelEls.push(label);
+      this.progressEls.push(prog);
+      this.boxEls.push(box);
+    }
+  }
+  show() {
+    this.container.style.opacity = "1";
+  }
+  hide() {
+    this.container.style.opacity = "0";
+  }
+  render(contracts) {
+    for (let i = 0; i < 3; i++) {
+      const inst = contracts[i];
+      if (!inst) continue;
+      const isCelebrating = inst.complete && inst.celebrateTimer > 0;
+      const isDimmed = inst.complete && inst.celebrateTimer <= 0;
+      if (isCelebrating) {
+        this.boxEls[i].textContent = "\u25A3";
+        this.boxEls[i].style.color = "#00ffcc";
+        this.boxEls[i].style.textShadow = "0 0 8px rgba(0,255,204,0.8)";
+        this.rows[i].style.color = "#00ffcc";
+        this.rows[i].style.textShadow = "0 0 6px rgba(0,255,204,0.4)";
+        this.rows[i].style.opacity = "1";
+        this.labelEls[i].style.textDecoration = "line-through";
+        this.labelEls[i].textContent = inst.def.label;
+        this.progressEls[i].textContent = "DONE";
+      } else if (isDimmed) {
+        this.boxEls[i].textContent = "\u25A3";
+        this.boxEls[i].style.color = "#2a3a44";
+        this.boxEls[i].style.textShadow = "none";
+        this.rows[i].style.color = "#2a3a44";
+        this.rows[i].style.textShadow = "none";
+        this.rows[i].style.opacity = "0.4";
+        this.labelEls[i].style.textDecoration = "line-through";
+        this.labelEls[i].textContent = inst.def.label;
+        this.progressEls[i].textContent = "DONE";
+      } else {
+        this.boxEls[i].textContent = "\u25A2";
+        this.boxEls[i].style.color = "#556677";
+        this.boxEls[i].style.textShadow = "none";
+        this.rows[i].style.color = "#556677";
+        this.rows[i].style.textShadow = "none";
+        this.rows[i].style.opacity = "1";
+        this.labelEls[i].style.textDecoration = "none";
+        this.labelEls[i].textContent = inst.def.label;
+        this.progressEls[i].textContent = formatContractProgress(inst);
+      }
+    }
+  }
+  dispose() {
+    this.container.remove();
+  }
+};
+
 // src/leaderboard.ts
 var API_URL = "https://api.tommyato.com";
 function getPlayerName() {
@@ -37843,6 +38075,11 @@ var Game = class {
   ghostManager;
   ghostUploadThreshold = 0;
   ghostToggle = true;
+  // Run contracts — three randomized goals per run, award score bonuses on completion
+  contracts = [];
+  contractHUD;
+  powerupsCollected = 0;
+  bestPhaseStreak = 0;
   // Daily Challenge mode
   isDailyMode = false;
   dailyDateKey = "";
@@ -37942,6 +38179,7 @@ var Game = class {
     this.afterimage = new AfterimageTrail(this.scene);
     this.ribbon = new RibbonTrail(this.scene);
     this.runHistory = new RunHistoryTracker();
+    this.contractHUD = new ContractHUD();
     const storedGhostToggle = localStorage.getItem("shatterDriftGhostToggle");
     this.ghostToggle = storedGhostToggle === null ? true : storedGhostToggle === "1";
     this.ghostManager = new GhostManager(this.scene);
@@ -38333,6 +38571,10 @@ var Game = class {
     this.playTime = 0;
     this.closeCallCount = 0;
     this.phaseStreak = 0;
+    this.powerupsCollected = 0;
+    this.bestPhaseStreak = 0;
+    this.contracts = pickRandomContracts(3);
+    this.contractHUD.hide();
     this.phaseEnergy = 1;
     this.phaseLocked = false;
     this.phaseCooldown = 0;
@@ -38436,6 +38678,7 @@ var Game = class {
       this.targetFOV = this.baseFOV;
       this.currentFOV = this.baseFOV;
       this.hud.classList.remove("hidden");
+      this.contractHUD.show();
       if (this.dailyBanner) {
         if (this.isDailyMode) {
           this.dailyBanner.textContent = `DAILY CHALLENGE \u2014 ${this.formatDailyDate(this.dailyDateKey)}`;
@@ -38856,6 +39099,7 @@ var Game = class {
     );
     if (collectedPU) {
       this.powerups.activatePowerUp(collectedPU.type);
+      this.powerupsCollected++;
       const config = this.powerups.getConfig(collectedPU.type);
       this.screenFlash.trigger(config.color, 0.2);
       playPowerUp();
@@ -38976,6 +39220,9 @@ var Game = class {
         }
         if (this.playerZ - this.lastCloseCall > 3) {
           this.phaseStreak++;
+          if (this.phaseStreak > this.bestPhaseStreak) {
+            this.bestPhaseStreak = this.phaseStreak;
+          }
           const streakBonus = this.phaseStreakMultiplier(this.phaseStreak);
           const puMultiplier2 = this.powerups.getScoreMultiplier();
           const phaseMultiplier = this.getPhaseMultiplier();
@@ -39048,6 +39295,34 @@ var Game = class {
     const pfxVignette = speedNorm * 0.5 + (this.biomes.isTransitioning ? 0.3 : 0);
     this.postfx.setVignette(pfxVignette);
     this.postfx.setBiomeTint(this.biomes.colors.playerTrail, 0.12);
+    const contractCtx = {
+      distance: this.distance,
+      maxCombo: this.maxCombo,
+      wallsShattered: this.closeCallCount,
+      bestPhaseStreak: this.bestPhaseStreak,
+      powerupsCollected: this.powerupsCollected
+    };
+    for (const inst of this.contracts) {
+      if (inst.complete) {
+        if (inst.celebrateTimer > 0) {
+          inst.celebrateTimer = Math.max(0, inst.celebrateTimer - dt);
+        }
+        continue;
+      }
+      inst.progress = inst.def.progress(contractCtx);
+      if (inst.progress >= inst.def.target) {
+        inst.complete = true;
+        inst.celebrateTimer = 1.5;
+        this.score += inst.def.reward;
+        playChallengeComplete();
+        this.popups.showCenter(
+          `+${inst.def.reward.toLocaleString()} \xB7 ${inst.def.label}`,
+          "CONTRACT COMPLETE",
+          "#00ffcc"
+        );
+      }
+    }
+    this.contractHUD.render(this.contracts);
     this.hudScore.textContent = String(this.score);
     this.hudDistance.textContent = `${this.distance}m`;
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
@@ -39304,6 +39579,7 @@ var Game = class {
   die() {
     const previousBestDistance = Math.max(this.bestDistance, this.runHistory.getBestDistance());
     this.ghostRecorder.stop();
+    this.contractHUD.hide();
     this.tutorial.reset();
     this.deathSlowMo = true;
     this.deathSlowMoTimer = 0.6;
