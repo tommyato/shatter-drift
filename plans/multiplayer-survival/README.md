@@ -1,7 +1,7 @@
 ---
 topic: Shatter Drift — multiplayer survival (last man standing) with sphere-bump
 created: 2026-04-25
-tags: [plan, shatter-drift, multiplayer, webrtc, lockstep, post-jam]
+tags: [plan, shatter-drift, multiplayer, webrtc, lockstep, vibejam-2026]
 ---
 
 # Multiplayer Survival
@@ -10,7 +10,7 @@ tags: [plan, shatter-drift, multiplayer, webrtc, lockstep, post-jam]
 
 Real-time multiplayer Shatter Drift: 2-8 players race the same procedurally-generated obstacle stream on a shared seed. **Players can bump each other** via sphere-sphere collision — knock a rival into a wall, get knocked into one yourself. **Last alive wins.** Death is permanent within a match; spectators see the survivors finish.
 
-This plan is **post-vibejam** (Plan 1 + Plan 2 ship for the May 1 jam; this lands after). Reason: a deterministic-lockstep multiplayer system with WebRTC mesh transport and bump physics is the kind of work that bleeds 4-8 days of bugs and risks the jam submission. Building it post-jam means we get to do it right; the jam version stays single-player with seeded ghost racing as the "online competition" surface.
+**Ships for vibejam 2026 (May 1).** All 4 phases land before submission. If the system isn't reliably playable by Apr 30 evening, the multiplayer entry-point is **hidden behind a feature flag** so the jam build still presents as a clean singleplayer + ghost-racing experience. The flag is `?mp=1` on the URL plus a `MULTIPLAYER_ENABLED` const in `src/config.ts` — default `false` for the jam build, flipped to `true` once each phase passes its acceptance bar (see "Hide-If-Broken Gate" below). Worst case: code lands, flag stays off, post-jam we flip the flag.
 
 The ECS refactor that already shipped is what makes this tractable. SD's sim is fully deterministic (`harness.ts:239` proves two same-seed same-action runs hash-match), input is a single int per tick, world state is a typed snapshot. That's the lockstep multiplayer data shape exactly.
 
@@ -76,6 +76,21 @@ See per-phase files:
 
 13-21 SP across 4 phases. Phase 2 is the big one (player-array refactor). Phase 1 is the most parallel-ready (lobby UI can develop while sim refactor lands). Phases 3 + 4 are smaller — each ~3-5 SP.
 
-## Vibejam Note
+## Vibejam Sequencing (May 1 deadline)
 
-This is **post-jam work**. Vibejam deadline is 2026-05-01. Do not start this plan before May 2 unless we hit Plan 1 + Plan 2 with multiple days of buffer. The cost of an undercooked multiplayer in the jam submission > the value of having multiplayer at all. Singleplayer SD with seeded ghost racing is the jam version.
+All three SD plans ship for the jam. Sequenced on the `shatter-drift` worker channel:
+
+1. **Apr 25–26**: Plan 1 (seeded ghost racing) — small, low-risk, immediate competitive surface.
+2. **Apr 26–27**: Plan 2 (boost / brake / gamepad) — adds player agency, prerequisite for boost-ram bump mechanic in Phase 3 here.
+3. **Apr 27–28**: Phase 1 (lobby + WebRTC). Acceptance: two browsers connect via lobby code, exchange test messages, disconnect cleanly.
+4. **Apr 28–29**: Phase 2 (shared sim). Acceptance: 2-player lobby runs synchronized sim, hash-match across peers for 30s of play.
+5. **Apr 29**: Phase 3 (sphere bump). Acceptance: visible momentum exchange, no tunneling, deterministic outcomes.
+6. **Apr 30 AM**: Phase 4 (survival rules). Acceptance: 2-player match plays start-to-finish with winner declared.
+7. **Apr 30 PM**: integration playtest. **GO/NO-GO call on the multiplayer flag.** If playable end-to-end, ship `MULTIPLAYER_ENABLED=true`. If not, ship `false` and the jam build is singleplayer + ghost racing only.
+8. **May 1 AM**: submit.
+
+## Hide-If-Broken Gate
+
+The `MULTIPLAYER_ENABLED` flag in `src/config.ts` gates: the multiplayer button on the title screen, the lobby panel, and the multiplayer-only system registrations in `runtime.ts`. When `false`, none of the multiplayer code paths execute — the build is identical to current singleplayer + Plan 1/2 additions. This is the safety valve: even if Phase 2 lockstep desyncs irrecoverably the night before submission, we ship the singleplayer build with one boolean change and zero rollback risk.
+
+The flag default is `false` until the Apr 30 PM playtest signs off.
