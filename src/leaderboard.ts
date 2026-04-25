@@ -24,15 +24,10 @@ export interface LeaderboardOptions {
   date?: string; // YYYY-MM-DD
 }
 
-/** Get the player's saved name */
-export function getPlayerName(): string {
-  return localStorage.getItem("shatterDriftName") || "";
-}
-
-/** Save the player's name */
-export function setPlayerName(name: string) {
-  localStorage.setItem("shatterDriftName", name.slice(0, 16));
-}
+// Username helpers live in `./coolname` — the shared `cc-username` key is
+// used across all tommyato games so a player's identity follows them between
+// titles. Legacy reads of the old per-game key (`shatterDriftName`) migrate
+// in once via `migrateLegacyUsername()`, called from Game.init().
 
 /** Fetch top scores.
  *  - Normal:       GET /scores?limit=N

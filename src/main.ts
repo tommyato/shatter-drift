@@ -19,7 +19,6 @@ if (new URLSearchParams(window.location.search).get("_harness") === "1") {
 	const harness = createHarness();
 	window.__harness = harness;
 	window.__harnessReady = true;
-	console.log("[harness] ready, scripts:", harness.listScripts().join(", "));
 } else {
 	const game = new Game();
 	game.start();

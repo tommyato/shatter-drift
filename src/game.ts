@@ -33,8 +33,10 @@ import {
   type ContractCtx,
   type ContractInstance,
 } from "./contracts";
-import { fetchLeaderboard, submitScore, getPlayerName, setPlayerName, fetchGhosts, submitGhost, fetchGhostUploadThreshold, type LeaderboardEntry } from "./leaderboard";
+import { fetchLeaderboard, submitScore, fetchGhosts, submitGhost, fetchGhostUploadThreshold, type LeaderboardEntry } from "./leaderboard";
 import { GhostRecorder, GhostManager } from "./ghost";
+import { getLocalUsername, setLocalUsername, migrateLegacyUsername } from "./coolname";
+import { MenuNavigation } from "./menu-navigation";
 import {
   createRiftFlipState,
   updateRiftFlip,
@@ -430,12 +432,24 @@ export class Game {
   // Camera offset
   private cameraOffset = new THREE.Vector3(0, 3, -6);
 
+  // Menu navigation (keyboard arrows / WASD / d-pad / left stick + Enter
+  // / Space / gamepad-A activation). Wired up per state in init/transitions.
+  private menuNav = new MenuNavigation();
+  // Suppresses menu activation reads for N frames after a state change so a
+  // single Enter/Space/A press can't fire across two states (e.g. mash
+  // Enter on game-over → instant retry → instant pause).
+  private menuNavSuppressFrames = 0;
+
   async start() {
     this.init();
     this.renderer.setAnimationLoop(() => this.loop());
   }
 
   private init() {
+    // One-shot migration of any legacy per-game username into the shared
+    // `cc-username` key. No-op if the user already has a coolname.
+    migrateLegacyUsername();
+
     // Load persistent stats
     this.highScore = parseInt(localStorage.getItem("shatterDriftHighScore") || "0", 10);
     this.totalRuns = parseInt(localStorage.getItem("shatterDriftTotalRuns") || "0", 10);
@@ -514,8 +528,13 @@ export class Game {
     ].join(";");
     document.body.appendChild(this.riftWarningEl);
 
-    // Player
+    // Player. Created up-front so gameplay can re-use the same Three.js
+    // resources, but hidden until the run actually starts (universal
+    // polish rule 5: no gameplay actors visible on the title screen).
+    // updateTitle() flips visibility back on while the customize panel is
+    // open so the cosmetic preview still works.
     this.player = new Player();
+    this.player.group.visible = false;
     this.scene.add(this.player.group);
 
     // Biome manager
@@ -638,8 +657,94 @@ export class Game {
     // Resize
     window.addEventListener("resize", () => this.onResize());
 
+    // Wire the explicit PLAY button on the title screen (added for
+    // universal polish rule 4 — a clear index-0 menu target). Same
+    // behavior as the legacy "press space anywhere" path; just routes
+    // through `startGame(false)` like the daily button does.
+    const playBtn = document.getElementById("play-btn");
+    if (playBtn) {
+      playBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.startGame(false);
+      });
+      playBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    }
+
+    // Default menu scope = title. Refreshed on every state transition.
+    this.applyTitleMenuScope();
+
     // Handle Vibeverse portal arrival
     this.handlePortalArrival();
+  }
+
+  // -----------------------------------------------------------------
+  // Menu scope helpers — keep keyboard / gamepad nav focused on the
+  // currently-visible overlay. Called whenever a state transitions or
+  // a panel opens / closes.
+  // -----------------------------------------------------------------
+
+  private applyTitleMenuScope() {
+    const items: HTMLElement[] = [];
+    const playBtn = document.getElementById("play-btn");
+    const dailyBtn = document.getElementById("daily-btn");
+    const customizeBtn = document.getElementById("customize-btn");
+    if (playBtn) items.push(playBtn);
+    if (dailyBtn) items.push(dailyBtn);
+    if (customizeBtn) items.push(customizeBtn);
+    // Esc / B is a no-op on the title screen — there's nothing to back
+    // out to. Pass undefined onCancel so the press is harmlessly ignored.
+    this.menuNav.setScope(items);
+  }
+
+  private applyCustomizeMenuScope() {
+    const items: HTMLElement[] = [];
+    // Cosmetic grids first (skin + trail) so the cursor lands inside the
+    // panel content. Order in the DOM matches visual order, so spatial
+    // nav (left/right inside a row, up/down between rows) Just Works.
+    const skinItems = document.querySelectorAll<HTMLElement>("#crystal-grid .cosmetic-item:not(.locked)");
+    const trailItems = document.querySelectorAll<HTMLElement>("#trail-grid .cosmetic-item:not(.locked)");
+    skinItems.forEach((el) => items.push(el));
+    trailItems.forEach((el) => items.push(el));
+    const back = document.getElementById("customize-back");
+    if (back) items.push(back);
+    // Note: the name input is intentionally NOT in this scope — text fields
+    // need raw arrow keys for cursor movement and conflict with menu nav.
+    // Mouse-click into the input still works for editing.
+    this.menuNav.setScope(items, () => this.closeCustomize());
+  }
+
+  private applyPauseMenuScope() {
+    const items: HTMLElement[] = [];
+    const volume = document.getElementById("pause-volume");
+    const resume = document.getElementById("pause-resume");
+    const ghost = document.getElementById("pause-ghost-toggle");
+    // Resume first so it's the default-focused (mash A to unpause).
+    if (resume) items.push(resume);
+    if (ghost) items.push(ghost);
+    if (volume) items.push(volume);
+    this.menuNav.setScope(items, () => this.resumeGame());
+  }
+
+  private applyGameOverMenuScope() {
+    // Retry first so mash-Enter / gamepad-A defaults to "retry" — matches
+    // the "PRESS SPACE OR CLICK TO RETRY" prompt the player sees. Arrows
+    // navigate to STATS / LEADERBOARD tabs and the SHARE button.
+    const items: HTMLElement[] = [];
+    if (this.centerRetry) items.push(this.centerRetry);
+    const tabs = document.querySelectorAll<HTMLElement>(".go-tab");
+    tabs.forEach((el) => items.push(el));
+    const share = document.getElementById("share-x-btn");
+    if (share) items.push(share);
+    this.menuNav.setScope(items);
+  }
+
+  private closeCustomize() {
+    if (!this.customizeOpen) return;
+    this.customizeOpen = false;
+    this.customizePanel.classList.add("hidden");
+    this.titleOverlay.classList.remove("hidden");
+    this.applyTitleMenuScope();
+    this.menuNavSuppressFrames = 2;
   }
 
   /** Fetch ghost recordings + upload threshold in parallel. Fire-and-forget. */
@@ -720,11 +825,15 @@ export class Game {
   private pauseGame() {
     this.state = GameState.Paused;
     this.pauseMenu.classList.remove("hidden");
+    this.applyPauseMenuScope();
+    this.menuNavSuppressFrames = 2;
   }
 
   private resumeGame() {
     this.state = GameState.Playing;
     this.pauseMenu.classList.add("hidden");
+    this.menuNav.detach();
+    this.menuNavSuppressFrames = 2;
     // Reset clock delta so we don't get a huge dt spike
     this.clock.getDelta();
   }
@@ -735,12 +844,17 @@ export class Game {
     const backBtn = document.getElementById("customize-back")!;
     const openBtn = document.getElementById("customize-btn")!;
 
-    // Player name input
+    // Player name input — initialized from the shared coolname identity
+    // (universal polish rule 2). Edits propagate live via setLocalUsername;
+    // game-over leaderboard / ghost upload all read through getLocalUsername.
     const nameInput = document.getElementById("customize-name-input") as HTMLInputElement;
-    nameInput.value = getPlayerName();
+    nameInput.value = getLocalUsername();
+    // stopPropagation so menu-nav direction keys (arrows / WASD) don't fire
+    // while the user is editing text.
     nameInput.addEventListener("keydown", (e) => e.stopPropagation());
-    nameInput.addEventListener("change", () => setPlayerName(nameInput.value.trim()));
-    nameInput.addEventListener("blur", () => setPlayerName(nameInput.value.trim()));
+    nameInput.addEventListener("input", () => setLocalUsername(nameInput.value));
+    nameInput.addEventListener("change", () => setLocalUsername(nameInput.value));
+    nameInput.addEventListener("blur", () => setLocalUsername(nameInput.value));
 
     const unlockedRewards = this.challenges.getUnlockedRewards();
     const unlockedCrystals = new Set(["default", ...unlockedRewards.filter(r => r.type === "crystal").map(r => r.value)]);
@@ -799,16 +913,18 @@ export class Game {
       e.stopPropagation();
       this.customizeOpen = true;
       this.titleOverlay.classList.add("hidden");
-      nameInput.value = getPlayerName();
+      nameInput.value = getLocalUsername();
       this.customizePanel.classList.remove("hidden");
+      this.applyCustomizeMenuScope();
+      // Suppress so the same A press that opened customize doesn't
+      // immediately confirm the first cosmetic tile inside it.
+      this.menuNavSuppressFrames = 2;
     });
 
     // Back button
     backBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      this.customizeOpen = false;
-      this.customizePanel.classList.add("hidden");
-      this.titleOverlay.classList.remove("hidden");
+      this.closeCustomize();
     });
 
     // Apply initial skin
@@ -917,9 +1033,27 @@ export class Game {
 
     this.input.update();
 
+    // Tick menu-nav suppress counter once per frame regardless of state.
+    if (this.menuNavSuppressFrames > 0) this.menuNavSuppressFrames -= 1;
+
+    // Update menu navigation BEFORE gameplay state branches so any A
+    // press consumed by a menu doesn't leak into gameplay (e.g. mashing
+    // Enter to retry shouldn't immediately fire shatter).
+    let menuConsumedActivate = false;
+    if (this.menuNavSuppressFrames === 0 && this.menuNav.isActive()) {
+      menuConsumedActivate = this.menuNav.update(this.input);
+    }
+
+    // Pause-menu volume slider live-updates while focused: pressing
+    // left/right adjusts the slider value and applies it. Other focused
+    // items have no left/right effect, so this is harmless.
+    if (this.state === GameState.Paused) {
+      this.handlePauseMenuLeftRight();
+    }
+
     switch (this.state) {
       case GameState.Title:
-        this.updateTitle(dt);
+        this.updateTitle(dt, menuConsumedActivate);
         break;
       case GameState.Launching:
         this.updateLaunching(dt);
@@ -931,7 +1065,7 @@ export class Game {
         // Frozen — only render, don't update game logic
         break;
       case GameState.GameOver:
-        this.updateGameOver(dt);
+        this.updateGameOver(dt, menuConsumedActivate);
         break;
     }
 
@@ -975,8 +1109,12 @@ export class Game {
 
   // --- Title ---
 
-  private updateTitle(dt: number) {
-    // Crystal sits below center so it doesn't overlap instruction text
+  private updateTitle(dt: number, menuConsumedActivate: boolean) {
+    // Crystal preview is shown ONLY while customize is open, per universal
+    // polish rule 5 (no gameplay actors visible on the title screen).
+    // Update its transform every frame so the preview stays animated when
+    // the customize panel is toggled open mid-title.
+    this.player.group.visible = this.customizeOpen;
     this.player.group.position.set(0, -1.5, 0);
     this.player.crystalMesh.rotation.y += dt * 0.5;
     this.player.crystalMesh.rotation.x = Math.sin(performance.now() * 0.001) * 0.3;
@@ -990,9 +1128,35 @@ export class Game {
     if (this.dailyChallengeQueued) {
       this.dailyChallengeQueued = false;
       this.startGame(true);
-    } else if (!this.customizeOpen && (this.input.justPressed("space") || this.input.justPressed("click"))) {
+      return;
+    }
+
+    // Legacy "click anywhere or space" launch — still works for mouse +
+    // gamepad-A pressed off-button. Menu nav handles the focused PLAY
+    // button; don't double-fire if it already activated something.
+    if (
+      !menuConsumedActivate &&
+      !this.customizeOpen &&
+      this.menuNavSuppressFrames === 0 &&
+      this.input.justPressed("click")
+    ) {
       this.startGame(false);
     }
+  }
+
+  /** Volume-slider tweak via gamepad d-pad / arrow keys when focused in pause. */
+  private handlePauseMenuLeftRight() {
+    const focused = this.menuNav.focusedElement();
+    if (!focused) return;
+    if (focused.id !== "pause-volume") return;
+    const slider = focused as HTMLInputElement;
+    const dir =
+      this.input.justPressedDir("left")  ? -5 :
+      this.input.justPressedDir("right") ?  5 : 0;
+    if (dir === 0) return;
+    const next = Math.max(0, Math.min(100, parseInt(slider.value || "0", 10) + dir));
+    slider.value = String(next);
+    setMasterVolume(next / 100);
   }
 
   // --- Playing ---
@@ -1105,6 +1269,11 @@ export class Game {
     this.titleOverlay.classList.add("hidden");
     this.customizePanel.classList.add("hidden");
     this.customizeOpen = false;
+    // Detach menu nav for gameplay — buttons aren't on screen, no cursor
+    // should be tracking. Suppress activation cleanup to keep mash-Enter
+    // from leaking into shatter input on frame 0 of Launching.
+    this.menuNav.detach();
+    this.menuNavSuppressFrames = 4;
     this.centerMessage.style.opacity = "0";
     // Clear blur overlay and game-over content from previous game over
     this.gameOverOverlay.classList.remove("active");
@@ -2497,6 +2666,27 @@ export class Game {
       </div>
     `;
     this.centerRetry!.textContent = "PRESS SPACE OR CLICK TO RETRY";
+    // Make retry keyboard / gamepad / mouse activatable. The legacy
+    // "click anywhere to retry" path in updateGameOver still works for
+    // mouse, but a focused retry element gives keyboard / gamepad users
+    // a clear default activation target after the gameOverTimer cooldown.
+    this.centerRetry!.setAttribute("data-ui", "");
+    this.centerRetry!.style.cursor = "pointer";
+    this.centerRetry!.style.pointerEvents = "auto";
+    // Replace any prior listener by cloning + re-binding (innerHTML rewrites
+    // every game-over so the element identity is stable, but the content
+    // resets each time).
+    const newRetry = this.centerRetry!.cloneNode(true) as HTMLElement;
+    this.centerRetry!.replaceWith(newRetry);
+    this.centerRetry = newRetry;
+    this.centerRetry.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (this.gameOverTimer < 1.2) return;
+      this.player.group.visible = true;
+      this.centerMessage.style.opacity = "0";
+      this.gameOverTimer = 0;
+      this.startGame(this.isDailyMode);
+    });
     this.centerMessage.style.opacity = "1";
 
     // Tab switching
@@ -2593,6 +2783,13 @@ export class Game {
     this.announceBeatenGhosts();
     this.ghostManager.hideAll();
     this.uploadGhostIfQualified(grade.label);
+
+    // Wire keyboard / gamepad nav to the game-over panel. Suppress for a
+    // few frames so the death-trigger keypress (if any) doesn't instantly
+    // activate a tab, and so the gameOverTimer >= 1.2s gate stays the
+    // primary restart guard.
+    this.applyGameOverMenuScope();
+    this.menuNavSuppressFrames = 6;
   }
 
   /** Show "You beat X's ghost!" for each ghost the player outlasted this run. */
@@ -2612,7 +2809,7 @@ export class Game {
     const frames = this.ghostRecorder.getFrames();
     if (frames.length < 10) return; // too short to be useful
     if (this.score < this.ghostUploadThreshold) return;
-    const name = getPlayerName() || "ANON";
+    const name = getLocalUsername();
     submitGhost({
       name,
       score: this.score,
@@ -2640,12 +2837,10 @@ export class Game {
     const statusEl = document.getElementById("go-lb-status");
     if (statusEl) statusEl.innerHTML = '<span style="color:#445566">Saving...</span>';
 
-    // Name entry (persistent)
-    let playerName = getPlayerName();
-    if (!playerName) {
-      playerName = "PLAYER" + Math.floor(Math.random() * 9999).toString().padStart(4, "0");
-      setPlayerName(playerName);
-    }
+    // Name entry (persistent). Universal polish rule 2: no `PLAYER####`
+    // fallback — always go through the shared coolname identity, which
+    // self-seeds an `Adjective-Animal-NN` if no name was ever set.
+    const playerName = getLocalUsername();
 
     // Submit score + fetch leaderboard in parallel
     type LeaderboardEntry = Awaited<ReturnType<typeof fetchLeaderboard>>[number];
@@ -2718,13 +2913,16 @@ export class Game {
       lbContainer.innerHTML += html;
     }
 
-    // Wire up name input — save on change
+    // Wire up name input — save on input + change so the customize-screen
+    // input stays in sync (universal polish rule 7: live propagation).
     const nameInput = document.getElementById("lb-name-input") as HTMLInputElement;
     if (nameInput) {
-      nameInput.addEventListener("change", () => {
-        const newName = nameInput.value.trim().slice(0, 16) || playerName;
-        setPlayerName(newName);
-      });
+      const persist = () => {
+        const newName = nameInput.value.trim() || playerName;
+        setLocalUsername(newName);
+      };
+      nameInput.addEventListener("input", persist);
+      nameInput.addEventListener("change", persist);
       // Prevent space from restarting game while typing name
       nameInput.addEventListener("keydown", (e) => {
         e.stopPropagation();
@@ -2736,7 +2934,7 @@ export class Game {
 
   private gameOverTimer = 0;
 
-  private updateGameOver(dt: number) {
+  private updateGameOver(dt: number, menuConsumedActivate: boolean) {
     // Camera slowly drifts + continue shake
     this.camera.position.y += dt * 0.5;
     this.shake.apply(this.camera, dt);
@@ -2750,10 +2948,18 @@ export class Game {
     // Don't restart while player is typing in the leaderboard name input
     const isTypingName = document.activeElement?.id === "lb-name-input";
     // Require 1.2s cooldown before accepting restart — prevents accidental
-    // restarts when the player mashes space during a fast-twitch death
+    // restarts when the player mashes space during a fast-twitch death.
+    // If menu nav consumed the activate (e.g. tab switch), skip the
+    // restart this frame so a single Enter doesn't both switch tabs AND
+    // retry — same `menuNavSuppressFrames` insurance applies on next
+    // state entry too.
     const shouldRestart = this.demoMode
       ? this.gameOverTimer > 2
-      : this.gameOverTimer > 1.2 && !isTypingName && (this.input.justPressed("space") || this.input.justPressed("click"));
+      : this.gameOverTimer > 1.2
+        && !isTypingName
+        && !menuConsumedActivate
+        && this.menuNavSuppressFrames === 0
+        && (this.input.justPressed("space") || this.input.justPressed("click"));
 
     if (shouldRestart) {
       this.player.group.visible = true;

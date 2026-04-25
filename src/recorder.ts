@@ -43,7 +43,10 @@ export class GameRecorder {
     }
 
     if (!selectedMime) {
-      console.error("No supported video MIME type found");
+      // Non-actionable for end users — recording is an opt-in capture path
+      // (?demo=true&record=true). Silent debug log keeps the happy-path
+      // console clean per universal polish rule 9.
+      console.debug("[recorder] No supported video MIME type found");
       return;
     }
 

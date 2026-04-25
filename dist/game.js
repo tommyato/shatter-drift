@@ -29389,6 +29389,7 @@ var WebGLRenderer = class {
 };
 
 // src/input.ts
+var NAV_STICK_THRESHOLD = 0.6;
 var Input = class {
   keys = /* @__PURE__ */ new Set();
   prevKeys = /* @__PURE__ */ new Set();
@@ -29396,6 +29397,19 @@ var Input = class {
   mouseY = 0;
   canvasWidth = 1;
   canvasHeight = 1;
+  // Gamepad state — polled each frame in update(). Buttons are tracked
+  // separately from `keys` so they can be edge-detected without conflating
+  // with keyboard state.
+  gamepadA = false;
+  // button 0 — activate
+  prevGamepadA = false;
+  gamepadB = false;
+  // button 1 — cancel/back
+  prevGamepadB = false;
+  gamepadMovement = { x: 0, y: 0 };
+  // analog stick + d-pad, for gameplay
+  gamepadNav = { up: false, down: false, left: false, right: false };
+  prevGamepadNav = { up: false, down: false, left: false, right: false };
   /** Current mouse position in screen pixels */
   mousePos = { x: 0, y: 0 };
   /** Current mouse position in normalized device coordinates [-1, 1] */
@@ -29497,20 +29511,76 @@ var Input = class {
     this.mouseDelta.y = this.mouseY - this.prevMouseY;
     this.scrollDelta = this.scrollAccum;
     this.scrollAccum = 0;
+    this.pollGamepad();
+  }
+  pollGamepad() {
+    this.gamepadA = false;
+    this.gamepadB = false;
+    this.gamepadMovement.x = 0;
+    this.gamepadMovement.y = 0;
+    this.gamepadNav.up = false;
+    this.gamepadNav.down = false;
+    this.gamepadNav.left = false;
+    this.gamepadNav.right = false;
+    if (typeof navigator === "undefined" || !navigator.getGamepads) return;
+    const pads = navigator.getGamepads();
+    if (!pads) return;
+    let gp = null;
+    for (let i = 0; i < pads.length; i++) {
+      const p = pads[i];
+      if (p && p.connected) {
+        gp = p;
+        break;
+      }
+    }
+    if (!gp) return;
+    const ax = Math.abs(gp.axes[0] || 0) < 0.15 ? 0 : gp.axes[0] || 0;
+    const ay = Math.abs(gp.axes[1] || 0) < 0.15 ? 0 : gp.axes[1] || 0;
+    this.gamepadMovement.x = ax;
+    this.gamepadMovement.y = -ay;
+    const dpadUp = !!gp.buttons[12]?.pressed;
+    const dpadDown = !!gp.buttons[13]?.pressed;
+    const dpadLeft = !!gp.buttons[14]?.pressed;
+    const dpadRight = !!gp.buttons[15]?.pressed;
+    if (dpadUp) this.gamepadMovement.y += 1;
+    if (dpadDown) this.gamepadMovement.y -= 1;
+    if (dpadLeft) this.gamepadMovement.x -= 1;
+    if (dpadRight) this.gamepadMovement.x += 1;
+    this.gamepadNav.up = dpadUp || ay < -NAV_STICK_THRESHOLD;
+    this.gamepadNav.down = dpadDown || ay > NAV_STICK_THRESHOLD;
+    this.gamepadNav.left = dpadLeft || ax < -NAV_STICK_THRESHOLD;
+    this.gamepadNav.right = dpadRight || ax > NAV_STICK_THRESHOLD;
+    this.gamepadA = !!gp.buttons[0]?.pressed;
+    this.gamepadB = !!gp.buttons[1]?.pressed;
   }
   /** Call at the end of each frame */
   endFrame() {
     this.prevKeys = new Set(this.keys);
     this.prevMouseX = this.mouseX;
     this.prevMouseY = this.mouseY;
+    this.prevGamepadA = this.gamepadA;
+    this.prevGamepadB = this.gamepadB;
+    this.prevGamepadNav.up = this.gamepadNav.up;
+    this.prevGamepadNav.down = this.gamepadNav.down;
+    this.prevGamepadNav.left = this.gamepadNav.left;
+    this.prevGamepadNav.right = this.gamepadNav.right;
   }
-  /** Key is currently held down */
+  /** Key is currently held down. "space" includes Enter and gamepad-A. */
   isDown(key) {
-    return this.keys.has(key.toLowerCase());
+    const k = key.toLowerCase();
+    if (k === "space") {
+      return this.keys.has("space") || this.keys.has("enter") || this.gamepadA;
+    }
+    return this.keys.has(k);
   }
-  /** Key was pressed this frame (wasn't down last frame) */
+  /** Key was pressed this frame (wasn't down last frame). "space" aggregates Enter + gamepad-A. */
   justPressed(key) {
     const k = key.toLowerCase();
+    if (k === "space") {
+      const now = this.keys.has("space") || this.keys.has("enter") || this.gamepadA;
+      const prev = this.prevKeys.has("space") || this.prevKeys.has("enter") || this.prevGamepadA;
+      return now && !prev;
+    }
     return this.keys.has(k) && !this.prevKeys.has(k);
   }
   /** Key was released this frame (was down last frame, isn't now) */
@@ -29518,18 +29588,65 @@ var Input = class {
     const k = key.toLowerCase();
     return !this.keys.has(k) && this.prevKeys.has(k);
   }
+  /**
+   * Edge-detected directional press for menu navigation. Aggregates keyboard
+   * arrows / WASD with gamepad d-pad and left-stick threshold crossings.
+   * Used by MenuNavigation; deliberately separate from gameplay's
+   * `getMovement()` (which folds the stick in via gamepadMovement) so menu
+   * nav doesn't double-count stick deflection.
+   */
+  justPressedDir(direction) {
+    const kbdNow = this.keyboardDirDown(direction);
+    const kbdPrev = this.keyboardDirWasDown(direction);
+    const padNow = this.gamepadNav[direction];
+    const padPrev = this.prevGamepadNav[direction];
+    return kbdNow && !kbdPrev || padNow && !padPrev;
+  }
+  /**
+   * Edge-detected cancel/back. Aggregates Esc + gamepad B (button 1).
+   * Used by MenuNavigation to close modals.
+   */
+  justPressedCancel() {
+    const escNow = this.keys.has("escape");
+    const escPrev = this.prevKeys.has("escape");
+    return escNow && !escPrev || this.gamepadB && !this.prevGamepadB;
+  }
+  keyboardDirDown(direction) {
+    switch (direction) {
+      case "left":
+        return this.keys.has("a") || this.keys.has("arrowleft");
+      case "right":
+        return this.keys.has("d") || this.keys.has("arrowright");
+      case "up":
+        return this.keys.has("w") || this.keys.has("arrowup");
+      case "down":
+        return this.keys.has("s") || this.keys.has("arrowdown");
+    }
+  }
+  keyboardDirWasDown(direction) {
+    switch (direction) {
+      case "left":
+        return this.prevKeys.has("a") || this.prevKeys.has("arrowleft");
+      case "right":
+        return this.prevKeys.has("d") || this.prevKeys.has("arrowright");
+      case "up":
+        return this.prevKeys.has("w") || this.prevKeys.has("arrowup");
+      case "down":
+        return this.prevKeys.has("s") || this.prevKeys.has("arrowdown");
+    }
+  }
   /** Any of the given keys are held down */
   anyDown(...keys) {
     return keys.some((k) => this.isDown(k));
   }
-  /** Get a movement vector from WASD/arrow keys + touch drag. Returns {x, y} normalized. */
+  /** Get a movement vector from WASD/arrow keys + touch drag + gamepad. Returns {x, y} normalized. */
   getMovement() {
     let x = 0;
     let y = 0;
-    if (this.isDown("w") || this.isDown("arrowup")) y += 1;
-    if (this.isDown("s") || this.isDown("arrowdown")) y -= 1;
-    if (this.isDown("a") || this.isDown("arrowleft")) x -= 1;
-    if (this.isDown("d") || this.isDown("arrowright")) x += 1;
+    if (this.keys.has("w") || this.keys.has("arrowup")) y += 1;
+    if (this.keys.has("s") || this.keys.has("arrowdown")) y -= 1;
+    if (this.keys.has("a") || this.keys.has("arrowleft")) x -= 1;
+    if (this.keys.has("d") || this.keys.has("arrowright")) x += 1;
     const len = Math.sqrt(x * x + y * y);
     if (len > 0) {
       x /= len;
@@ -29538,7 +29655,12 @@ var Input = class {
     if (this.touching) {
       x = this.touchMoveX;
     }
-    return { x, y };
+    x += this.gamepadMovement.x;
+    y += this.gamepadMovement.y;
+    return {
+      x: Math.max(-1, Math.min(1, x)),
+      y: Math.max(-1, Math.min(1, y))
+    };
   }
 };
 
@@ -33934,7 +34056,7 @@ var GameRecorder = class {
       }
     }
     if (!selectedMime) {
-      console.error("No supported video MIME type found");
+      console.debug("[recorder] No supported video MIME type found");
       return;
     }
     this.mediaRecorder = new MediaRecorder(stream, {
@@ -37351,12 +37473,6 @@ var ContractHUD = class {
 
 // src/leaderboard.ts
 var API_URL = "https://api.tommyato.com";
-function getPlayerName() {
-  return localStorage.getItem("shatterDriftName") || "";
-}
-function setPlayerName(name) {
-  localStorage.setItem("shatterDriftName", name.slice(0, 16));
-}
 async function fetchLeaderboard(limit = 10, options) {
   try {
     let url;
@@ -37707,6 +37823,322 @@ function makeNameTexture(name, color) {
   const tex = new CanvasTexture(canvas);
   tex.needsUpdate = true;
   return tex;
+}
+
+// src/coolname.ts
+var ADJECTIVES = [
+  "Brave",
+  "Swift",
+  "Bold",
+  "Calm",
+  "Keen",
+  "Vast",
+  "Warm",
+  "Cool",
+  "Wise",
+  "Fair",
+  "Pure",
+  "Agile",
+  "Bright",
+  "Clear",
+  "Deep",
+  "Epic",
+  "Fierce",
+  "Grand",
+  "Hardy",
+  "Iron",
+  "Jade",
+  "Kind",
+  "Lean",
+  "Mighty",
+  "Noble",
+  "Onyx",
+  "Prime",
+  "Quick",
+  "Rapid",
+  "Sharp",
+  "True",
+  "Ultra",
+  "Vivid",
+  "Wild",
+  "Amber",
+  "Brisk",
+  "Crisp",
+  "Deft",
+  "Zesty",
+  "Lively"
+];
+var ANIMALS = [
+  "Otter",
+  "Crane",
+  "Lynx",
+  "Raven",
+  "Finch",
+  "Bison",
+  "Gecko",
+  "Ibis",
+  "Stoat",
+  "Robin",
+  "Okapi",
+  "Quail",
+  "Moose",
+  "Heron",
+  "Viper",
+  "Dingo",
+  "Egret",
+  "Lemur",
+  "Macaw",
+  "Panda",
+  "Tapir",
+  "Wombat",
+  "Coati",
+  "Duiker",
+  "Impala",
+  "Jackal",
+  "Marmot",
+  "Narwhal",
+  "Ocelot",
+  "Mink",
+  "Puffin",
+  "Ferret",
+  "Kestrel",
+  "Chinchilla",
+  "Capybara",
+  "Axolotl",
+  "Salamander",
+  "Tamarin",
+  "Caracal",
+  "Dunnock"
+];
+var STORAGE_KEY2 = "cc-username";
+function generateCoolName() {
+  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+  const num = String(10 + Math.floor(Math.random() * 90));
+  return `${adj}-${animal}-${num}`;
+}
+function getLocalUsername() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY2);
+    if (stored && stored.trim().length > 0) return stored;
+  } catch {
+  }
+  const name = generateCoolName();
+  try {
+    localStorage.setItem(STORAGE_KEY2, name);
+  } catch {
+  }
+  return name;
+}
+function setLocalUsername(name) {
+  let clean = name.trim().replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 24).trim();
+  if (!clean) clean = generateCoolName();
+  try {
+    localStorage.setItem(STORAGE_KEY2, clean);
+  } catch {
+  }
+}
+function migrateLegacyUsername() {
+  try {
+    const current = localStorage.getItem(STORAGE_KEY2);
+    if (current && current.trim().length > 0) return;
+    const legacy = localStorage.getItem("shatterDriftName");
+    if (legacy && legacy.trim().length > 0) {
+      localStorage.setItem(STORAGE_KEY2, legacy);
+    }
+  } catch {
+  }
+}
+
+// src/menu-navigation.ts
+var MENU_FOCUS_CLASS = "menu-focused";
+var MenuNavigation = class {
+  stack = [];
+  // Suppress activation for one frame after a scope is pushed, so the
+  // same A press that opened a modal doesn't immediately activate the
+  // close button inside it.
+  suppressActivateFrames = 0;
+  /**
+   * Replace the entire scope stack with a single new scope. Use this
+   * on entering a screen (title / game-over). The first visible item
+   * is auto-focused.
+   */
+  setScope(items, onCancel) {
+    this.clearAll();
+    if (items.length === 0) return;
+    this.stack.push({ items, index: 0, onCancel });
+    this.focusFirstVisible();
+  }
+  /**
+   * Push a nested scope (e.g. modal close button). Restores prior
+   * focus when popped.
+   */
+  pushScope(items, onCancel) {
+    if (items.length === 0) return;
+    this.removeFocusClass(this.top());
+    this.stack.push({ items, index: 0, onCancel });
+    this.focusFirstVisible();
+    this.suppressActivateFrames = 1;
+  }
+  /** Pop the topmost scope and restore visual focus on the parent. */
+  popScope() {
+    const popped = this.stack.pop();
+    if (popped) {
+      this.removeFocusClass(popped);
+    }
+    const parent = this.top();
+    if (parent) this.applyFocusClass(parent);
+  }
+  /** Detach entirely (game starts, no menus active). */
+  detach() {
+    this.clearAll();
+  }
+  /** Whether any scope is currently active. */
+  isActive() {
+    return this.stack.length > 0;
+  }
+  /**
+   * Read d-pad / arrow-key / A inputs and update focus + activate
+   * focused button. Call once per frame (after `input.update()` and
+   * before `input.endFrame()`).
+   *
+   * Returns true if the menu consumed the A press this frame, so the
+   * caller can skip any legacy "space → start game" shortcut and
+   * avoid double-firing.
+   */
+  update(input) {
+    const scope = this.top();
+    if (!scope) return false;
+    const visible = scope.items.filter(isInteractable);
+    if (visible.length === 0) return false;
+    const currentEl = scope.items[scope.index];
+    let visIdx = visible.indexOf(currentEl);
+    if (visIdx < 0) {
+      visIdx = 0;
+      scope.index = scope.items.indexOf(visible[0]);
+    }
+    const dirPressed = input.justPressedDir("up") ? "up" : input.justPressedDir("down") ? "down" : input.justPressedDir("left") ? "left" : input.justPressedDir("right") ? "right" : null;
+    if (dirPressed !== null) {
+      const next = findNeighbor(dirPressed, visible[visIdx], visible);
+      if (next !== null) {
+        scope.index = scope.items.indexOf(next);
+      }
+    }
+    this.applyFocusClass(scope);
+    if (input.justPressedCancel()) {
+      const cancel = scope.onCancel;
+      if (cancel) {
+        cancel();
+        return false;
+      }
+    }
+    if (this.suppressActivateFrames > 0) {
+      this.suppressActivateFrames -= 1;
+      return false;
+    }
+    if (input.justPressed("space")) {
+      const target = scope.items[scope.index];
+      if (target && isInteractable(target)) {
+        queueMicrotask(() => {
+          target.click();
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+  /** Currently focused element, if any. Useful for callers that need to
+   *  know what the user is on (e.g. range slider for left/right adjust). */
+  focusedElement() {
+    const scope = this.top();
+    if (!scope) return null;
+    return scope.items[scope.index] ?? null;
+  }
+  top() {
+    return this.stack.length > 0 ? this.stack[this.stack.length - 1] : void 0;
+  }
+  focusFirstVisible() {
+    const scope = this.top();
+    if (!scope) return;
+    const firstVisIdx = scope.items.findIndex(isInteractable);
+    scope.index = firstVisIdx >= 0 ? firstVisIdx : 0;
+    this.applyFocusClass(scope);
+  }
+  applyFocusClass(scope) {
+    for (let i = 0; i < scope.items.length; i++) {
+      const el = scope.items[i];
+      if (i === scope.index) {
+        el.classList.add(MENU_FOCUS_CLASS);
+      } else {
+        el.classList.remove(MENU_FOCUS_CLASS);
+      }
+    }
+  }
+  removeFocusClass(scope) {
+    if (!scope) return;
+    for (const el of scope.items) {
+      el.classList.remove(MENU_FOCUS_CLASS);
+    }
+  }
+  clearAll() {
+    while (this.stack.length > 0) {
+      this.removeFocusClass(this.stack.pop());
+    }
+  }
+};
+function isInteractable(el) {
+  if (!el || !el.isConnected) return false;
+  if (el.offsetParent === null && getComputedStyle(el).position !== "fixed") return false;
+  if (el.hasAttribute("disabled")) return false;
+  if (el.getAttribute("aria-disabled") === "true") return false;
+  if (el.classList.contains("hidden")) return false;
+  return true;
+}
+var PERP_MULT = 2;
+function findNeighbor(direction, currentEl, visible) {
+  const candidates = visible.filter((el) => el !== currentEl);
+  if (candidates.length === 0) return null;
+  const cur = currentEl.getBoundingClientRect();
+  const curCx = (cur.left + cur.right) / 2;
+  const curCy = (cur.top + cur.bottom) / 2;
+  const horizontal = direction === "right" || direction === "left";
+  const forward = direction === "right" || direction === "down";
+  const curPrimary = horizontal ? curCx : curCy;
+  const curPerp = horizontal ? curCy : curCx;
+  function scoreCandidate(el) {
+    const r = el.getBoundingClientRect();
+    const cx = (r.left + r.right) / 2;
+    const cy = (r.top + r.bottom) / 2;
+    const candidatePrimary = horizontal ? cx : cy;
+    const candidatePerp = horizontal ? cy : cx;
+    if (forward ? candidatePrimary <= curPrimary : candidatePrimary >= curPrimary) {
+      return null;
+    }
+    const primaryDist = Math.abs(candidatePrimary - curPrimary);
+    const perpOffset = Math.abs(candidatePerp - curPerp);
+    const aligned = horizontal ? r.top <= curCy && r.bottom >= curCy : r.left <= curCx && r.right >= curCx;
+    return { el, aligned, score: primaryDist + (aligned ? 0 : perpOffset * PERP_MULT) };
+  }
+  const scored = candidates.map(scoreCandidate).filter((s) => s !== null).sort((a, b) => {
+    if (a.aligned !== b.aligned) return a.aligned ? -1 : 1;
+    return a.score - b.score;
+  });
+  if (scored.length > 0) return scored[0].el;
+  const wrapped = candidates.map((el) => {
+    const r = el.getBoundingClientRect();
+    const cx = (r.left + r.right) / 2;
+    const cy = (r.top + r.bottom) / 2;
+    const candidatePrimary = horizontal ? cx : cy;
+    const candidatePerp = horizontal ? cy : cx;
+    return {
+      el,
+      extremeVal: forward ? candidatePrimary : -candidatePrimary,
+      perpOffset: Math.abs(candidatePerp - curPerp)
+    };
+  }).sort(
+    (a, b) => a.extremeVal !== b.extremeVal ? a.extremeVal - b.extremeVal : a.perpOffset - b.perpOffset
+  );
+  return wrapped[0]?.el ?? null;
 }
 
 // src/systems/gravity-flip-scheduler.ts
@@ -38090,11 +38522,19 @@ var Game = class {
   dailyTimerInterval = null;
   // Camera offset
   cameraOffset = new Vector3(0, 3, -6);
+  // Menu navigation (keyboard arrows / WASD / d-pad / left stick + Enter
+  // / Space / gamepad-A activation). Wired up per state in init/transitions.
+  menuNav = new MenuNavigation();
+  // Suppresses menu activation reads for N frames after a state change so a
+  // single Enter/Space/A press can't fire across two states (e.g. mash
+  // Enter on game-over → instant retry → instant pause).
+  menuNavSuppressFrames = 0;
   async start() {
     this.init();
     this.renderer.setAnimationLoop(() => this.loop());
   }
   init() {
+    migrateLegacyUsername();
     this.highScore = parseInt(localStorage.getItem("shatterDriftHighScore") || "0", 10);
     this.totalRuns = parseInt(localStorage.getItem("shatterDriftTotalRuns") || "0", 10);
     this.bestGrade = localStorage.getItem("shatterDriftBestGrade") || "";
@@ -38153,6 +38593,7 @@ var Game = class {
     ].join(";");
     document.body.appendChild(this.riftWarningEl);
     this.player = new Player();
+    this.player.group.visible = false;
     this.scene.add(this.player.group);
     this.biomes = new BiomeManager();
     this.world = new World(this.scene, this.biomes);
@@ -38243,7 +38684,68 @@ var Game = class {
       this.titleHighScore.textContent = statsText;
     }
     window.addEventListener("resize", () => this.onResize());
+    const playBtn = document.getElementById("play-btn");
+    if (playBtn) {
+      playBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.startGame(false);
+      });
+      playBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    }
+    this.applyTitleMenuScope();
     this.handlePortalArrival();
+  }
+  // -----------------------------------------------------------------
+  // Menu scope helpers — keep keyboard / gamepad nav focused on the
+  // currently-visible overlay. Called whenever a state transitions or
+  // a panel opens / closes.
+  // -----------------------------------------------------------------
+  applyTitleMenuScope() {
+    const items = [];
+    const playBtn = document.getElementById("play-btn");
+    const dailyBtn = document.getElementById("daily-btn");
+    const customizeBtn = document.getElementById("customize-btn");
+    if (playBtn) items.push(playBtn);
+    if (dailyBtn) items.push(dailyBtn);
+    if (customizeBtn) items.push(customizeBtn);
+    this.menuNav.setScope(items);
+  }
+  applyCustomizeMenuScope() {
+    const items = [];
+    const skinItems = document.querySelectorAll("#crystal-grid .cosmetic-item:not(.locked)");
+    const trailItems = document.querySelectorAll("#trail-grid .cosmetic-item:not(.locked)");
+    skinItems.forEach((el) => items.push(el));
+    trailItems.forEach((el) => items.push(el));
+    const back = document.getElementById("customize-back");
+    if (back) items.push(back);
+    this.menuNav.setScope(items, () => this.closeCustomize());
+  }
+  applyPauseMenuScope() {
+    const items = [];
+    const volume = document.getElementById("pause-volume");
+    const resume = document.getElementById("pause-resume");
+    const ghost = document.getElementById("pause-ghost-toggle");
+    if (resume) items.push(resume);
+    if (ghost) items.push(ghost);
+    if (volume) items.push(volume);
+    this.menuNav.setScope(items, () => this.resumeGame());
+  }
+  applyGameOverMenuScope() {
+    const items = [];
+    if (this.centerRetry) items.push(this.centerRetry);
+    const tabs = document.querySelectorAll(".go-tab");
+    tabs.forEach((el) => items.push(el));
+    const share = document.getElementById("share-x-btn");
+    if (share) items.push(share);
+    this.menuNav.setScope(items);
+  }
+  closeCustomize() {
+    if (!this.customizeOpen) return;
+    this.customizeOpen = false;
+    this.customizePanel.classList.add("hidden");
+    this.titleOverlay.classList.remove("hidden");
+    this.applyTitleMenuScope();
+    this.menuNavSuppressFrames = 2;
   }
   /** Fetch ghost recordings + upload threshold in parallel. Fire-and-forget. */
   async loadGhostsAsync() {
@@ -38311,10 +38813,14 @@ var Game = class {
   pauseGame() {
     this.state = 3 /* Paused */;
     this.pauseMenu.classList.remove("hidden");
+    this.applyPauseMenuScope();
+    this.menuNavSuppressFrames = 2;
   }
   resumeGame() {
     this.state = 2 /* Playing */;
     this.pauseMenu.classList.add("hidden");
+    this.menuNav.detach();
+    this.menuNavSuppressFrames = 2;
     this.clock.getDelta();
   }
   initCustomizePanel() {
@@ -38323,10 +38829,11 @@ var Game = class {
     const backBtn = document.getElementById("customize-back");
     const openBtn = document.getElementById("customize-btn");
     const nameInput = document.getElementById("customize-name-input");
-    nameInput.value = getPlayerName();
+    nameInput.value = getLocalUsername();
     nameInput.addEventListener("keydown", (e) => e.stopPropagation());
-    nameInput.addEventListener("change", () => setPlayerName(nameInput.value.trim()));
-    nameInput.addEventListener("blur", () => setPlayerName(nameInput.value.trim()));
+    nameInput.addEventListener("input", () => setLocalUsername(nameInput.value));
+    nameInput.addEventListener("change", () => setLocalUsername(nameInput.value));
+    nameInput.addEventListener("blur", () => setLocalUsername(nameInput.value));
     const unlockedRewards = this.challenges.getUnlockedRewards();
     const unlockedCrystals = /* @__PURE__ */ new Set(["default", ...unlockedRewards.filter((r) => r.type === "crystal").map((r) => r.value)]);
     const unlockedTrails = /* @__PURE__ */ new Set(["default", ...unlockedRewards.filter((r) => r.type === "trail").map((r) => r.value)]);
@@ -38377,14 +38884,14 @@ var Game = class {
       e.stopPropagation();
       this.customizeOpen = true;
       this.titleOverlay.classList.add("hidden");
-      nameInput.value = getPlayerName();
+      nameInput.value = getLocalUsername();
       this.customizePanel.classList.remove("hidden");
+      this.applyCustomizeMenuScope();
+      this.menuNavSuppressFrames = 2;
     });
     backBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      this.customizeOpen = false;
-      this.customizePanel.classList.add("hidden");
-      this.titleOverlay.classList.remove("hidden");
+      this.closeCustomize();
     });
     this.player.applySkin(this.unlocks.getSelectedCrystal());
   }
@@ -38477,9 +38984,17 @@ var Game = class {
       dt *= this.slowMoFactor;
     }
     this.input.update();
+    if (this.menuNavSuppressFrames > 0) this.menuNavSuppressFrames -= 1;
+    let menuConsumedActivate = false;
+    if (this.menuNavSuppressFrames === 0 && this.menuNav.isActive()) {
+      menuConsumedActivate = this.menuNav.update(this.input);
+    }
+    if (this.state === 3 /* Paused */) {
+      this.handlePauseMenuLeftRight();
+    }
     switch (this.state) {
       case 0 /* Title */:
-        this.updateTitle(dt);
+        this.updateTitle(dt, menuConsumedActivate);
         break;
       case 1 /* Launching */:
         this.updateLaunching(dt);
@@ -38490,7 +39005,7 @@ var Game = class {
       case 3 /* Paused */:
         break;
       case 4 /* GameOver */:
-        this.updateGameOver(dt);
+        this.updateGameOver(dt, menuConsumedActivate);
         break;
     }
     this.trail.update(dt);
@@ -38519,7 +39034,8 @@ var Game = class {
     this.input.endFrame();
   }
   // --- Title ---
-  updateTitle(dt) {
+  updateTitle(dt, menuConsumedActivate) {
+    this.player.group.visible = this.customizeOpen;
     this.player.group.position.set(0, -1.5, 0);
     this.player.crystalMesh.rotation.y += dt * 0.5;
     this.player.crystalMesh.rotation.x = Math.sin(performance.now() * 1e-3) * 0.3;
@@ -38530,9 +39046,23 @@ var Game = class {
     if (this.dailyChallengeQueued) {
       this.dailyChallengeQueued = false;
       this.startGame(true);
-    } else if (!this.customizeOpen && (this.input.justPressed("space") || this.input.justPressed("click"))) {
+      return;
+    }
+    if (!menuConsumedActivate && !this.customizeOpen && this.menuNavSuppressFrames === 0 && this.input.justPressed("click")) {
       this.startGame(false);
     }
+  }
+  /** Volume-slider tweak via gamepad d-pad / arrow keys when focused in pause. */
+  handlePauseMenuLeftRight() {
+    const focused = this.menuNav.focusedElement();
+    if (!focused) return;
+    if (focused.id !== "pause-volume") return;
+    const slider = focused;
+    const dir = this.input.justPressedDir("left") ? -5 : this.input.justPressedDir("right") ? 5 : 0;
+    if (dir === 0) return;
+    const next = Math.max(0, Math.min(100, parseInt(slider.value || "0", 10) + dir));
+    slider.value = String(next);
+    setMasterVolume(next / 100);
   }
   // --- Playing ---
   startGame(daily = false) {
@@ -38624,6 +39154,8 @@ var Game = class {
     this.titleOverlay.classList.add("hidden");
     this.customizePanel.classList.add("hidden");
     this.customizeOpen = false;
+    this.menuNav.detach();
+    this.menuNavSuppressFrames = 4;
     this.centerMessage.style.opacity = "0";
     this.gameOverOverlay.classList.remove("active");
     if (this.centerStats) this.centerStats.innerHTML = "";
@@ -39724,6 +40256,20 @@ var Game = class {
       </div>
     `;
     this.centerRetry.textContent = "PRESS SPACE OR CLICK TO RETRY";
+    this.centerRetry.setAttribute("data-ui", "");
+    this.centerRetry.style.cursor = "pointer";
+    this.centerRetry.style.pointerEvents = "auto";
+    const newRetry = this.centerRetry.cloneNode(true);
+    this.centerRetry.replaceWith(newRetry);
+    this.centerRetry = newRetry;
+    this.centerRetry.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (this.gameOverTimer < 1.2) return;
+      this.player.group.visible = true;
+      this.centerMessage.style.opacity = "0";
+      this.gameOverTimer = 0;
+      this.startGame(this.isDailyMode);
+    });
     this.centerMessage.style.opacity = "1";
     const tabBtns = document.querySelectorAll(".go-tab");
     tabBtns.forEach((btn) => {
@@ -39802,6 +40348,8 @@ var Game = class {
     this.announceBeatenGhosts();
     this.ghostManager.hideAll();
     this.uploadGhostIfQualified(grade.label);
+    this.applyGameOverMenuScope();
+    this.menuNavSuppressFrames = 6;
   }
   /** Show "You beat X's ghost!" for each ghost the player outlasted this run. */
   announceBeatenGhosts() {
@@ -39818,7 +40366,7 @@ var Game = class {
     const frames = this.ghostRecorder.getFrames();
     if (frames.length < 10) return;
     if (this.score < this.ghostUploadThreshold) return;
-    const name = getPlayerName() || "ANON";
+    const name = getLocalUsername();
     submitGhost({
       name,
       score: this.score,
@@ -39836,11 +40384,7 @@ var Game = class {
     const rankColor = isDaily ? "#ffcc00" : "#00ffcc";
     const statusEl = document.getElementById("go-lb-status");
     if (statusEl) statusEl.innerHTML = '<span style="color:#445566">Saving...</span>';
-    let playerName = getPlayerName();
-    if (!playerName) {
-      playerName = "PLAYER" + Math.floor(Math.random() * 9999).toString().padStart(4, "0");
-      setPlayerName(playerName);
-    }
+    const playerName = getLocalUsername();
     let submitResult = null;
     let topScores = [];
     try {
@@ -39898,10 +40442,12 @@ var Game = class {
     }
     const nameInput = document.getElementById("lb-name-input");
     if (nameInput) {
-      nameInput.addEventListener("change", () => {
-        const newName = nameInput.value.trim().slice(0, 16) || playerName;
-        setPlayerName(newName);
-      });
+      const persist = () => {
+        const newName = nameInput.value.trim() || playerName;
+        setLocalUsername(newName);
+      };
+      nameInput.addEventListener("input", persist);
+      nameInput.addEventListener("change", persist);
       nameInput.addEventListener("keydown", (e) => {
         e.stopPropagation();
       });
@@ -39909,14 +40455,14 @@ var Game = class {
   }
   // --- Game Over ---
   gameOverTimer = 0;
-  updateGameOver(dt) {
+  updateGameOver(dt, menuConsumedActivate) {
     this.camera.position.y += dt * 0.5;
     this.shake.apply(this.camera, dt);
     this.gameOverTimer += dt;
     const vigFade = Math.max(0, 0.8 - this.gameOverTimer * 0.3);
     this.vignette.setIntensity(vigFade);
     const isTypingName = document.activeElement?.id === "lb-name-input";
-    const shouldRestart = this.demoMode ? this.gameOverTimer > 2 : this.gameOverTimer > 1.2 && !isTypingName && (this.input.justPressed("space") || this.input.justPressed("click"));
+    const shouldRestart = this.demoMode ? this.gameOverTimer > 2 : this.gameOverTimer > 1.2 && !isTypingName && !menuConsumedActivate && this.menuNavSuppressFrames === 0 && (this.input.justPressed("space") || this.input.justPressed("click"));
     if (shouldRestart) {
       this.player.group.visible = true;
       this.centerMessage.style.opacity = "0";
@@ -40048,8 +40594,16 @@ var Game = class {
 };
 
 // src/main.ts
-var game = new Game();
-game.start();
+if (new URLSearchParams(window.location.search).get("_harness") === "1") {
+  const harnessUrl = new URL("harness.js", window.location.href).href;
+  const { createHarness } = await Function("u", "return import(u)")(harnessUrl);
+  const harness = createHarness();
+  window.__harness = harness;
+  window.__harnessReady = true;
+} else {
+  const game = new Game();
+  game.start();
+}
 /*! Bundled license information:
 
 three/build/three.core.js:
