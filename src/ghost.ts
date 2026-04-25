@@ -30,6 +30,8 @@ export interface GhostRecord {
   distance: number;
   grade: string;
   frames: GhostFrame[];
+  /** World seed the run was played on. Undefined for legacy records pre-seeding. */
+  seed?: number;
 }
 
 /** Records player state at a fixed interval. */
@@ -143,6 +145,11 @@ export class GhostManager {
 
   get ghostCount(): number {
     return this.ghosts.length;
+  }
+
+  /** The loaded ghost records — used by Game to build the ghost pool for a race. */
+  getRecords(): GhostRecord[] {
+    return this.ghosts.map(g => g.record);
   }
 
   /** Populate ghosts from fetched records. Call before gameplay starts. */

@@ -143,6 +143,8 @@ export async function submitGhost(entry: {
   distance: number;
   grade: string;
   frames: GhostFrame[];
+  /** World seed the run was played on — persisted so "Race This Ghost" can replay the same layout. */
+  seed?: number;
 }): Promise<string | null> {
   try {
     const res = await fetch(`${API_URL}/games/shatter-drift/ghosts`, {

@@ -414,6 +414,17 @@ export class Game {
   private ghostManager!: GhostManager;
   private ghostUploadThreshold = 0;
   private ghostToggle = true;
+  /** Seed used for the current/most-recent run. Captured at startGame(). */
+  private runSeed = 0;
+  /** Ghost records from the last successful fetchGhosts() — source of truth for race selection. */
+  private cachedGhosts: import('./ghost').GhostRecord[] = [];
+  /** Set before startGame() to race a specific ghost on its own seed. Cleared in startGame(). */
+  private pendingRaceSeed: number | null = null;
+  private pendingRaceGhostId: string | null = null;
+  /** Name of the ghost being raced this run — shown in the race chip HUD element. */
+  private racingGhostName: string | null = null;
+  /** HUD chip that shows "RACING: NAME" when chasing a specific ghost. */
+  private raceChipEl: HTMLElement | null = null;
 
   // Run contracts — three randomized goals per run, award score bonuses on completion
   private contracts: ContractInstance[] = [];
@@ -627,6 +638,32 @@ export class Game {
     // Cache daily banner
     this.dailyBanner = document.getElementById("daily-banner");
 
+    // Race chip — shows "RACING: GHOST-NAME" during a targeted ghost race.
+    // Created dynamically and appended to the HUD div so it hides/shows with it.
+    {
+      const chip = document.createElement("div");
+      chip.style.cssText = [
+        "position:absolute",
+        "top:12px",
+        "right:16px",
+        "font-family:'Orbitron',monospace",
+        "font-size:9px",
+        "font-weight:700",
+        "letter-spacing:2px",
+        "color:#00ffcc",
+        "background:rgba(0,255,204,0.08)",
+        "border:1px solid rgba(0,255,204,0.3)",
+        "border-radius:3px",
+        "padding:3px 10px",
+        "pointer-events:none",
+        "z-index:15",
+        "white-space:nowrap",
+        "display:none",
+      ].join(";");
+      this.hud.appendChild(chip);
+      this.raceChipEl = chip;
+    }
+
     // Pause menu
     this.initPauseMenu();
 
@@ -755,10 +792,22 @@ export class Game {
         fetchGhostUploadThreshold(),
       ]);
       this.ghostUploadThreshold = threshold;
+      this.cachedGhosts = ghosts; // keep for race selection and pool restoration between runs
       this.ghostManager.loadGhosts(ghosts);
       this.updateTitleGhostLine();
     } catch {
       // Silent — ghost racing is optional polish.
+    }
+  }
+
+  /** Show/hide the race chip based on whether a specific ghost was targeted this run. */
+  private updateRaceChip() {
+    if (!this.raceChipEl) return;
+    if (this.racingGhostName) {
+      this.raceChipEl.textContent = `👻 RACING: ${this.racingGhostName.toUpperCase()}`;
+      this.raceChipEl.style.display = "";
+    } else {
+      this.raceChipEl.style.display = "none";
     }
   }
 
@@ -1170,17 +1219,26 @@ export class Game {
       // are independent — time-based event triggers won't corrupt distance-based
       // obstacle layout when players have different frame rates.
       const baseSeed = parseInt(this.dailyDateKey, 10);
+      this.runSeed = baseSeed; // daily seed is deterministic (date-based)
       this.world.setRandom(seededRandom(baseSeed));
       this.powerups.setRandom(seededRandom(baseSeed + 1));
       this.speedGates.setRandom(seededRandom(baseSeed + 2));
       this.worldEvents.setRandom(seededRandom(baseSeed + 3));
       this.bossWaves.setRandom(seededRandom(baseSeed + 4));
     } else {
-      this.world.setRandom(Math.random);
-      this.powerups.setRandom(Math.random);
-      this.speedGates.setRandom(Math.random);
-      this.worldEvents.setRandom(Math.random);
-      this.bossWaves.setRandom(Math.random);
+      // Use the pending race seed if set (Race This Ghost), else generate a fresh one.
+      // Guard against seed=0 — mulberry32 produces a degenerate sequence from 0.
+      let seed = this.pendingRaceSeed;
+      if (seed === null) {
+        do { seed = Math.floor(Math.random() * 0xffffffff); } while (seed === 0);
+      }
+      this.runSeed = seed;
+      this.pendingRaceSeed = null;
+      this.world.setRandom(seededRandom(seed));
+      this.powerups.setRandom(seededRandom(seed + 1));
+      this.speedGates.setRandom(seededRandom(seed + 2));
+      this.worldEvents.setRandom(seededRandom(seed + 3));
+      this.bossWaves.setRandom(seededRandom(seed + 4));
     }
 
     // Capture current camera state for the launch transition
@@ -1288,7 +1346,20 @@ export class Game {
       }, 2000);
     }
 
-    // Ghost racing — reset playback clock and start recording this run
+    // Ghost racing — reload ghost pool, reset playback, start recording.
+    // If racing a specific ghost, filter the pool to that one ghost so only they appear;
+    // otherwise restore the full cached pool (handles returning from a race run).
+    if (this.pendingRaceGhostId !== null) {
+      const target = this.cachedGhosts.find(g => g.id === this.pendingRaceGhostId);
+      this.ghostManager.loadGhosts(target ? [target] : []);
+      this.racingGhostName = target?.name ?? null;
+      this.pendingRaceGhostId = null;
+    } else {
+      if (this.cachedGhosts.length > 0) {
+        this.ghostManager.loadGhosts(this.cachedGhosts);
+      }
+      this.racingGhostName = null;
+    }
     this.ghostManager.startRun();
     this.ghostRecorder.start();
   }
@@ -1363,6 +1434,7 @@ export class Game {
       // Reveal HUD
       this.hud.classList.remove("hidden");
       this.contractHUD.show();
+      this.updateRaceChip();
 
       // Daily banner
       if (this.dailyBanner) {
@@ -2816,6 +2888,7 @@ export class Game {
       distance: Math.floor(this.distance),
       grade: gradeLabel,
       frames,
+      seed: this.runSeed, // captured at run start — server persists so Race This Ghost can replay the same layout
     }).catch(() => { /* silent */ });
   }
 
@@ -2927,6 +3000,41 @@ export class Game {
       nameInput.addEventListener("keydown", (e) => {
         e.stopPropagation();
       });
+    }
+
+    // Ghost pool — RACE buttons for any seeded ghost records.
+    // Legacy ghosts without a seed are skipped (no fair race possible).
+    const seededGhosts = this.cachedGhosts.filter(g => typeof g.seed === "number");
+    if (seededGhosts.length > 0) {
+      let ghostHtml = `<div style="font-family:'Orbitron',monospace;font-size:10px;color:#334455;letter-spacing:3px;text-align:center;margin:16px 0 6px;border-top:1px solid #1a2a35;padding-top:12px">RACE A GHOST</div>`;
+      for (const ghost of seededGhosts) {
+        ghostHtml += `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(0,255,204,0.07)">
+            <span style="color:#aabbcc;font-size:10px;font-family:'Orbitron',monospace;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${ghost.name.slice(0, 16)}</span>
+            <span style="color:#445566;font-size:9px;margin:0 8px">${ghost.score.toLocaleString()}</span>
+            <button
+              class="race-ghost-btn"
+              data-ghost-id="${ghost.id}"
+              data-ghost-seed="${ghost.seed}"
+              data-ghost-name="${ghost.name.replace(/"/g, "&quot;")}"
+              style="font-family:'Orbitron',monospace;font-size:8px;color:#00ffcc;border:1px solid rgba(0,255,204,0.5);background:transparent;padding:2px 7px;cursor:pointer;letter-spacing:1px;border-radius:2px;flex-shrink:0"
+            >RACE</button>
+          </div>`;
+      }
+      lbContainer.insertAdjacentHTML("beforeend", ghostHtml);
+
+      // Event delegation — single listener handles all RACE buttons in this panel.
+      lbContainer.addEventListener("click", (e: Event) => {
+        const btn = (e.target as Element).closest(".race-ghost-btn") as HTMLElement | null;
+        if (!btn) return;
+        const ghostId = btn.dataset.ghostId;
+        const ghostSeed = parseInt(btn.dataset.ghostSeed ?? "0", 10);
+        const ghostName = btn.dataset.ghostName ?? "";
+        if (!ghostId || !ghostSeed) return;
+        this.pendingRaceGhostId = ghostId;
+        this.pendingRaceSeed = ghostSeed;
+        this.startGame(false);
+      }, { once: true }); // once: auto-removes after first RACE click (startGame re-renders)
     }
   }
 

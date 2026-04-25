@@ -37614,6 +37614,10 @@ var GhostManager = class {
   get ghostCount() {
     return this.ghosts.length;
   }
+  /** The loaded ghost records — used by Game to build the ghost pool for a race. */
+  getRecords() {
+    return this.ghosts.map((g) => g.record);
+  }
   /** Populate ghosts from fetched records. Call before gameplay starts. */
   loadGhosts(records) {
     this.clear();
@@ -38507,6 +38511,17 @@ var Game = class {
   ghostManager;
   ghostUploadThreshold = 0;
   ghostToggle = true;
+  /** Seed used for the current/most-recent run. Captured at startGame(). */
+  runSeed = 0;
+  /** Ghost records from the last successful fetchGhosts() — source of truth for race selection. */
+  cachedGhosts = [];
+  /** Set before startGame() to race a specific ghost on its own seed. Cleared in startGame(). */
+  pendingRaceSeed = null;
+  pendingRaceGhostId = null;
+  /** Name of the ghost being raced this run — shown in the race chip HUD element. */
+  racingGhostName = null;
+  /** HUD chip that shows "RACING: NAME" when chasing a specific ghost. */
+  raceChipEl = null;
   // Run contracts — three randomized goals per run, award score bonuses on completion
   contracts = [];
   contractHUD;
@@ -38664,6 +38679,29 @@ var Game = class {
     this.pauseMenu = document.getElementById("pause-menu");
     this.gameOverOverlay = document.getElementById("gameover-overlay");
     this.dailyBanner = document.getElementById("daily-banner");
+    {
+      const chip = document.createElement("div");
+      chip.style.cssText = [
+        "position:absolute",
+        "top:12px",
+        "right:16px",
+        "font-family:'Orbitron',monospace",
+        "font-size:9px",
+        "font-weight:700",
+        "letter-spacing:2px",
+        "color:#00ffcc",
+        "background:rgba(0,255,204,0.08)",
+        "border:1px solid rgba(0,255,204,0.3)",
+        "border-radius:3px",
+        "padding:3px 10px",
+        "pointer-events:none",
+        "z-index:15",
+        "white-space:nowrap",
+        "display:none"
+      ].join(";");
+      this.hud.appendChild(chip);
+      this.raceChipEl = chip;
+    }
     this.initPauseMenu();
     this.initCustomizePanel();
     this.initDailyButton();
@@ -38755,9 +38793,20 @@ var Game = class {
         fetchGhostUploadThreshold()
       ]);
       this.ghostUploadThreshold = threshold;
+      this.cachedGhosts = ghosts;
       this.ghostManager.loadGhosts(ghosts);
       this.updateTitleGhostLine();
     } catch {
+    }
+  }
+  /** Show/hide the race chip based on whether a specific ghost was targeted this run. */
+  updateRaceChip() {
+    if (!this.raceChipEl) return;
+    if (this.racingGhostName) {
+      this.raceChipEl.textContent = `\u{1F47B} RACING: ${this.racingGhostName.toUpperCase()}`;
+      this.raceChipEl.style.display = "";
+    } else {
+      this.raceChipEl.style.display = "none";
     }
   }
   /** Update the "Racing against N ghosts" line on the title screen. */
@@ -39070,17 +39119,26 @@ var Game = class {
     if (daily) {
       this.dailyDateKey = this.getDailyDateKey();
       const baseSeed = parseInt(this.dailyDateKey, 10);
+      this.runSeed = baseSeed;
       this.world.setRandom(seededRandom2(baseSeed));
       this.powerups.setRandom(seededRandom2(baseSeed + 1));
       this.speedGates.setRandom(seededRandom2(baseSeed + 2));
       this.worldEvents.setRandom(seededRandom2(baseSeed + 3));
       this.bossWaves.setRandom(seededRandom2(baseSeed + 4));
     } else {
-      this.world.setRandom(Math.random);
-      this.powerups.setRandom(Math.random);
-      this.speedGates.setRandom(Math.random);
-      this.worldEvents.setRandom(Math.random);
-      this.bossWaves.setRandom(Math.random);
+      let seed = this.pendingRaceSeed;
+      if (seed === null) {
+        do {
+          seed = Math.floor(Math.random() * 4294967295);
+        } while (seed === 0);
+      }
+      this.runSeed = seed;
+      this.pendingRaceSeed = null;
+      this.world.setRandom(seededRandom2(seed));
+      this.powerups.setRandom(seededRandom2(seed + 1));
+      this.speedGates.setRandom(seededRandom2(seed + 2));
+      this.worldEvents.setRandom(seededRandom2(seed + 3));
+      this.bossWaves.setRandom(seededRandom2(seed + 4));
     }
     this.launchStartCamPos.copy(this.camera.position);
     const camFwd = new Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
@@ -39165,6 +39223,17 @@ var Game = class {
         this.recorder?.start(this.renderer.domElement);
       }, 2e3);
     }
+    if (this.pendingRaceGhostId !== null) {
+      const target = this.cachedGhosts.find((g) => g.id === this.pendingRaceGhostId);
+      this.ghostManager.loadGhosts(target ? [target] : []);
+      this.racingGhostName = target?.name ?? null;
+      this.pendingRaceGhostId = null;
+    } else {
+      if (this.cachedGhosts.length > 0) {
+        this.ghostManager.loadGhosts(this.cachedGhosts);
+      }
+      this.racingGhostName = null;
+    }
     this.ghostManager.startRun();
     this.ghostRecorder.start();
   }
@@ -39211,6 +39280,7 @@ var Game = class {
       this.currentFOV = this.baseFOV;
       this.hud.classList.remove("hidden");
       this.contractHUD.show();
+      this.updateRaceChip();
       if (this.dailyBanner) {
         if (this.isDailyMode) {
           this.dailyBanner.textContent = `DAILY CHALLENGE \u2014 ${this.formatDailyDate(this.dailyDateKey)}`;
@@ -40372,7 +40442,9 @@ var Game = class {
       score: this.score,
       distance: Math.floor(this.distance),
       grade: gradeLabel,
-      frames
+      frames,
+      seed: this.runSeed
+      // captured at run start — server persists so Race This Ghost can replay the same layout
     }).catch(() => {
     });
   }
@@ -40451,6 +40523,36 @@ var Game = class {
       nameInput.addEventListener("keydown", (e) => {
         e.stopPropagation();
       });
+    }
+    const seededGhosts = this.cachedGhosts.filter((g) => typeof g.seed === "number");
+    if (seededGhosts.length > 0) {
+      let ghostHtml = `<div style="font-family:'Orbitron',monospace;font-size:10px;color:#334455;letter-spacing:3px;text-align:center;margin:16px 0 6px;border-top:1px solid #1a2a35;padding-top:12px">RACE A GHOST</div>`;
+      for (const ghost of seededGhosts) {
+        ghostHtml += `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(0,255,204,0.07)">
+            <span style="color:#aabbcc;font-size:10px;font-family:'Orbitron',monospace;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${ghost.name.slice(0, 16)}</span>
+            <span style="color:#445566;font-size:9px;margin:0 8px">${ghost.score.toLocaleString()}</span>
+            <button
+              class="race-ghost-btn"
+              data-ghost-id="${ghost.id}"
+              data-ghost-seed="${ghost.seed}"
+              data-ghost-name="${ghost.name.replace(/"/g, "&quot;")}"
+              style="font-family:'Orbitron',monospace;font-size:8px;color:#00ffcc;border:1px solid rgba(0,255,204,0.5);background:transparent;padding:2px 7px;cursor:pointer;letter-spacing:1px;border-radius:2px;flex-shrink:0"
+            >RACE</button>
+          </div>`;
+      }
+      lbContainer.insertAdjacentHTML("beforeend", ghostHtml);
+      lbContainer.addEventListener("click", (e) => {
+        const btn = e.target.closest(".race-ghost-btn");
+        if (!btn) return;
+        const ghostId = btn.dataset.ghostId;
+        const ghostSeed = parseInt(btn.dataset.ghostSeed ?? "0", 10);
+        const ghostName = btn.dataset.ghostName ?? "";
+        if (!ghostId || !ghostSeed) return;
+        this.pendingRaceGhostId = ghostId;
+        this.pendingRaceSeed = ghostSeed;
+        this.startGame(false);
+      }, { once: true });
     }
   }
   // --- Game Over ---
