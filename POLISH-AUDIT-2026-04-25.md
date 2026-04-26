@@ -8,7 +8,14 @@ Audited against `preferences/game-polish-universal.md` (10 rules). Source HEAD: 
   - Rule 5 — `src/game.ts:577` sets `this.player.group.visible = false` on init; `:1571` sets visible on gameplay start. Confirmed by host-Chrome screenshots.
   - Rule 2 — `grep -REn '"PLAYER"|"Player[0-9]"|"Anonymous"|"ANON"' src/` returns no matches outside `src/multiplayer.ts`. `getLocalUsername()` is wired through `game.ts:38, 963, 1028, 3209, 3241`.
   - Rule 9 — `grep -En 'console\.(log|warn|error|info)' src/main.ts src/recorder.ts` returns no matches.
-- **Rule 4 — DEFERRED** until SD PR #3 (back-port of `findNeighbor` from Clockwork Climb) merges. Touching `src/menu-navigation.ts` before that lands would force a rebase. Pick this back up post-merge.
+- **Rule 4 — RESOLVED** as of `2e0f410` (PR #5, "back-port categorical-alignment-first findNeighbor from CC"), which landed the `findNeighbor` primitive on top of the already-shipped `MenuNavigation` class from earlier polish work. Spot-checked on origin/main @ `0a25db2`:
+  - `MenuNavigation` registered on every menu surface: title (`game.ts:824`), customize (`game.ts:841`), multiplayer (`game.ts:852`), pause (`game.ts:866`), game-over (`game.ts:879`).
+  - Gamepad polled in `src/input.ts:225` (`navigator.getGamepads()`).
+  - **Live verification 2026-04-26 16:20Z** via host-Chrome agent-browser against `https://tommyato.com/games/shatter-drift/`:
+    - Default focus on `play-btn` (correct — primary action).
+    - Synthetic `ArrowDown` moves focus play-btn → daily-btn; `ArrowUp` returns to play-btn.
+    - Synthetic `Enter` on focused `play-btn` hides `#title-overlay` and starts the game.
+    - Title screenshot shows clean grid backdrop, no player crystal pre-start (Rule 5 visual confirm).
 
 A polish-bundle worker was dispatched on 2026-04-26 (`9e927ba7`) before this status check was done; it correctly identified that Rules 2/5/9 were already done and pushed only a verification markdown to `polish/sd-rule-5-2-9-bundle`. That branch was deleted; this audit doc is the canonical record. Lesson captured in `tommyato-knowledge/preferences/worker-dispatch-hygiene.md`.
 
@@ -32,13 +39,18 @@ A polish-bundle worker was dispatched on 2026-04-26 (`9e927ba7`) before this sta
 
 ## Rule 4: Keyboard AND gamepad navigation must work on every menu
 **Status:** FAIL
-**Evidence:** `grep -REn 'getGamepads|gamepadconnected|d-?pad|stickX|stickY|navIndex|focusedIndex' src/` produced no matches. The title screen only reacts to `space` or `click`, not focus-based navigation: `game.ts:978-995`. The title buttons are clickable divs, not keyboard-navigable controls: `index.html:674-687`. The pause and customize overlays also rely on click handlers only: `game.ts:673-718`, `game.ts:732-815`. Game-over tabs are clickable, but there is no selection model or gamepad path: `game.ts:2473-2516`.
-**Notes:** This needs a real menu focus model plus gamepad polling and activation support across title, pause, customize, and game-over surfaces.
+**Status (original audit):** FAIL
+**Status (2026-04-26 re-check):** PASS
+**Evidence (original):** `grep -REn 'getGamepads|gamepadconnected|d-?pad|stickX|stickY|navIndex|focusedIndex' src/` produced no matches. The title screen only reacts to `space` or `click`, not focus-based navigation.
+**Evidence (re-check on `0a25db2`):** Same grep now hits `src/input.ts:225` (`navigator.getGamepads()`) and `src/menu-navigation.ts` (`MenuNavigation` class, `MENU_FOCUS_CLASS`, scope stack with `setScope`/`pushScope`/`popScope`). `MenuNavigation.update(input)` runs once per frame from `Game.loop()` (`game.ts:1404`) and reads d-pad/left-stick/arrow-keys to move focus and `.click()` the focused element on A/Enter/Space. Live behavior verified 2026-04-26 16:20Z via host-Chrome (see Status block above).
+**Notes:** Originally deferred until PR #5 landed `findNeighbor`; that merged `2026-04-26` and the audit doc was lagging. Resolved.
 
 ## Rule 5: Title screens don't show gameplay actors before the run starts
-**Status:** FAIL
-**Evidence:** The player object is created during init and added to the scene before the game ever leaves the title state: `game.ts:517-519`, `game.ts:433-443`. The title update loop explicitly positions and animates the player crystal every frame on the title screen: `game.ts:978-982`. Ghosts are gated correctly until start, which makes the player render stand out as the only title-actor leak: `ghost.ts:157-160`, `ghost.ts:348-350`.
-**Notes:** The title scene needs to hide the player visual root until `GameState.Playing` begins.
+**Status (original audit):** FAIL
+**Status (2026-04-26 re-check):** PASS
+**Evidence (original):** The player object was created during init and added to the scene before the game left the title state. Title update loop animated the player crystal every frame on the title screen.
+**Evidence (re-check on `0a25db2`):** `src/game.ts:577` now sets `this.player.group.visible = false` during init; the visibility flip to `true` happens at `:1571` on gameplay start. Title screenshot at 2026-04-26 16:20Z (host-Chrome via agent-browser) shows clean grid backdrop only — no crystal floating pre-run.
+**Notes:** Resolved by `da442e2`.
 
 ## Rule 6: Death + revive doesn't loop
 **Status:** PASS
@@ -69,14 +81,21 @@ A polish-bundle worker was dispatched on 2026-04-26 (`9e927ba7`) before this sta
 
 ## Summary
 
-**P0 (ship-stoppers):**
-- Rule 4 - Every menu surface is still mouse-driven; there is no gamepad navigation path and no focus/selection model.
-- Rule 5 - The title screen renders the player crystal before gameplay starts.
+**Original audit (committed 2026-04-25):**
 
-**P1 (visible polish):**
-- Rule 2 - Username defaults are still per-game and literal (`PLAYER####`) instead of shared coolname-backed identity.
+| Rule | Original | Now |
+|---|---|---|
+| 1 — No native dialogs | PASS | PASS |
+| 2 — Coolname usernames | FAIL | ✅ PASS (`da442e2`) |
+| 3 — Fixed-size overlays | PASS | PASS |
+| 4 — KB+gamepad nav on every menu | FAIL | ✅ PASS (`2e0f410`, live-verified 2026-04-26) |
+| 5 — No actors on title | FAIL | ✅ PASS (`da442e2`, screenshot-verified) |
+| 6 — No revive loop | PASS | PASS |
+| 7 — Live state propagation | PASS | PASS |
+| 8 — No audio pops | PASS | PASS |
+| 9 — Console hygiene | FAIL | ✅ PASS (`da442e2`) |
+| 10 — Verify-on-target | N/A | N/A |
 
-**P2 (minor):**
-- Rule 9 - Ship code still emits console output in the harness and recorder paths.
+**All P0/P1/P2 items closed.** 9-of-9 testable rules pass on `origin/main @ 0a25db2`.
 
-**Overall:** This audit is narrow, not sprawling: the clean passes are the fixed-size overlays, revive behavior, live settings propagation, and audio smoothing. The real problems cluster in the entry/title/identity layer, which is the same kind of high-signal surface that failed the Gravity Dash audit before its fixes landed. One fix worker should be able to handle the UI cluster in `game.ts` and `index.html` in a single session; if the shared coolname helper needs to be normalized across titles, that part may split into a small follow-up.
+**Lesson banked twice:** the audit doc was committed 2026-04-25 03:43 PM EDT, but the underlying source moved fast — Rules 2/5/9 were fixed the same day in `da442e2`, and Rule 4 fell out as a free pass when PR #5 (`findNeighbor` back-port) merged 2026-04-26. By the time anyone read the audit's per-rule sections in isolation, every "FAIL" had already been resolved. Process fix at `tommyato-knowledge/preferences/worker-dispatch-hygiene.md` (audit-staleness spot-check before dispatching off audit doc >24h old).
