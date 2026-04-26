@@ -1,6 +1,6 @@
 import process from "node:process";
-import { LockstepRunner } from "../dist/lockstep-runner.mjs";
-import { ShatterDriftSimulation } from "../dist/simulation.mjs";
+import { LockstepRunner } from "../../sim/dist/lockstep-runner.mjs";
+import { ShatterDriftSimulation } from "../../sim/dist/simulation.mjs";
 
 const INPUT_DELAY_TICKS = 3;
 const START_TICK = 6;

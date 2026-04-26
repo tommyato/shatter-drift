@@ -49,15 +49,15 @@ import {
   type RemotePlayer,
 } from "./multiplayer";
 import { MULTIPLAYER_ENABLED, MULTIPLAYER_HASH_DEBUG, MULTIPLAYER_INPUT_DELAY_TICKS } from "./config";
-import { LockstepRunner, type LockstepTickResult } from "./lockstep-runner";
-import { ShatterDriftSimulation } from "./simulation";
-import type { AuthoritativeStateSnapshot, MultiplayerConfig } from "./types";
+import { LockstepRunner, type LockstepTickResult } from "@sd/sim";
+import { ShatterDriftSimulation } from "@sd/sim";
+import type { AuthoritativeStateSnapshot, MultiplayerConfig } from "@sd/sim";
 import {
   createRiftFlipState,
   updateRiftFlip,
   RIFT_FLIP_ACTIVE_DURATION,
   type RiftFlipState,
-} from "./systems/gravity-flip-scheduler";
+} from "@sd/sim";
 import {
   BOOST_COOLDOWN,
   BOOST_DURATION,
@@ -78,7 +78,7 @@ import {
   PHASE_RECHARGE_RATE,
   SPEED_MOD_LERP_TIME,
   computeSpeed,
-} from "./constants";
+} from "@sd/sim";
 
 /** Speed lines overlay — CSS radial gradient that fades in at high speed */
 class SpeedLines {

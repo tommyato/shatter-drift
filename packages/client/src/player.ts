@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { PLAYER_MOVE_SPEED, PLAYABLE_HALF_WIDTH } from "./constants";
+import { PLAYER_MOVE_SPEED, PLAYABLE_HALF_WIDTH } from "@sd/sim";
 import type { CrystalSkin } from "./unlocks";
 
 const FRAGMENT_COUNT = 20; // icosahedron faces

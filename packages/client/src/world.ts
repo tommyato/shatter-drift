@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { BiomeManager } from "./biomes";
-import type { GameSnapshot, ObstacleData, OrbData } from "./types";
+import type { GameSnapshot, ObstacleData, OrbData } from "@sd/sim";
 import {
   DESPAWN_DISTANCE,
   INITIAL_OBSTACLE_Z,
@@ -9,7 +9,7 @@ import {
   PLAYABLE_HALF_WIDTH,
   SPAWN_DISTANCE,
   WALL_DISTANCE,
-} from "./constants";
+} from "@sd/sim";
 import { PLASMA_OBSTACLE_FRAGMENT, PLASMA_VERTEX } from "./shaders";
 import { VoronoiShatter } from "./voronoi-shatter";
 
@@ -61,9 +61,9 @@ export interface VibeversePortal {
 
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 /** Distance from center to side walls — player bounds derive from this */
-export { WALL_DISTANCE } from "./constants";
+export { WALL_DISTANCE } from "@sd/sim";
 /** Actual playable half-width accounting for camera parallax */
-export { PLAYABLE_HALF_WIDTH } from "./constants";
+export { PLAYABLE_HALF_WIDTH } from "@sd/sim";
 const PORTAL_INTERVAL = 300; // meters between portal appearances
 
 const GRID_FLOOR_VERTEX = /* glsl */ `
