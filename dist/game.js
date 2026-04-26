@@ -52893,7 +52893,7 @@ var LobbyClient = class {
   app = createFirebaseApp();
   db = getFirestore(this.app);
   peerId = createPeerId();
-  buildHash = "2e0f410";
+  buildHash = "a1454ca";
   playerName;
   lobbyCode = null;
   hostPeerId = null;
