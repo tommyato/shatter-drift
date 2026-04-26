@@ -1638,6 +1638,10 @@ export class Game {
     this.world.setRenderMode("sp");
     this.biomes.reset();
     this.applyBiomeColors();
+    // BUG A: restore the unlocked-crystal skin so the local avatar is no
+    // longer wearing the MP slot color when the title preview / next solo
+    // run renders.
+    this.player.applySkin(this.unlocks.getSelectedCrystal());
     this.player.group.visible = this.customizeOpen;
     this.player.shattered = false;
     this.player.group.position.set(0, 0, 0);
@@ -1732,6 +1736,16 @@ export class Game {
     this.boostCooldown = 0;
     this.brakeCooldown = 0;
     this.player.applySkin(this.unlocks.getSelectedCrystal());
+    // BUG A: in MP, override the local avatar's body/emissive/glow color with
+    // the server-assigned slot color so each player is visually distinct.
+    // Slot 0 = cyan, slot 1 = pink, slot 2 = yellow, slot 3 = green
+    // (palette in `multiplayer.ts:PLAYER_COLOR_PALETTE`, mirrored on the
+    // server in `MP_COLOR_PALETTE`). Solo color is restored in
+    // `transitionToIdle` via the next `applySkin` call.
+    const localSlot = config.players.find((p) => p.playerIndex === config.localPlayerIndex);
+    if (localSlot) {
+      this.player.setSlotColor(localSlot.color);
+    }
     this.player.group.visible = true;
     this.player.group.position.set(0, 0, 0);
     this.player.shattered = false;

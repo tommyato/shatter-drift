@@ -17,6 +17,8 @@ import { createSimulationWorld } from '@sd/sim'
 import { createAgentInput } from '@sd/sim/input/agent-input'
 import { createPlayerMovementSystem } from '@sd/sim/systems/player-movement-system'
 import { createPlayerCollisionSystem } from '@sd/sim/systems/player-collision-system'
+import { createWorldScrollSystem } from '@sd/sim/systems/world-scroll-system'
+import { createSpeedModSystem } from '@sd/sim/systems/speed-mod-system'
 import type {
 	MatchPlayerInfo,
 	SimulationInput,
@@ -104,6 +106,8 @@ export class ShatterDriftRoom extends Room<MatchState> {
 	private world!: SimulationWorld
 	private playerMovementSystem!: (dt: number) => void
 	private playerCollisionSystem!: (dt: number) => void
+	private worldScrollSystem!: (dt: number) => void
+	private speedModSystem!: (dt: number) => void
 	private inputs: SimulationInput[] = []
 	private serverPlayers = new Map<string, ServerPlayer>()
 	private freeSlots: number[] = []
@@ -136,6 +140,8 @@ export class ShatterDriftRoom extends Room<MatchState> {
 
 		this.playerMovementSystem = createPlayerMovementSystem(this.world)
 		this.playerCollisionSystem = createPlayerCollisionSystem(this.world)
+		this.worldScrollSystem = createWorldScrollSystem(this.world)
+		this.speedModSystem = createSpeedModSystem(this.world)
 
 		this.freeSlots = Array.from({ length: MAX_PLAYERS }, (_, i) => i)
 		this.freeColors = MP_COLOR_PALETTE.slice() as unknown as number[]
@@ -293,8 +299,16 @@ export class ShatterDriftRoom extends Room<MatchState> {
 			}
 		}
 
-		// Advance only the player-authoritative systems. Other systems (world
-		// scroll, obstacle spawn, etc.) stay client-side and agree by seed.
+		// Advance the player-authoritative systems. Order matches the client
+		// runtime (`packages/sim/src/runtime.ts`):
+		//   speedMod → worldScroll → playerMovement → playerCollision
+		// Without `worldScrollSystem` the server's `state.players[i].z` stays
+		// at 0 forever — the previous build had this bug, which made every
+		// remote player render stuck at the world origin while the local
+		// player's z grew via local-only prediction. Obstacle spawning,
+		// orbs, and shatter logic still stay client-side and agree by seed.
+		this.speedModSystem(dt)
+		this.worldScrollSystem(dt)
 		this.playerMovementSystem(dt)
 		this.playerCollisionSystem(dt)
 

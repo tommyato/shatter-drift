@@ -235,6 +235,20 @@ export class Player {
     (this.glowRing.material as THREE.MeshBasicMaterial).color.setHex(skin.emissiveColor);
   }
 
+  /**
+   * Override the body / emissive / glow-ring color with the player's
+   * multiplayer slot color (cyan / pink / yellow / green per slot index).
+   * Call AFTER `applySkin` — slot color wins over the unlocked-crystal
+   * skin so each player is visually distinct in MP. Restored to skin
+   * colors on the next `applySkin` call.
+   */
+  setSlotColor(color: number) {
+    const mat = this.crystalMesh.material as THREE.MeshStandardMaterial;
+    mat.color.setHex(color);
+    mat.emissive.setHex(color);
+    (this.glowRing.material as THREE.MeshBasicMaterial).color.setHex(color);
+  }
+
   /** Get collision radius (smaller when shattered = more forgiving) */
   getCollisionRadius(): number {
     return this.shattered ? 0.1 : 0.25;
