@@ -24,6 +24,10 @@ export class ShatterDriftSimulation {
 		}
 	}
 
+	/**
+	 * Singleplayer-style step: applies `action` to the local player and advances one tick.
+	 * For multiplayer, use `setAction(playerIndex, action)` for each peer's frame, then `tick()`.
+	 */
 	step(action: number, dt?: number): { state: GameSnapshot; events: GameEvent[] } {
 		const stepDt =
 			this.config.fixedDt ?? (Number.isFinite(dt) ? Number(dt) : DEFAULT_FIXED_DT)
@@ -41,6 +45,25 @@ export class ShatterDriftSimulation {
 		}
 	}
 
+	/** Set a player's input. Default targets the local player. */
+	setAction(action: number, playerIndex?: number): void {
+		this.runtime.setAction(action, playerIndex)
+	}
+
+	/** Advance one tick using whatever inputs were last set per player. Used by the lockstep runner. */
+	tick(dt?: number): { state: GameSnapshot; events: GameEvent[] } {
+		const stepDt =
+			this.config.fixedDt ?? (Number.isFinite(dt) ? Number(dt) : DEFAULT_FIXED_DT)
+		if (stepDt <= 0) {
+			return { state: this.runtime.getState(), events: [] }
+		}
+		this.runtime.update(stepDt)
+		return {
+			state: this.runtime.getState(),
+			events: this.runtime.drainEvents(),
+		}
+	}
+
 	getObservation(): Float64Array {
 		return this.runtime.getObservation()
 	}
@@ -49,4 +72,3 @@ export class ShatterDriftSimulation {
 		return this.runtime.getState()
 	}
 }
-

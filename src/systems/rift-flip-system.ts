@@ -8,19 +8,24 @@ import { updateRiftFlip } from './gravity-flip-scheduler'
  * live game listens for these to drive the camera inversion + HUD warning.
  *
  * Never fires outside biome 4 (Cosmic Rift, ≥1800m). Never starts a warning
- * while the player is mid-phase (would feel like a cheap shot).
+ * while ANY player is mid-phase (would feel like a cheap shot for the live one).
+ *
+ * The anchor used for biome and distance is the fastest live player — that's
+ * who's about to enter Cosmic Rift first.
  */
 export function createRiftFlipSystem(world: SimulationWorld) {
 	return (dt: number) => {
-		const biome = biomeFromDistance(world.state.playerZ)
-		// Suppress new warnings while mid-phase. (An already-active flip still
-		// completes normally; we only gate the warning→active transition.)
-		const canTrigger = !world.state.shattered
+		const anchor = world.anchorZ()
+		const biome = biomeFromDistance(anchor)
+		// Suppress new warnings while any player is mid-phase. Already-active
+		// flips finish normally — we only gate the warning→active transition.
+		const anyPhasing = world.state.players.some((p) => p.alive && p.shattered)
+		const canTrigger = !anyPhasing
 
 		const events = updateRiftFlip(
 			world.state.riftFlip,
 			dt,
-			world.state.playerZ,
+			anchor,
 			biome,
 			canTrigger,
 			world.random,

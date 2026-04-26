@@ -12,12 +12,14 @@ import {
 	RandomToken,
 	RiftFlipSystemToken,
 	ShatterSystemToken,
+	SimulationConfigToken,
 	SimulationInputToken,
+	SimulationInputsToken,
 	SimulationWorldToken,
 	SpeedModSystemToken,
 	WorldScrollSystemToken,
 } from './tokens'
-import type { GameEvent, GameSnapshot, SimulationConfig } from './types'
+import type { GameEvent, GameSnapshot, SimulationConfig, SimulationInput } from './types'
 import { createBossAnimationSystem } from './systems/boss-animation-system'
 import { createCollisionSystem } from './systems/collision-system'
 import { createObstacleDespawnSystem } from './systems/obstacle-despawn-system'
@@ -33,7 +35,8 @@ export interface SimulationRuntime {
 	container: Container
 	reset(): void
 	update(dt: number): void
-	setAction(action: number): void
+	/** Set the action for a specific player. Defaults to local player. */
+	setAction(action: number, playerIndex?: number): void
 	getState(): GameSnapshot
 	getObservation(): Float64Array
 	drainEvents(): GameEvent[]
@@ -41,17 +44,23 @@ export interface SimulationRuntime {
 
 export function createRuntime(config: SimulationConfig = {}): SimulationRuntime {
 	const container = createContainer()
+	const playerCount = Math.max(1, config.playerCount ?? 1)
+	const localPlayerIndex = Math.max(0, Math.min(playerCount - 1, config.localPlayerIndex ?? 0))
 	const random =
 		Number.isFinite(config.seed) && config.seed !== undefined
 			? mulberry32(Number(config.seed))
 			: getSystemRandom()
 
+	const inputs: SimulationInput[] = Array.from({ length: playerCount }, () => createAgentInput())
+
 	container.bind(RandomToken).toValue(random)
-	container.bind(SimulationInputToken).toFactory(createAgentInput).asSingleton()
+	container.bind(SimulationConfigToken).toValue(config)
+	container.bind(SimulationInputsToken).toValue(inputs)
+	container.bind(SimulationInputToken).toValue(inputs[localPlayerIndex]!)
 	container
 		.bind(SimulationWorldToken)
 		.toFactory(createSimulationWorld)
-		.withDeps(SimulationInputToken, RandomToken)
+		.withDeps(SimulationInputsToken, RandomToken, SimulationConfigToken)
 		.asSingleton()
 
 	container
@@ -116,7 +125,6 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 	const obstacleDespawnSystem = container.get(ObstacleDespawnSystemToken)
 	const bossAnimationSystem = container.get(BossAnimationSystemToken)
 	const riftFlipSystem = container.get(RiftFlipSystemToken)
-	const input = container.get(SimulationInputToken)
 
 	return {
 		container,
@@ -135,8 +143,10 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 			obstacleDespawnSystem(dt)
 			riftFlipSystem(dt)
 		},
-		setAction(action: number) {
-			input.setAction(action)
+		setAction(action: number, playerIndex?: number) {
+			const idx = playerIndex ?? localPlayerIndex
+			const input = inputs[idx]
+			if (input) input.setAction(action)
 		},
 		getState() {
 			return world.getState()
@@ -149,4 +159,3 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 		},
 	}
 }
-

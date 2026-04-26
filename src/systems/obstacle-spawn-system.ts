@@ -150,7 +150,7 @@ function materializeSpec(world: SimulationWorld, z: number, spec: ObstacleSpec):
 }
 
 function getObstacleSpacing(world: SimulationWorld): number {
-	const distance = world.state.playerZ
+	const distance = world.anchorZ()
 	if (distance < 300) {
 		return 18 + world.random() * 6
 	}
@@ -283,7 +283,7 @@ function spawnOrbCluster(world: SimulationWorld, z: number): void {
 function emitPattern(world: SimulationWorld): number {
 	const startZ = world.state.nextObstacleZ
 	const ctx: PatternCtx = {
-		playerZ: world.state.playerZ,
+		playerZ: world.anchorZ(),
 		biome: biomeFromDistance(startZ),
 		difficultyT: clamp(startZ / 2000, 0, 1),
 	}
@@ -315,18 +315,19 @@ export function createObstacleSpawnSystem(world: SimulationWorld) {
 			world.state.nextOrbZ = INITIAL_ORB_Z
 		}
 
-		while (world.state.nextObstacleZ < world.state.playerZ + SPAWN_DISTANCE) {
+		const anchor = world.anchorZ()
+		while (world.state.nextObstacleZ < anchor + SPAWN_DISTANCE) {
 			const advance = emitPattern(world)
 			world.state.nextObstacleZ += advance
 		}
 
-		while (world.state.nextOrbZ < world.state.playerZ + SPAWN_DISTANCE) {
+		while (world.state.nextOrbZ < anchor + SPAWN_DISTANCE) {
 			spawnOrbCluster(world, world.state.nextOrbZ)
 			world.state.nextOrbZ += ORB_SPACING + world.random() * 5
 		}
 
 		// Boss wave spawning — additive on top of regular obstacles
-		while (world.state.nextBossZ < world.state.playerZ + SPAWN_DISTANCE) {
+		while (world.state.nextBossZ < anchor + SPAWN_DISTANCE) {
 			spawnBossWave(world, world.state.nextBossZ)
 			world.state.nextBossZ += BOSS_WAVE_INTERVAL
 			world.state.bossCount += 1
