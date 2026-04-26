@@ -364,6 +364,120 @@ export class DebrisBurst {
   }
 }
 
+// --- Player-vs-player bump burst ---
+
+const BUMP_PARTICLE_COUNT = 24;
+
+interface BumpParticle {
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  life: number;
+  color: THREE.Color;
+}
+
+/**
+ * Small particle burst at the contact point when two players collide.
+ * Uses two colors (one per player) mixed together. Points-based, lightweight.
+ */
+export class BumpEffect {
+  private geometry: THREE.BufferGeometry;
+  private material: THREE.PointsMaterial;
+  private points: THREE.Points;
+  private particles: BumpParticle[] = [];
+  private positions: Float32Array;
+  private colors: Float32Array;
+
+  constructor(scene: THREE.Scene) {
+    this.positions = new Float32Array(BUMP_PARTICLE_COUNT * 3);
+    this.colors = new Float32Array(BUMP_PARTICLE_COUNT * 3);
+
+    this.geometry = new THREE.BufferGeometry();
+    this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+    this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+
+    this.material = new THREE.PointsMaterial({
+      size: 0.2,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+
+    this.points = new THREE.Points(this.geometry, this.material);
+    this.points.frustumCulled = false;
+    scene.add(this.points);
+  }
+
+  /** Spawn burst at contact point, blending colorA and colorB per particle. */
+  trigger(position: THREE.Vector3, colorA: number, colorB: number) {
+    const colA = new THREE.Color(colorA);
+    const colB = new THREE.Color(colorB);
+
+    for (let i = 0; i < BUMP_PARTICLE_COUNT; i++) {
+      const t = Math.random();
+      const blended = colA.clone().lerp(colB, t);
+
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.random() * Math.PI;
+      const speed = 2 + Math.random() * 6;
+      const vel = new THREE.Vector3(
+        Math.sin(phi) * Math.cos(theta),
+        Math.abs(Math.sin(phi) * Math.sin(theta)) + 0.2, // bias upward
+        Math.cos(phi),
+      ).multiplyScalar(speed);
+
+      this.particles.push({
+        position: position.clone(),
+        velocity: vel,
+        life: 0.25 + Math.random() * 0.35,
+        color: blended,
+      });
+    }
+  }
+
+  update(dt: number) {
+    const posAttr = this.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const colAttr = this.geometry.getAttribute('color') as THREE.BufferAttribute;
+
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.life -= dt;
+      p.position.addScaledVector(p.velocity, dt);
+      p.velocity.y -= dt * 6; // gravity
+      p.velocity.multiplyScalar(1 - dt * 4); // drag
+      if (p.life <= 0) {
+        this.particles.splice(i, 1);
+      }
+    }
+
+    for (let i = 0; i < BUMP_PARTICLE_COUNT; i++) {
+      if (i < this.particles.length) {
+        const p = this.particles[i];
+        this.positions[i * 3] = p.position.x;
+        this.positions[i * 3 + 1] = p.position.y;
+        this.positions[i * 3 + 2] = p.position.z;
+        this.colors[i * 3] = p.color.r;
+        this.colors[i * 3 + 1] = p.color.g;
+        this.colors[i * 3 + 2] = p.color.b;
+      } else {
+        this.positions[i * 3 + 1] = -1000; // hide unused
+      }
+    }
+    posAttr.needsUpdate = true;
+    colAttr.needsUpdate = true;
+
+    // Fade out as particles die
+    this.material.opacity = this.particles.length > 0 ? 0.9 : 0;
+  }
+
+  dispose() {
+    this.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
 // --- Orb collect flash ---
 
 export class CollectFlash {

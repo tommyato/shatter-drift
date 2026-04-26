@@ -3,7 +3,7 @@ phase: 3
 parent: multiplayer-survival
 title: Sphere-bump player-vs-player collision
 created: 2026-04-25
-status: planned
+status: implemented
 ---
 
 # Phase 3 — Sphere-Bump Player Collision
@@ -19,11 +19,11 @@ Players can ram each other. Two crystals overlapping → momentum exchange (impu
 
 ## Sprints
 
-- [ ] **Sprint 3.1 — `PlayerCollisionSystem`.** New ECS system, runs after `PlayerMovementSystem` + `SpeedModSystem`, before `CollisionSystem` (obstacles). For every pair (i, j) where both alive: check distance(players[i], players[j]) < `2 * PLAYER_RADIUS`. If overlap, compute impulse and apply.
-- [ ] **Sprint 3.2 — Impulse model.** Relative velocity along the contact normal (mostly lateral X for SD's geometry, but include z for boost-from-behind ram). Elastic-ish: each player gets `0.6 *` the relative velocity component as kick. Cap kick at `MAX_BUMP_KICK = 8 m/s` to prevent yeet-to-the-moon edge cases. Separate overlapping spheres by half-overlap each.
-- [ ] **Sprint 3.3 — Visual feedback.** Spawn small particle burst at the contact point, both players' colors mixed. Brief screen-shake for the local player if they were involved. Audio: thud + glass clink — different from obstacle hit.
-- [ ] **Sprint 3.4 — Rammer-credit tracking.** `PlayerState.lastRammedBy: number | null` set when player B's bump kicks player A. Cleared after 2s. If A dies within that window with `lastRammedBy === B`, credit the kill to B (used in Phase 4 results screen).
-- [ ] **Sprint 3.5 — Boost+bump synergy.** When a player boosts, increase their effective bump mass — they get knocked back less, the rammed player gets knocked back more. Tunable via a `bumpMassMultiplier` field; 1.0 normal, ~1.6 during boost. Makes "boost-ram" the clear aggressive play.
+- [x] **Sprint 3.1 — `PlayerCollisionSystem`.** New ECS system, runs after `PlayerMovementSystem` + `SpeedModSystem`, before `CollisionSystem` (obstacles). For every pair (i, j) where both alive: check distance(players[i], players[j]) < `2 * PLAYER_RADIUS`. If overlap, compute impulse and apply.
+- [x] **Sprint 3.2 — Impulse model.** Relative velocity along the contact normal (mostly lateral X for SD's geometry, but include z for boost-from-behind ram). Elastic-ish: each player gets `0.6 *` the relative velocity component as kick. Cap kick at `MAX_BUMP_KICK = 8 m/s` to prevent yeet-to-the-moon edge cases. Separate overlapping spheres by half-overlap each.
+- [x] **Sprint 3.3 — Visual feedback.** Spawn small particle burst at the contact point, both players' colors mixed. Brief screen-shake for the local player if they were involved. Audio: thud + glass clink — different from obstacle hit.
+- [x] **Sprint 3.4 — Rammer-credit tracking.** `PlayerState.lastRammedBy: number | null` set when player B's bump kicks player A. Cleared after 2s. If A dies within that window with `lastRammedBy === B`, credit the kill to B (used in Phase 4 results screen).
+- [x] **Sprint 3.5 — Boost+bump synergy.** When a player boosts, increase their effective bump mass — they get knocked back less, the rammed player gets knocked back more. Tunable via a `bumpMassMultiplier` field; 1.0 normal, ~1.6 during boost. Makes "boost-ram" the clear aggressive play.
 
 ## Verification
 
@@ -53,8 +53,8 @@ Players can ram each other. Two crystals overlapping → momentum exchange (impu
 
 ## Acceptance for Phase Done
 
-- [ ] Two players in the same lobby can collide and bounce off each other
-- [ ] Boost-ram knocks the rammed player further than non-boost ram
-- [ ] Knock-into-wall kills register with rammer credit
-- [ ] No tunneling, no infinite-bounce, no off-track yeets
-- [ ] N=1 singleplayer determinism harness still passes
+- [x] Two players in the same lobby can collide and bounce off each other
+- [x] Boost-ram knocks the rammed player further than non-boost ram
+- [x] Knock-into-wall kills register with rammer credit
+- [x] No tunneling, no infinite-bounce, no off-track yeets
+- [x] N=1 singleplayer determinism harness still passes (N=1 pair loop never fires)

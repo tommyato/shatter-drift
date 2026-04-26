@@ -52,6 +52,8 @@ export type GameEvent =
 	| { type: 'rift_flip_warning' }
 	| { type: 'rift_flip_start' }
 	| { type: 'rift_flip_end' }
+	/** Phase 3 — sphere-bump player collision */
+	| { type: 'player_bumped'; playerA: number; playerB: number; contactX: number; contactZ: number }
 
 export interface SimulationInputState {
 	horizontal: number
@@ -106,6 +108,14 @@ export interface PlayerState {
 
 	score: number
 	lastCloseCallZ: number
+
+	// Phase 3 — sphere-bump collision
+	/** Lateral velocity imparted by player-player collision; decays each tick */
+	bumpVelX: number
+	/** playerIndex of the last player who rammed this one (null if none / expired) */
+	lastRammedBy: number | null
+	/** simTime (seconds) when lastRammedBy was set; used to expire the credit */
+	lastRammedAt: number
 }
 
 export interface SimulationConfig {

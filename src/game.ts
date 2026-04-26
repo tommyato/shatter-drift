@@ -4,9 +4,9 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { Input } from "./input";
 import { Player } from "./player";
 import { World, type Obstacle } from "./world";
-import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst } from "./effects";
+import { createComposer, ParticleTrail, ExplosionEffect, CollectFlash, DebrisBurst, BumpEffect } from "./effects";
 import { PostFXPass } from "./postfx";
-import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak, playPhaseTierUp, playGrazeWhoosh, playPhaseRejected } from "./audio";
+import { initAudio, updateAmbient, playShatter, playRecombine, playCollect, playCloseCall, playDeath, playPowerUp, playBiomeTransition, playShieldBreak, playSpeedBoost, playChallengeComplete, playWorldEvent, playPersonalBest, playLaunch, stopAudio, startMusic, updateMusic, fadeOutMusic, setMasterVolume, getMasterVolume, playWallBreak, playPhaseTierUp, playGrazeWhoosh, playPhaseRejected, playBump } from "./audio";
 import { Autopilot } from "./autopilot";
 import { GameRecorder } from "./recorder";
 import { OnnxAgent } from "./onnx-agent";
@@ -306,6 +306,7 @@ export class Game {
   private explosion!: ExplosionEffect;
   private collectFlash!: CollectFlash;
   private debris!: DebrisBurst;
+  private bumpEffect!: BumpEffect;
   private shake = new ScreenShake();
   private speedLines!: SpeedLines;
   private vignette!: Vignette;
@@ -446,6 +447,8 @@ export class Game {
   private multiplayerSim: ShatterDriftSimulation | null = null;
   private multiplayerConfig: MultiplayerConfig | null = null;
   private multiplayerAuthoritativeState: AuthoritativeStateSnapshot | null = null;
+  /** Bump events queued in onTickAdvanced; drained in applyMultiplayerAuthoritativeState. */
+  private pendingBumpEvents: Array<{ playerA: number; playerB: number; contactX: number; contactZ: number }> = [];
   private multiplayerSubmittedTick = -1;
   private multiplayerLastAdvancedTick = -1;
   private multiplayerMatchRequested = false;
@@ -632,6 +635,7 @@ export class Game {
     this.explosion = new ExplosionEffect(this.scene);
     this.collectFlash = new CollectFlash(this.scene);
     this.debris = new DebrisBurst(this.scene);
+    this.bumpEffect = new BumpEffect(this.scene);
     this.speedLines = new SpeedLines();
     this.vignette = new Vignette();
     this.comboBorderGlow = new ComboBorderGlow();
@@ -1440,6 +1444,7 @@ export class Game {
     this.explosion.update(dt);
     this.collectFlash.update(dt);
     this.debris.update(dt);
+    this.bumpEffect.update(dt);
     this.screenFlash.update(dt);
     this.milestones.update(dt);
     this.popups.update(dt);
@@ -1565,6 +1570,7 @@ export class Game {
     this.multiplayerSim = null;
     this.multiplayerConfig = null;
     this.multiplayerAuthoritativeState = null;
+    this.pendingBumpEvents.length = 0;
     this.multiplayerSubmittedTick = -1;
     this.multiplayerLastAdvancedTick = -1;
     this.multiplayerMatchRequested = false;
@@ -1627,6 +1633,17 @@ export class Game {
           const local = this.multiplayerAuthoritativeState.players[config.localPlayerIndex];
           if (local && !local.alive) {
             this.transitionToMatchOver("You shattered.");
+          }
+        }
+        // Queue bump events for visual/audio processing in the render frame
+        for (const ev of result.events) {
+          if (ev.type === "player_bumped") {
+            this.pendingBumpEvents.push({
+              playerA: ev.playerA,
+              playerB: ev.playerB,
+              contactX: ev.contactX,
+              contactZ: ev.contactZ,
+            });
           }
         }
       },
@@ -1696,6 +1713,7 @@ export class Game {
     this.lockstepRunner = null;
     this.multiplayerSim = null;
     this.multiplayerConfig = null;
+    this.pendingBumpEvents.length = 0;
     this.disposeRemotePlayers();
     this.centerTitle.textContent = "MATCH ENDED";
     this.centerStats.innerHTML = `<div>${reason}</div><div style="margin-top:8px">DISTANCE: ${Math.floor(this.distance)}m</div>`;
@@ -1809,6 +1827,25 @@ export class Game {
     this.speedLines.update(Math.min(local.speed / MAX_SPEED, 1), 0x00ffcc);
     this.vignette.setStyle(0x000000, false, 0.8);
     this.vignette.setIntensity(Math.min(local.speed / MAX_SPEED, 1) * 0.25);
+
+    // --- Sprint 3.3: visual + audio feedback for player bumps ---
+    // pendingBumpEvents were queued in onTickAdvanced; drain them each render frame.
+    while (this.pendingBumpEvents.length > 0) {
+      const ev = this.pendingBumpEvents.shift()!;
+      const authState = this.multiplayerAuthoritativeState!;
+      const colorA = authState.players[ev.playerA]?.color ?? 0x4be1ff;
+      const colorB = authState.players[ev.playerB]?.color ?? 0xff5fa2;
+      // Spawn burst at contact point (y=0.5 = roughly crystal height)
+      this.bumpEffect.trigger(new THREE.Vector3(ev.contactX, 0.5, ev.contactZ), colorA, colorB);
+      // Screen-shake + audio only when the local player was involved
+      const localInvolved =
+        ev.playerA === this.multiplayerConfig!.localPlayerIndex ||
+        ev.playerB === this.multiplayerConfig!.localPlayerIndex;
+      if (localInvolved) {
+        this.shake.trigger(0.3);
+        playBump();
+      }
+    }
   }
 
   private updateMultiplayerHud() {
