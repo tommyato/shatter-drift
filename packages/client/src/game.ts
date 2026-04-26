@@ -41,6 +41,7 @@ import {
   LobbyClient,
   MeshTransport,
   MatchStartCoordinator,
+  MpRunner,
   createRemotePlayer,
   disposeRemotePlayer,
   normalizeCode,
@@ -48,8 +49,7 @@ import {
   type LobbyPlayer,
   type RemotePlayer,
 } from "./multiplayer";
-import { MULTIPLAYER_ENABLED, MULTIPLAYER_HASH_DEBUG, MULTIPLAYER_INPUT_DELAY_TICKS } from "./config";
-import { LockstepRunner, type LockstepTickResult } from "@sd/sim";
+import { MULTIPLAYER_ENABLED, MULTIPLAYER_HASH_DEBUG, MULTIPLAYER_AUTO_QUICKMATCH } from "./config";
 import { ShatterDriftSimulation } from "@sd/sim";
 import type { AuthoritativeStateSnapshot, MultiplayerConfig } from "@sd/sim";
 import {
@@ -443,13 +443,14 @@ export class Game {
   private meshTransport: MeshTransport | null = null;
   private matchCoordinator: MatchStartCoordinator | null = null;
   private matchState: MatchState = "idle";
-  private lockstepRunner: LockstepRunner | null = null;
+  private mpRunner: MpRunner | null = null;
   private multiplayerSim: ShatterDriftSimulation | null = null;
   private multiplayerConfig: MultiplayerConfig | null = null;
   private multiplayerAuthoritativeState: AuthoritativeStateSnapshot | null = null;
+  /** Snapshot subscription disposer — set when transitionToMatch wires to lobby snapshots. */
+  private mpSnapshotUnsubscribe: (() => void) | null = null;
   /** Bump events queued in onTickAdvanced; drained in applyMultiplayerAuthoritativeState. */
   private pendingBumpEvents: Array<{ playerA: number; playerB: number; contactX: number; contactZ: number }> = [];
-  private multiplayerSubmittedTick = -1;
   private multiplayerLastAdvancedTick = -1;
   private multiplayerMatchRequested = false;
   private remotePlayers = new Map<number, RemotePlayer>();
@@ -1159,6 +1160,25 @@ export class Game {
     });
 
     this.renderLobbyPlayers([]);
+
+    // Dev hook: `?mp=1&mp_auto=1` skips the lobby UI dance and auto-pairs both
+    // tabs into the same Colyseus room via `joinOrCreate`. Used by the puppeteer
+    // smoke test (`tools/mp-smoke-puppeteer.mjs`) to drive a deterministic
+    // two-tab session without clicking through CREATE/JOIN.
+    if (MULTIPLAYER_AUTO_QUICKMATCH && this.lobbyClient && this.meshTransport && this.matchCoordinator) {
+      void (async () => {
+        try {
+          await this.syncLobbyNameFromStorage();
+          await (this.lobbyClient as LobbyClient).quickMatch();
+          this.meshTransport!.start();
+          this.matchCoordinator!.start();
+          this.transitionToLobby();
+          this.setMultiplayerStatus("Auto-quickmatch joined; waiting for second player.");
+        } catch (err) {
+          this.setMultiplayerStatus(err instanceof Error ? err.message : "auto-quickmatch failed", true);
+        }
+      })();
+    }
   }
 
   private openMultiplayerModal() {
@@ -1278,11 +1298,13 @@ export class Game {
       await this.meshTransport.stop();
       await this.lobbyClient.leaveLobby();
       this.disposeRemotePlayers();
+      this.mpSnapshotUnsubscribe?.();
+      this.mpSnapshotUnsubscribe = null;
+      this.mpRunner?.stop();
+      this.mpRunner = null;
       this.multiplayerSim = null;
-      this.lockstepRunner = null;
       this.multiplayerConfig = null;
       this.multiplayerAuthoritativeState = null;
-      this.multiplayerSubmittedTick = -1;
       this.multiplayerLastAdvancedTick = -1;
       this.multiplayerCodeEl.textContent = "";
       this.multiplayerCodeInput.value = "";
@@ -1565,13 +1587,14 @@ export class Game {
 
   private transitionToIdle() {
     this.matchState = "idle";
-    this.lockstepRunner?.stop();
-    this.lockstepRunner = null;
+    this.mpSnapshotUnsubscribe?.();
+    this.mpSnapshotUnsubscribe = null;
+    this.mpRunner?.stop();
+    this.mpRunner = null;
     this.multiplayerSim = null;
     this.multiplayerConfig = null;
     this.multiplayerAuthoritativeState = null;
     this.pendingBumpEvents.length = 0;
-    this.multiplayerSubmittedTick = -1;
     this.multiplayerLastAdvancedTick = -1;
     this.multiplayerMatchRequested = false;
     this.disposeRemotePlayers();
@@ -1599,59 +1622,47 @@ export class Game {
     this.matchState = "inMatch";
     this.multiplayerConfig = config;
     this.multiplayerMatchRequested = false;
-    this.lockstepRunner?.stop();
+    this.mpSnapshotUnsubscribe?.();
+    this.mpSnapshotUnsubscribe = null;
+    this.mpRunner?.stop();
     this.disposeRemotePlayers();
 
-    const sim = new ShatterDriftSimulation({
-      seed: config.seed,
-      playerCount: config.players.length,
-      localPlayerIndex: config.localPlayerIndex,
-      playerNames: config.players.map((player) => player.name),
-      playerColors: config.players.map((player) => player.color),
-    });
-    this.multiplayerSim = sim;
-    this.multiplayerSubmittedTick = config.startTick - 1;
     this.multiplayerLastAdvancedTick = config.startTick - 1;
 
-    const playerIndices = new Map<string, number>();
-    for (const player of config.players) playerIndices.set(player.peerId, player.playerIndex);
-
-    this.lockstepRunner = new LockstepRunner({
-      sim,
+    this.mpRunner = new MpRunner({
+      config,
       transport: this.meshTransport!,
-      playerIndices,
-      localPlayerIndex: config.localPlayerIndex,
-      startTick: config.startTick,
-      onTickAdvanced: (tick: number, _actions: Map<number, number>, result: LockstepTickResult) => {
+      onTickAdvanced: (tick) => {
         this.multiplayerLastAdvancedTick = tick;
-        this.multiplayerAuthoritativeState = sim.getAuthoritativeState();
+        this.multiplayerAuthoritativeState = this.mpRunner!.getInterpolatedAuthoritativeState();
         if (MULTIPLAYER_HASH_DEBUG && (tick + 1) % 60 === 0) {
           const hash = this.hashAuthoritativeState(this.multiplayerAuthoritativeState);
           console.log("[sd-mp-hash]", { tick: tick + 1, hash, state: this.multiplayerAuthoritativeState });
         }
-        if (result.events.some((event) => event.type === "death")) {
-          const local = this.multiplayerAuthoritativeState.players[config.localPlayerIndex];
-          if (local && !local.alive) {
-            this.transitionToMatchOver("You shattered.");
-          }
-        }
-        // Queue bump events for visual/audio processing in the render frame
-        for (const ev of result.events) {
-          if (ev.type === "player_bumped") {
-            this.pendingBumpEvents.push({
-              playerA: ev.playerA,
-              playerB: ev.playerB,
-              contactX: ev.contactX,
-              contactZ: ev.contactZ,
-            });
-          }
+      },
+      onEvent: (ev) => {
+        if (ev.type === "player_bumped") {
+          this.pendingBumpEvents.push({
+            playerA: ev.playerA,
+            playerB: ev.playerB,
+            contactX: ev.contactX,
+            contactZ: ev.contactZ,
+          });
         }
       },
-      onPeerDropped: (_peerId: string, playerIndex: number) => {
-        this.setMultiplayerStatus(`Player ${playerIndex + 1} dropped. Filling idle inputs.`);
+      onLocalDeath: () => {
+        this.transitionToMatchOver("You shattered.");
       },
     });
-    this.lockstepRunner.start();
+    this.multiplayerSim = this.mpRunner.getSim();
+    this.mpRunner.start();
+
+    // Wire server snapshots from the lobby into the runner for reconciliation.
+    if (this.lobbyClient) {
+      this.mpSnapshotUnsubscribe = this.lobbyClient.onSnapshot((snap) => {
+        this.mpRunner?.applySnapshot(snap);
+      });
+    }
     this.matchCoordinator?.stop();
 
     this.world.reset();
@@ -1698,8 +1709,8 @@ export class Game {
       this.scene.add(remote.group);
     }
 
-    this.multiplayerAuthoritativeState = sim.getAuthoritativeState();
-    this.world.applyAuthoritativeState(sim.getState());
+    this.multiplayerAuthoritativeState = this.mpRunner.getInterpolatedAuthoritativeState();
+    this.world.applyAuthoritativeState(this.mpRunner.getState());
     this.applyMultiplayerAuthoritativeState(1 / 60);
     this.updateMultiplayerHud();
     this.setMultiplayerStatus("Match live.");
@@ -1709,8 +1720,10 @@ export class Game {
     if (this.matchState !== "inMatch") return;
     this.matchState = "matchOver";
     this.multiplayerMatchRequested = false;
-    this.lockstepRunner?.stop();
-    this.lockstepRunner = null;
+    this.mpSnapshotUnsubscribe?.();
+    this.mpSnapshotUnsubscribe = null;
+    this.mpRunner?.stop();
+    this.mpRunner = null;
     this.multiplayerSim = null;
     this.multiplayerConfig = null;
     this.pendingBumpEvents.length = 0;
@@ -1760,21 +1773,14 @@ export class Game {
   }
 
   private updateMultiplayerPlaying(dt: number) {
-    if (!this.lockstepRunner || !this.multiplayerSim || !this.multiplayerConfig) return;
+    if (!this.mpRunner || !this.multiplayerConfig) return;
 
-    const targetTick = this.lockstepRunner.getCurrentTick() + MULTIPLAYER_INPUT_DELAY_TICKS;
     const action = this.encodeNetworkAction();
-    while (this.multiplayerSubmittedTick < targetTick) {
-      this.multiplayerSubmittedTick += 1;
-      this.lockstepRunner.submitLocalInput(this.multiplayerSubmittedTick, action);
-      this.meshTransport?.sendInputFrame(this.multiplayerSubmittedTick, action);
-    }
-
-    this.lockstepRunner.tryAdvance();
+    this.mpRunner.tickFrame(dt, action);
     if (this.matchState !== "inMatch") return;
 
-    const state = this.multiplayerSim.getState();
-    this.multiplayerAuthoritativeState = this.multiplayerSim.getAuthoritativeState();
+    const state = this.mpRunner.getState();
+    this.multiplayerAuthoritativeState = this.mpRunner.getInterpolatedAuthoritativeState();
     this.world.applyAuthoritativeState(state);
     this.applyMultiplayerAuthoritativeState(dt);
     this.updateMultiplayerHud();

@@ -19,8 +19,10 @@ import { build as esbuild } from 'esbuild'
 import { build as viteBuild } from 'vite'
 
 const BUILD_HASH = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
+const SD_MP_URL = process.env.VITE_SD_MP_URL || ''
 const define = {
 	__BUILD_HASH__: JSON.stringify(BUILD_HASH),
+	__SD_MP_URL__: JSON.stringify(SD_MP_URL),
 }
 
 const SIM_SRC = resolve(import.meta.dirname, '../sim/src')
