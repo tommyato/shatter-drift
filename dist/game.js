@@ -38322,7 +38322,8 @@ function isInteractable(el) {
   if (el.classList.contains("hidden")) return false;
   return true;
 }
-var PERP_MULT = 2;
+var ROW_TOLERANCE = 30;
+var HALF_PLANE_DEADBAND = 0.4;
 function findNeighbor(direction, currentEl, visible) {
   const candidates = visible.filter((el) => el !== currentEl);
   if (candidates.length === 0) return null;
@@ -38333,25 +38334,88 @@ function findNeighbor(direction, currentEl, visible) {
   const forward = direction === "right" || direction === "down";
   const curPrimary = horizontal ? curCx : curCy;
   const curPerp = horizontal ? curCy : curCx;
-  function scoreCandidate(el) {
+  const curSize = horizontal ? cur.width : cur.height;
+  const minDelta = curSize * HALF_PLANE_DEADBAND;
+  function scoreCandidate(el, index) {
     const r = el.getBoundingClientRect();
     const cx = (r.left + r.right) / 2;
     const cy = (r.top + r.bottom) / 2;
     const candidatePrimary = horizontal ? cx : cy;
     const candidatePerp = horizontal ? cy : cx;
-    if (forward ? candidatePrimary <= curPrimary : candidatePrimary >= curPrimary) {
-      return null;
+    const delta = candidatePrimary - curPrimary;
+    if (forward) {
+      if (delta < minDelta) return null;
+    } else {
+      if (delta > -minDelta) return null;
     }
     const primaryDist = Math.abs(candidatePrimary - curPrimary);
     const perpOffset = Math.abs(candidatePerp - curPerp);
     const aligned = horizontal ? r.top <= curCy && r.bottom >= curCy : r.left <= curCx && r.right >= curCx;
-    return { el, aligned, score: primaryDist + (aligned ? 0 : perpOffset * PERP_MULT) };
+    return { el, index, aligned, primaryDist, perpOffset, perpVal: candidatePerp };
   }
-  const scored = candidates.map(scoreCandidate).filter((s) => s !== null).sort((a, b2) => {
-    if (a.aligned !== b2.aligned) return a.aligned ? -1 : 1;
-    return a.score - b2.score;
-  });
-  if (scored.length > 0) return scored[0].el;
+  const scored = candidates.map((el, index) => scoreCandidate(el, index)).filter((s) => s !== null);
+  if (scored.length > 0) {
+    if (horizontal) {
+      let candRowIdx2 = function(s) {
+        let ri = 0, bestD = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < rowBuckets.length; i++) {
+          const d = Math.abs(rowBuckets[i] - s.perpVal);
+          if (d < bestD) {
+            bestD = d;
+            ri = i;
+          }
+        }
+        return ri;
+      };
+      var candRowIdx = candRowIdx2;
+      const aligned = scored.filter((s) => s.aligned);
+      if (aligned.length > 0) {
+        aligned.sort((a, b2) => {
+          if (a.primaryDist !== b2.primaryDist) return a.primaryDist - b2.primaryDist;
+          if (a.perpOffset !== b2.perpOffset) return a.perpOffset - b2.perpOffset;
+          return a.index - b2.index;
+        });
+        return aligned[0].el;
+      }
+      const bucketVals = [curPerp, ...scored.map((s) => s.perpVal)].sort((a, b2) => a - b2);
+      const rowBuckets = [];
+      for (const v3 of bucketVals) {
+        const prev = rowBuckets[rowBuckets.length - 1];
+        if (rowBuckets.length === 0 || Math.abs(v3 - prev) > ROW_TOLERANCE) {
+          rowBuckets.push(v3);
+        }
+      }
+      let curRowIdx = 0;
+      {
+        let bestD = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < rowBuckets.length; i++) {
+          const d = Math.abs(rowBuckets[i] - curPerp);
+          if (d < bestD) {
+            bestD = d;
+            curRowIdx = i;
+          }
+        }
+      }
+      const rowCapped = scored.filter((s) => Math.abs(candRowIdx2(s) - curRowIdx) <= 1);
+      const toSort = rowCapped.length > 0 ? rowCapped : scored;
+      const nonAligned = toSort.slice().sort((a, b2) => {
+        if (a.perpOffset !== b2.perpOffset) return a.perpOffset - b2.perpOffset;
+        return a.primaryDist - b2.primaryDist;
+      });
+      return nonAligned[0].el;
+    }
+    const minPrimary = scored.reduce(
+      (min, c) => Math.min(min, c.primaryDist),
+      Number.POSITIVE_INFINITY
+    );
+    const tier1 = scored.filter((c) => c.primaryDist <= minPrimary + ROW_TOLERANCE);
+    tier1.sort((a, b2) => {
+      if (a.perpOffset !== b2.perpOffset) return a.perpOffset - b2.perpOffset;
+      if (a.aligned !== b2.aligned) return a.aligned ? -1 : 1;
+      return a.index - b2.index;
+    });
+    return tier1[0].el;
+  }
   const wrapped = candidates.map((el) => {
     const r = el.getBoundingClientRect();
     const cx = (r.left + r.right) / 2;
@@ -52814,7 +52878,7 @@ var LobbyClient = class {
   app = createFirebaseApp();
   db = getFirestore(this.app);
   peerId = createPeerId();
-  buildHash = "a555a8a";
+  buildHash = "5713c4b";
   playerName;
   lobbyCode = null;
   hostPeerId = null;
