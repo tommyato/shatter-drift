@@ -1,11 +1,25 @@
 /**
- * @sd/server — placeholder.
+ * @sd/server entrypoint — Colyseus match server for Shatter Drift.
  *
- * This package will host the server-authoritative match server (Colyseus)
- * for Shatter Drift multiplayer. Step 2 of the SD MP rewrite implements the
- * match loop, room schema, and authoritative tick using `@sd/sim`.
- *
- * For now this entry exists only so the workspace wiring has a real consumer
- * of `@sd/sim` and `node packages/server/src/index.ts` produces a sane signal.
+ * Defines the `shatter-drift` room and listens on PORT (default 2568).
+ * Deployed to `sd-mp.tommyato.com` via Caddy → :2568.
  */
-console.log('sd-mp server placeholder')
+import { Server } from 'colyseus'
+import express from 'express'
+import { createServer } from 'node:http'
+
+import { ShatterDriftRoom } from './ShatterDriftRoom'
+
+const PORT = Number(process.env.PORT ?? 2568)
+
+const app = express()
+app.get('/health', (_req, res) => {
+	res.json({ ok: true, service: 'sd-mp' })
+})
+
+const httpServer = createServer(app)
+const gameServer = new Server({ server: httpServer })
+gameServer.define('shatter-drift', ShatterDriftRoom)
+
+gameServer.listen(PORT)
+console.log(`[sd-mp] server listening on :${PORT}`)
