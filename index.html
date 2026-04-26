@@ -34,8 +34,13 @@
       justify-content: center;
     }
     body {
-      width: min(100vw, calc(100vh * 16 / 9));
-      height: min(100vh, calc(100vw * 9 / 16));
+      /* Frame size = the largest 16:9 box that fits the viewport, capped at
+         1280×720. Matches the Clockwork Climb /preview window: at large
+         monitors the game renders as a windowed embed rather than full-bleed,
+         so HUD/text scale stays consistent with the portal/Wavedash framing.
+         (1280:720 == 16:9, so the third min() term preserves the ratio.) */
+      width: min(100vw, calc(100vh * 16 / 9), 1280px);
+      height: min(100vh, calc(100vw * 9 / 16), 720px);
       position: relative;
       overflow: hidden;
       background: #020208;
