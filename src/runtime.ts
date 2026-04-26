@@ -19,7 +19,13 @@ import {
 	SpeedModSystemToken,
 	WorldScrollSystemToken,
 } from './tokens'
-import type { GameEvent, GameSnapshot, SimulationConfig, SimulationInput } from './types'
+import type {
+	AuthoritativeStateSnapshot,
+	GameEvent,
+	GameSnapshot,
+	SimulationConfig,
+	SimulationInput,
+} from './types'
 import { createBossAnimationSystem } from './systems/boss-animation-system'
 import { createCollisionSystem } from './systems/collision-system'
 import { createObstacleDespawnSystem } from './systems/obstacle-despawn-system'
@@ -38,6 +44,7 @@ export interface SimulationRuntime {
 	/** Set the action for a specific player. Defaults to local player. */
 	setAction(action: number, playerIndex?: number): void
 	getState(): GameSnapshot
+	getAuthoritativeState(): AuthoritativeStateSnapshot
 	getObservation(): Float64Array
 	drainEvents(): GameEvent[]
 }
@@ -150,6 +157,9 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 		},
 		getState() {
 			return world.getState()
+		},
+		getAuthoritativeState() {
+			return world.getAuthoritativeState()
 		},
 		getObservation() {
 			return world.getObservation().slice()

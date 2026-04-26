@@ -1,6 +1,11 @@
 import { DEFAULT_FIXED_DT } from './constants'
 import { createRuntime } from './runtime'
-import type { GameEvent, GameSnapshot, SimulationConfig } from './types'
+import type {
+	AuthoritativeStateSnapshot,
+	GameEvent,
+	GameSnapshot,
+	SimulationConfig,
+} from './types'
 
 export class ShatterDriftSimulation {
 	private readonly config: { fixedDt: number | null }
@@ -70,5 +75,9 @@ export class ShatterDriftSimulation {
 
 	getState(): GameSnapshot {
 		return this.runtime.getState()
+	}
+
+	getAuthoritativeState(): AuthoritativeStateSnapshot {
+		return this.runtime.getAuthoritativeState()
 	}
 }

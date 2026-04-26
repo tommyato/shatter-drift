@@ -16,6 +16,7 @@ import type {
 	ObstacleData,
 	OrbData,
 	PlayerState,
+	AuthoritativeStateSnapshot,
 	SimulationConfig,
 	SimulationInput,
 } from './types'
@@ -74,6 +75,7 @@ export interface SimulationWorld {
 	/** Add score to a specific player (defaults to local player for back-compat). */
 	addScore(points: number, playerIndex?: number): void
 	getState(): GameSnapshot
+	getAuthoritativeState(): AuthoritativeStateSnapshot
 	getObservation(): Float64Array
 	/**
 	 * Anchor z used by world-scroll-driven systems (spawn, despawn, rift-flip).
@@ -233,6 +235,33 @@ export function createSimulationWorld(
 				distance: local.z,
 				score: Math.round(local.score),
 				alive: local.alive,
+				obstacles: state.obstacles
+					.filter((obstacle) => obstacle.active)
+					.map((obstacle) => ({
+						z: obstacle.z,
+						x: obstacle.x,
+						halfWidth: obstacle.halfWidth,
+						halfHeight: obstacle.halfHeight,
+						isGate: obstacle.isGate,
+						gapX: obstacle.gapX,
+						gapHalfWidth: obstacle.gapHalfWidth,
+						active: obstacle.active,
+						wallSegments: obstacle.wallSegments?.map((segment) => ({
+							x: segment.x,
+							halfWidth: segment.halfWidth,
+						})),
+					})),
+				orbs: state.orbs
+					.filter((orb) => orb.active)
+					.map((orb) => ({
+						x: orb.x,
+						z: orb.z,
+				})),
+			}
+		},
+		getAuthoritativeState() {
+			return {
+				players: state.players.map((player) => ({ ...player })),
 				obstacles: state.obstacles
 					.filter((obstacle) => obstacle.active)
 					.map((obstacle) => ({

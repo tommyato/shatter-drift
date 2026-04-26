@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BiomeManager } from "./biomes";
+import type { GameSnapshot, ObstacleData, OrbData } from "./types";
 import {
   DESPAWN_DISTANCE,
   INITIAL_OBSTACLE_Z,
@@ -259,6 +260,7 @@ export class World {
   obstacles: Obstacle[] = [];
   orbs: EnergyOrb[] = [];
   portals: VibeversePortal[] = [];
+  private renderMode: "sp" | "mp-renderer" = "sp";
 
   private scene: THREE.Scene;
   private biomes: BiomeManager;
@@ -298,6 +300,10 @@ export class World {
    *  Pass Math.random for normal mode, seededRandom(seed) for daily challenge. */
   setRandom(fn: () => number) {
     this.random = fn;
+  }
+
+  setRenderMode(mode: "sp" | "mp-renderer") {
+    this.renderMode = mode;
   }
 
   constructor(scene: THREE.Scene, biomes: BiomeManager) {
@@ -448,88 +454,60 @@ export class World {
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const obs = this.obstacles[i];
       if (!obs.active) {
-        this.scene.remove(obs.mesh);
-        if (obs.mesh instanceof THREE.Mesh) {
-          obs.mesh.geometry.dispose();
-          (obs.mesh.material as THREE.Material).dispose();
-        } else if (obs.mesh instanceof THREE.Group) {
-          obs.mesh.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-              child.geometry.dispose();
-              (child.material as THREE.Material).dispose();
-            }
-            if (child instanceof THREE.LineSegments) {
-              child.geometry.dispose();
-              (child.material as THREE.Material).dispose();
-            }
-          });
-        }
+        this.disposeObstacle(obs);
         this.obstacles.splice(i, 1);
       }
     }
     // Orbs
     for (let i = this.orbs.length - 1; i >= 0; i--) {
       if (!this.orbs[i].active) {
-        const orb = this.orbs[i];
-        this.scene.remove(orb.mesh);
-        orb.mesh.geometry.dispose();
-        (orb.mesh.material as THREE.Material).dispose();
+        this.disposeOrb(this.orbs[i]);
         this.orbs.splice(i, 1);
       }
     }
     // Portals
     for (let i = this.portals.length - 1; i >= 0; i--) {
       if (!this.portals[i].active) {
-        const portal = this.portals[i];
-        this.scene.remove(portal.group);
-        portal.group.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            child.geometry.dispose();
-            (child.material as THREE.Material).dispose();
-          }
-        });
+        this.disposePortal(this.portals[i]);
         this.portals.splice(i, 1);
       }
     }
     // Markers
     for (let i = this.markers.length - 1; i >= 0; i--) {
       if (!this.markers[i].active) {
-        const marker = this.markers[i];
-        this.scene.remove(marker.group);
-        marker.group.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            child.geometry.dispose();
-            (child.material as THREE.Material).dispose();
-          }
-        });
+        this.disposeMarker(this.markers[i]);
         this.markers.splice(i, 1);
       }
     }
   }
 
+  applyAuthoritativeState(state: GameSnapshot) {
+    if (this.renderMode !== "mp-renderer") return;
+    this.reconcileAuthoritativeObstacles(state.obstacles);
+    this.reconcileAuthoritativeOrbs(state.orbs);
+  }
+
   update(dt: number, playerZ: number, playerX: number, speed: number, isPhasing: boolean = false) {
-    // Generate obstacles ahead — spacing is biome-driven
-    while (this.nextObstacleZ < playerZ + SPAWN_DISTANCE) {
-      this.spawnObstacle(this.nextObstacleZ);
-      this.nextObstacleZ += this.getBiomeSpacing();
-    }
+    if (this.renderMode === "sp") {
+      while (this.nextObstacleZ < playerZ + SPAWN_DISTANCE) {
+        this.spawnObstacle(this.nextObstacleZ);
+        this.nextObstacleZ += this.getBiomeSpacing();
+      }
 
-    // Generate orbs
-    while (this.nextOrbZ < playerZ + SPAWN_DISTANCE) {
-      this.spawnOrbCluster(this.nextOrbZ);
-      this.nextOrbZ += ORB_SPACING + this.random() * 5;
-    }
+      while (this.nextOrbZ < playerZ + SPAWN_DISTANCE) {
+        this.spawnOrbCluster(this.nextOrbZ);
+        this.nextOrbZ += ORB_SPACING + this.random() * 5;
+      }
 
-    // Generate Vibeverse portals
-    while (this.nextPortalZ < playerZ + SPAWN_DISTANCE) {
-      this.spawnPortal(this.nextPortalZ);
-      this.nextPortalZ += PORTAL_INTERVAL;
-    }
+      while (this.nextPortalZ < playerZ + SPAWN_DISTANCE) {
+        this.spawnPortal(this.nextPortalZ);
+        this.nextPortalZ += PORTAL_INTERVAL;
+      }
 
-    // Generate distance markers every 100m
-    while (this.nextMarkerZ < playerZ + SPAWN_DISTANCE) {
-      this.spawnDistanceMarker(this.nextMarkerZ);
-      this.nextMarkerZ += 100;
+      while (this.nextMarkerZ < playerZ + SPAWN_DISTANCE) {
+        this.spawnDistanceMarker(this.nextMarkerZ);
+        this.nextMarkerZ += 100;
+      }
     }
 
     // Animate obstacles — pulse emissive glow
@@ -1463,25 +1441,28 @@ export class World {
     this.voronoiShatter.reset();
     // Remove all obstacles, orbs, and portals
     for (const obs of this.obstacles) {
-      this.scene.remove(obs.mesh);
+      this.disposeObstacle(obs);
     }
     for (const orb of this.orbs) {
-      this.scene.remove(orb.mesh);
+      this.disposeOrb(orb);
     }
     for (const portal of this.portals) {
-      this.scene.remove(portal.group);
+      this.disposePortal(portal);
     }
     this.obstacles.length = 0;
     this.orbs.length = 0;
     this.portals.length = 0;
     for (const marker of this.markers) {
-      this.scene.remove(marker.group);
+      this.disposeMarker(marker);
     }
     this.markers.length = 0;
     this.nextObstacleZ = INITIAL_OBSTACLE_Z;
     this.nextOrbZ = INITIAL_ORB_Z;
     this.nextPortalZ = PORTAL_INTERVAL;
     this.nextMarkerZ = 100;
+    this.cleanupTimer = 0;
+    this.plasmaElapsed = 0;
+    this.renderMode = "sp";
   }
 
   dispose() {
@@ -1506,6 +1487,221 @@ export class World {
       edge.geometry.dispose();
       (edge.material as THREE.Material).dispose();
     }
+  }
+
+  private disposeObstacle(obs: Obstacle) {
+    this.scene.remove(obs.mesh);
+    if (obs.mesh instanceof THREE.Mesh) {
+      obs.mesh.geometry.dispose();
+      (obs.mesh.material as THREE.Material).dispose();
+      return;
+    }
+    if (obs.mesh instanceof THREE.Group) {
+      obs.mesh.traverse((child) => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+    }
+  }
+
+  private disposeOrb(orb: EnergyOrb) {
+    this.scene.remove(orb.mesh);
+    orb.mesh.geometry.dispose();
+    (orb.mesh.material as THREE.Material).dispose();
+  }
+
+  private disposePortal(portal: VibeversePortal) {
+    this.scene.remove(portal.group);
+    portal.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    });
+  }
+
+  private disposeMarker(marker: { group: THREE.Group }) {
+    this.scene.remove(marker.group);
+    marker.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    });
+  }
+
+  private reconcileAuthoritativeObstacles(obstacles: ObstacleData[]) {
+    const reusable = new Map<string, Obstacle[]>();
+    for (const obstacle of this.obstacles) {
+      const key = this.getAuthoritativeObstacleKey(obstacle);
+      const bucket = reusable.get(key) ?? [];
+      bucket.push(obstacle);
+      reusable.set(key, bucket);
+    }
+
+    const next: Obstacle[] = [];
+    for (const data of obstacles) {
+      const key = this.getObstacleDataKey(data);
+      const bucket = reusable.get(key);
+      const obstacle = bucket?.shift() ?? this.createAuthoritativeObstacle(data);
+      obstacle.z = data.z;
+      obstacle.x = data.x;
+      obstacle.halfWidth = data.halfWidth;
+      obstacle.halfHeight = data.halfHeight;
+      obstacle.isGate = data.isGate;
+      obstacle.gapX = data.gapX;
+      obstacle.gapHalfWidth = data.gapHalfWidth;
+      obstacle.active = data.active;
+      obstacle.partiallyShattered = false;
+      obstacle.wallSegments = data.wallSegments?.map((segment) => ({ ...segment }));
+      obstacle.mesh.visible = true;
+      if (obstacle.mesh instanceof THREE.Group) {
+        obstacle.mesh.position.set(0, 0, data.z);
+      } else {
+        obstacle.mesh.position.set(data.x, data.halfHeight, data.z);
+      }
+      next.push(obstacle);
+    }
+
+    for (const bucket of reusable.values()) {
+      for (const obstacle of bucket) this.disposeObstacle(obstacle);
+    }
+    this.obstacles = next;
+  }
+
+  private reconcileAuthoritativeOrbs(orbs: OrbData[]) {
+    const reusable = new Map<string, EnergyOrb[]>();
+    for (const orb of this.orbs) {
+      const key = this.getAuthoritativeOrbKey(orb);
+      const bucket = reusable.get(key) ?? [];
+      bucket.push(orb);
+      reusable.set(key, bucket);
+    }
+
+    const next: EnergyOrb[] = [];
+    for (const data of orbs) {
+      const key = this.getOrbDataKey(data);
+      const bucket = reusable.get(key);
+      const orb = bucket?.shift() ?? this.createAuthoritativeOrb(data);
+      orb.x = data.x;
+      orb.z = data.z;
+      orb.active = true;
+      orb.collected = false;
+      orb.mesh.visible = true;
+      orb.mesh.position.x = data.x;
+      orb.mesh.position.z = data.z;
+      next.push(orb);
+    }
+
+    for (const bucket of reusable.values()) {
+      for (const orb of bucket) this.disposeOrb(orb);
+    }
+    this.orbs = next;
+  }
+
+  private createAuthoritativeObstacle(data: ObstacleData): Obstacle {
+    if (data.isGate) {
+      const group = new THREE.Group();
+      group.position.z = data.z;
+      const wallHeight = data.halfHeight * 2;
+      const wallThickness = 0.6;
+      for (const segment of data.wallSegments ?? []) {
+        group.add(this.createObstacleMesh(segment.halfWidth * 2, wallHeight, wallThickness, segment.x, 0));
+      }
+      this.scene.add(group);
+      return {
+        mesh: group,
+        z: data.z,
+        halfWidth: data.halfWidth,
+        halfHeight: data.halfHeight,
+        x: data.x,
+        isGate: true,
+        gapX: data.gapX,
+        gapHalfWidth: data.gapHalfWidth,
+        active: true,
+        partiallyShattered: false,
+        wallSegments: data.wallSegments?.map((segment) => ({ ...segment })),
+      };
+    }
+
+    const mesh = this.createObstacleMesh(data.halfWidth * 2, data.halfHeight * 2, 0.8, 0, 0);
+    mesh.position.set(data.x, data.halfHeight, data.z);
+    this.scene.add(mesh);
+    return {
+      mesh,
+      z: data.z,
+      halfWidth: data.halfWidth,
+      halfHeight: data.halfHeight,
+      x: data.x,
+      isGate: false,
+      gapX: 0,
+      gapHalfWidth: 0,
+      active: true,
+      partiallyShattered: false,
+    };
+  }
+
+  private createAuthoritativeOrb(data: OrbData): EnergyOrb {
+    const c = this.biomes.colors;
+    const geo = new THREE.OctahedronGeometry(0.35, 0);
+    const mat = new THREE.MeshStandardMaterial({
+      color: c.orbColor,
+      emissive: c.orbColor,
+      emissiveIntensity: 1.0,
+      metalness: 0.5,
+      roughness: 0.2,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(data.x, 0.75, data.z);
+    this.scene.add(mesh);
+    return {
+      mesh,
+      z: data.z,
+      x: data.x,
+      y: mesh.position.y,
+      active: true,
+      collected: false,
+    };
+  }
+
+  private getObstacleDataKey(data: ObstacleData): string {
+    const segments = (data.wallSegments ?? [])
+      .map((segment) => `${segment.x.toFixed(3)}:${segment.halfWidth.toFixed(3)}`)
+      .join("|");
+    return [
+      data.z.toFixed(3),
+      data.x.toFixed(3),
+      data.halfWidth.toFixed(3),
+      data.halfHeight.toFixed(3),
+      data.isGate ? "1" : "0",
+      data.gapX.toFixed(3),
+      data.gapHalfWidth.toFixed(3),
+      segments,
+    ].join(";");
+  }
+
+  private getAuthoritativeObstacleKey(obstacle: Obstacle): string {
+    return this.getObstacleDataKey({
+      z: obstacle.z,
+      x: obstacle.x,
+      halfWidth: obstacle.halfWidth,
+      halfHeight: obstacle.halfHeight,
+      isGate: obstacle.isGate,
+      gapX: obstacle.gapX,
+      gapHalfWidth: obstacle.gapHalfWidth,
+      active: obstacle.active,
+      wallSegments: obstacle.wallSegments?.map((segment) => ({ ...segment })),
+    });
+  }
+
+  private getOrbDataKey(data: OrbData): string {
+    return `${data.x.toFixed(3)};${data.z.toFixed(3)}`;
+  }
+
+  private getAuthoritativeOrbKey(orb: EnergyOrb): string {
+    return this.getOrbDataKey({ x: orb.x, z: orb.z });
   }
 
   /** Scale a hex color's brightness (multiplier > 1 brightens, < 1 darkens) */
