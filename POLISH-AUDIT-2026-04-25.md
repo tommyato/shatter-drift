@@ -2,6 +2,19 @@
 
 Audited against `preferences/game-polish-universal.md` (10 rules). Source HEAD: `112d28d708a503e722463eaa20f32a6fe944f34c`.
 
+## Status (2026-04-26)
+
+- **Rules 2, 5, 9 — RESOLVED** in commit `da442e2` ("polish(sd): menu nav, hide title crystal, coolname identity, console hygiene"), pushed to `origin/main` 2026-04-25 (the same day the audit was committed). Spot-checked on origin/main @ `8b36014`:
+  - Rule 5 — `src/game.ts:577` sets `this.player.group.visible = false` on init; `:1571` sets visible on gameplay start. Confirmed by host-Chrome screenshots.
+  - Rule 2 — `grep -REn '"PLAYER"|"Player[0-9]"|"Anonymous"|"ANON"' src/` returns no matches outside `src/multiplayer.ts`. `getLocalUsername()` is wired through `game.ts:38, 963, 1028, 3209, 3241`.
+  - Rule 9 — `grep -En 'console\.(log|warn|error|info)' src/main.ts src/recorder.ts` returns no matches.
+- **Rule 4 — DEFERRED** until SD PR #3 (back-port of `findNeighbor` from Clockwork Climb) merges. Touching `src/menu-navigation.ts` before that lands would force a rebase. Pick this back up post-merge.
+
+A polish-bundle worker was dispatched on 2026-04-26 (`9e927ba7`) before this status check was done; it correctly identified that Rules 2/5/9 were already done and pushed only a verification markdown to `polish/sd-rule-5-2-9-bundle`. That branch was deleted; this audit doc is the canonical record. Lesson captured in `tommyato-knowledge/preferences/worker-dispatch-hygiene.md`.
+
+---
+
+
 ## Rule 1: No native browser dialogs
 **Status:** PASS
 **Evidence:** `grep -REn '\b(window\.)?(prompt|alert|confirm)\s*\(' src/` produced no matches. The shipped UI uses DOM overlays and buttons instead of native dialogs: `index.html:652-733`, `game.ts:2470-2516`, `game.ts:2677-2732`.
