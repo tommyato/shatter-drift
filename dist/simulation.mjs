@@ -37,6 +37,13 @@ function mulberry32(seed) {
 function getSystemRandom() {
   return () => Math.random();
 }
+var BOOST_MULTIPLIER = 1.4;
+var BOOST_DURATION = 1.2;
+var BOOST_COOLDOWN = 5;
+var BRAKE_MULTIPLIER = 0.65;
+var BRAKE_DURATION = 1;
+var BRAKE_COOLDOWN = 3;
+var SPEED_MOD_LERP_TIME = 0.15;
 function computeSpeed(distance, skillFactor = 1) {
   if (distance < 300) {
     return (12 + distance / 300 * 8) * skillFactor;
@@ -294,19 +301,35 @@ function createContainer() {
 }
 
 // src/input/agent-input.ts
-var ACTION_TO_STATE = {
-  0: { horizontal: 0, shatter: false },
-  1: { horizontal: -1, shatter: false },
-  2: { horizontal: 1, shatter: false },
-  3: { horizontal: 0, shatter: true },
-  4: { horizontal: -1, shatter: true },
-  5: { horizontal: 1, shatter: true }
+var LEGACY = {
+  0: { horizontal: 0, shatter: false, boost: false, brake: false },
+  1: { horizontal: -1, shatter: false, boost: false, brake: false },
+  2: { horizontal: 1, shatter: false, boost: false, brake: false },
+  3: { horizontal: 0, shatter: true, boost: false, brake: false },
+  4: { horizontal: -1, shatter: true, boost: false, brake: false },
+  5: { horizontal: 1, shatter: true, boost: false, brake: false }
 };
+function decodeAction(action) {
+  if (action >= 0 && action <= 5) {
+    return LEGACY[action];
+  }
+  const left = !!(action & 1);
+  const right = !!(action & 2);
+  const boost = !!(action & 8);
+  const brake = !!(action & 16);
+  return {
+    horizontal: left === right ? 0 : left ? -1 : 1,
+    shatter: !!(action & 4),
+    // brake wins if both pressed (defensive default)
+    boost: boost && !brake,
+    brake
+  };
+}
 function createAgentInput() {
   let currentAction = 0;
   return {
     getState() {
-      return ACTION_TO_STATE[currentAction] ?? ACTION_TO_STATE[0];
+      return decodeAction(currentAction);
     },
     setAction(action) {
       currentAction = Number.isFinite(action) ? Math.trunc(action) : 0;
@@ -328,6 +351,11 @@ function createInitialState() {
     phaseCooldown: 0,
     phaseMinTimer: 0,
     speed: 0,
+    speedMod: 1,
+    boostTimer: 0,
+    boostCooldown: 0,
+    brakeTimer: 0,
+    brakeCooldown: 0,
     score: 0,
     alive: true,
     obstacles: [],
@@ -379,6 +407,9 @@ function createSimulationWorld(input, random) {
         shattered: state.shattered,
         shatterCooldown: cooldown,
         speed: state.speed,
+        speedMod: state.speedMod,
+        boostCooldown: state.boostCooldown,
+        brakeCooldown: state.brakeCooldown,
         distance: state.playerZ,
         score: Math.round(state.score),
         alive: state.alive,
@@ -461,6 +492,7 @@ function createToken(description) {
 var RandomToken = createToken("Random");
 var SimulationInputToken = createToken("SimulationInput");
 var SimulationWorldToken = createToken("SimulationWorld");
+var SpeedModSystemToken = createToken("SpeedModSystem");
 var PlayerMovementSystemToken = createToken("PlayerMovementSystem");
 var WorldScrollSystemToken = createToken("WorldScrollSystem");
 var ObstacleSpawnSystemToken = createToken("ObstacleSpawnSystem");
@@ -1212,10 +1244,40 @@ function createShatterSystem(world) {
   };
 }
 
+// src/systems/speed-mod-system.ts
+function createSpeedModSystem(world) {
+  return (dt) => {
+    const input = world.input.getState();
+    const s = world.state;
+    if (s.boostTimer > 0) {
+      s.boostTimer = Math.max(0, s.boostTimer - dt);
+      if (s.boostTimer === 0) s.boostCooldown = BOOST_COOLDOWN;
+    }
+    if (s.brakeTimer > 0) {
+      s.brakeTimer = Math.max(0, s.brakeTimer - dt);
+      if (s.brakeTimer === 0) s.brakeCooldown = BRAKE_COOLDOWN;
+    }
+    if (s.boostCooldown > 0) s.boostCooldown = Math.max(0, s.boostCooldown - dt);
+    if (s.brakeCooldown > 0) s.brakeCooldown = Math.max(0, s.brakeCooldown - dt);
+    if (input.brake && s.brakeTimer === 0 && s.brakeCooldown === 0) {
+      s.brakeTimer = BRAKE_DURATION;
+      s.boostTimer = 0;
+    } else if (input.boost && s.boostTimer === 0 && s.boostCooldown === 0) {
+      s.boostTimer = BOOST_DURATION;
+      s.brakeTimer = 0;
+    }
+    let target = 1;
+    if (s.brakeTimer > 0) target = BRAKE_MULTIPLIER;
+    else if (s.boostTimer > 0) target = BOOST_MULTIPLIER;
+    const lerpFactor = 1 - Math.exp(-dt / SPEED_MOD_LERP_TIME);
+    s.speedMod += (target - s.speedMod) * lerpFactor;
+  };
+}
+
 // src/systems/world-scroll-system.ts
 function createWorldScrollSystem(world) {
   return (dt) => {
-    world.state.speed = computeSpeed(world.state.playerZ);
+    world.state.speed = computeSpeed(world.state.playerZ) * world.state.speedMod;
     world.state.playerZ += world.state.speed * dt;
     world.addScore(Math.floor(world.state.speed * dt));
   };
@@ -1228,6 +1290,7 @@ function createRuntime(config = {}) {
   container.bind(RandomToken).toValue(random);
   container.bind(SimulationInputToken).toFactory(createAgentInput).asSingleton();
   container.bind(SimulationWorldToken).toFactory(createSimulationWorld).withDeps(SimulationInputToken, RandomToken).asSingleton();
+  container.bind(SpeedModSystemToken).toFactory(createSpeedModSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(PlayerMovementSystemToken).toFactory(createPlayerMovementSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(WorldScrollSystemToken).toFactory(createWorldScrollSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(ObstacleSpawnSystemToken).toFactory(createObstacleSpawnSystem).withDeps(SimulationWorldToken).asSingleton();
@@ -1238,6 +1301,7 @@ function createRuntime(config = {}) {
   container.bind(BossAnimationSystemToken).toFactory(createBossAnimationSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(RiftFlipSystemToken).toFactory(createRiftFlipSystem).withDeps(SimulationWorldToken).asSingleton();
   const world = container.get(SimulationWorldToken);
+  const speedModSystem = container.get(SpeedModSystemToken);
   const playerMovementSystem = container.get(PlayerMovementSystemToken);
   const worldScrollSystem = container.get(WorldScrollSystemToken);
   const obstacleSpawnSystem = container.get(ObstacleSpawnSystemToken);
@@ -1254,6 +1318,7 @@ function createRuntime(config = {}) {
       world.reset();
     },
     update(dt) {
+      speedModSystem(dt);
       worldScrollSystem(dt);
       shatterSystem(dt);
       playerMovementSystem(dt);

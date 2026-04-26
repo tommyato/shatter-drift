@@ -158,6 +158,18 @@
       pointer-events: none;
     }
 
+    /* Boost / brake cooldown rings — flanking the phase meter */
+    .hud-cooldown-ring {
+      position: absolute;
+      bottom: 44px;
+      width: 28px;
+      height: 28px;
+      pointer-events: none;
+    }
+    #hud-boost-ring { left: calc(50% + 82px); }
+    #hud-brake-ring { right: calc(50% + 82px); }
+    .hud-cooldown-ring svg { display: block; overflow: visible; }
+
     #hud-powerup {
       position: absolute;
       top: 48px;
@@ -681,6 +693,26 @@
       <div id="hud-phase-meter"><div id="hud-phase-fill"></div></div>
       <div id="hud-graze-meter"><div id="hud-graze-fill"></div></div>
       <div id="hud-graze-label">NEAR MISS</div>
+      <!-- Boost cooldown ring (gold, right of phase meter) -->
+      <div id="hud-boost-ring" class="hud-cooldown-ring">
+        <svg viewBox="0 0 28 28" width="28" height="28">
+          <circle cx="14" cy="14" r="11" fill="none" stroke="rgba(255,160,0,0.18)" stroke-width="3"/>
+          <circle id="hud-boost-fill" cx="14" cy="14" r="11" fill="none"
+            stroke="#ffaa00" stroke-width="3"
+            stroke-dasharray="69.12 69.12" stroke-linecap="round"
+            transform="rotate(-90 14 14)"/>
+        </svg>
+      </div>
+      <!-- Brake cooldown ring (cyan, left of phase meter) -->
+      <div id="hud-brake-ring" class="hud-cooldown-ring">
+        <svg viewBox="0 0 28 28" width="28" height="28">
+          <circle cx="14" cy="14" r="11" fill="none" stroke="rgba(0,180,255,0.18)" stroke-width="3"/>
+          <circle id="hud-brake-fill" cx="14" cy="14" r="11" fill="none"
+            stroke="#00ccff" stroke-width="3"
+            stroke-dasharray="69.12 69.12" stroke-linecap="round"
+            transform="rotate(-90 14 14)"/>
+        </svg>
+      </div>
       <div id="daily-banner" class="hidden"></div>
       <div id="hud-state-indicator" class="whole">SOLID</div>
       <div id="center-message">

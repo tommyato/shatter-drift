@@ -34,10 +34,12 @@ export class Input {
   // Gamepad state — polled each frame in update(). Buttons are tracked
   // separately from `keys` so they can be edge-detected without conflating
   // with keyboard state.
-  private gamepadA = false;       // button 0 — activate
+  private gamepadA = false;       // button 0 — activate / shatter
   private prevGamepadA = false;
   private gamepadB = false;       // button 1 — cancel/back
   private prevGamepadB = false;
+  private gamepadBoost = false;   // button 7 — RT, boost
+  private gamepadBrake = false;   // button 6 — LT, brake
   private gamepadMovement = { x: 0, y: 0 }; // analog stick + d-pad, for gameplay
   private gamepadNav = { up: false, down: false, left: false, right: false };
   private prevGamepadNav = { up: false, down: false, left: false, right: false };
@@ -188,6 +190,8 @@ export class Input {
   private pollGamepad() {
     this.gamepadA = false;
     this.gamepadB = false;
+    this.gamepadBoost = false;
+    this.gamepadBrake = false;
     this.gamepadMovement.x = 0;
     this.gamepadMovement.y = 0;
     this.gamepadNav.up = false;
@@ -231,8 +235,10 @@ export class Input {
     this.gamepadNav.left  = dpadLeft  || ax < -NAV_STICK_THRESHOLD;
     this.gamepadNav.right = dpadRight || ax >  NAV_STICK_THRESHOLD;
 
-    this.gamepadA = !!gp.buttons[0]?.pressed; // A — activate
+    this.gamepadA = !!gp.buttons[0]?.pressed; // A — activate / shatter
     this.gamepadB = !!gp.buttons[1]?.pressed; // B — cancel
+    this.gamepadBrake = !!gp.buttons[6]?.pressed; // LT — brake
+    this.gamepadBoost = !!gp.buttons[7]?.pressed; // RT — boost
   }
 
   /** Call at the end of each frame */
@@ -299,6 +305,22 @@ export class Input {
     const escNow = this.keys.has("escape");
     const escPrev = this.prevKeys.has("escape");
     return (escNow && !escPrev) || (this.gamepadB && !this.prevGamepadB);
+  }
+
+  /**
+   * Boost is held: keyboard Shift OR gamepad RT (button 7).
+   * Used by the game layer to trigger the speed-mod boost effect.
+   */
+  isBoostDown(): boolean {
+    return this.keys.has("shift") || this.gamepadBoost;
+  }
+
+  /**
+   * Brake is held: keyboard Ctrl OR gamepad LT (button 6).
+   * Used by the game layer to trigger the speed-mod brake effect.
+   */
+  isBrakeDown(): boolean {
+    return this.keys.has("control") || this.gamepadBrake;
   }
 
   private keyboardDirDown(direction: NavDirection): boolean {

@@ -29401,11 +29401,15 @@ var Input = class {
   // separately from `keys` so they can be edge-detected without conflating
   // with keyboard state.
   gamepadA = false;
-  // button 0 — activate
+  // button 0 — activate / shatter
   prevGamepadA = false;
   gamepadB = false;
   // button 1 — cancel/back
   prevGamepadB = false;
+  gamepadBoost = false;
+  // button 7 — RT, boost
+  gamepadBrake = false;
+  // button 6 — LT, brake
   gamepadMovement = { x: 0, y: 0 };
   // analog stick + d-pad, for gameplay
   gamepadNav = { up: false, down: false, left: false, right: false };
@@ -29516,6 +29520,8 @@ var Input = class {
   pollGamepad() {
     this.gamepadA = false;
     this.gamepadB = false;
+    this.gamepadBoost = false;
+    this.gamepadBrake = false;
     this.gamepadMovement.x = 0;
     this.gamepadMovement.y = 0;
     this.gamepadNav.up = false;
@@ -29552,6 +29558,8 @@ var Input = class {
     this.gamepadNav.right = dpadRight || ax > NAV_STICK_THRESHOLD;
     this.gamepadA = !!gp.buttons[0]?.pressed;
     this.gamepadB = !!gp.buttons[1]?.pressed;
+    this.gamepadBrake = !!gp.buttons[6]?.pressed;
+    this.gamepadBoost = !!gp.buttons[7]?.pressed;
   }
   /** Call at the end of each frame */
   endFrame() {
@@ -29610,6 +29618,20 @@ var Input = class {
     const escNow = this.keys.has("escape");
     const escPrev = this.prevKeys.has("escape");
     return escNow && !escPrev || this.gamepadB && !this.prevGamepadB;
+  }
+  /**
+   * Boost is held: keyboard Shift OR gamepad RT (button 7).
+   * Used by the game layer to trigger the speed-mod boost effect.
+   */
+  isBoostDown() {
+    return this.keys.has("shift") || this.gamepadBoost;
+  }
+  /**
+   * Brake is held: keyboard Ctrl OR gamepad LT (button 6).
+   * Used by the game layer to trigger the speed-mod brake effect.
+   */
+  isBrakeDown() {
+    return this.keys.has("control") || this.gamepadBrake;
   }
   keyboardDirDown(direction) {
     switch (direction) {
@@ -29688,6 +29710,13 @@ var INITIAL_ORB_Z = 15;
 var LOOKAHEAD_OBSTACLES = 5;
 var LOOKAHEAD_DISTANCE = 80;
 var DEFAULT_FIXED_DT = 1 / 60;
+var BOOST_MULTIPLIER = 1.4;
+var BOOST_DURATION = 1.2;
+var BOOST_COOLDOWN = 5;
+var BRAKE_MULTIPLIER = 0.65;
+var BRAKE_DURATION = 1;
+var BRAKE_COOLDOWN = 3;
+var SPEED_MOD_LERP_TIME = 0.15;
 function computeSpeed(distance, skillFactor = 1) {
   if (distance < 300) {
     return (12 + distance / 300 * 8) * skillFactor;
@@ -38440,6 +38469,14 @@ var Game = class {
   nearMissHintEl = null;
   deathSlowMo = false;
   deathSlowMoTimer = 0;
+  // Boost / brake speed-mod (mirrors sim-layer state in the renderer)
+  boostTimer = 0;
+  boostCooldown = 0;
+  brakeTimer = 0;
+  brakeCooldown = 0;
+  speedMod = 1;
+  hudBoostFillEl = null;
+  hudBrakeFillEl = null;
   // Cosmic Rift gravity flip
   riftFlip = createRiftFlipState();
   // Smoothed camera-up lerp (0 = upright, 1 = fully inverted)
@@ -38651,6 +38688,8 @@ var Game = class {
     this.hudPhaseFill = document.getElementById("hud-phase-fill");
     this.hudGrazeMeter = document.getElementById("hud-graze-meter");
     this.hudGrazeFill = document.getElementById("hud-graze-fill");
+    this.hudBoostFillEl = document.getElementById("hud-boost-fill");
+    this.hudBrakeFillEl = document.getElementById("hud-brake-fill");
     this.nearMissHintEl = document.createElement("div");
     this.nearMissHintEl.textContent = "NEAR MISS TO CHARGE";
     this.nearMissHintEl.style.cssText = [
@@ -39179,6 +39218,11 @@ var Game = class {
     this.riftFlip = createRiftFlipState();
     this.riftFlipLerp = 0;
     this.riftWarningTimer = 0;
+    this.boostTimer = 0;
+    this.boostCooldown = 0;
+    this.brakeTimer = 0;
+    this.brakeCooldown = 0;
+    this.speedMod = 1;
     if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
     this.player.laneX = 0;
     this.player.shattered = false;
@@ -39301,6 +39345,10 @@ var Game = class {
       this.phaseBonusFlashTimer -= dt;
     }
     this.speed = this.computeSpeed(this.distance);
+    if (!this.onnxMode && !this.autopilot) {
+      this.updateSpeedMod(dt, this.input.isBoostDown(), this.input.isBrakeDown());
+    }
+    this.speed *= this.speedMod;
     this.playerZ += this.speed * dt;
     this.distance = Math.floor(this.playerZ);
     let moveX;
@@ -39930,6 +39978,7 @@ var Game = class {
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
     this.updatePhaseHud();
     this.updateGrazeMeterHud();
+    this.updateBoostBrakeHud();
     if (this.combo > 1) {
       const comboVal = Math.min(this.combo, COMBO_MAX);
       this.hudCombo.textContent = `x${comboVal}`;
@@ -40164,6 +40213,56 @@ var Game = class {
       } else {
         this.nearMissHintEl.style.opacity = "0";
       }
+    }
+  }
+  /**
+   * Tick boost/brake timers and lerp speedMod toward the active target.
+   * Mirrors the sim-layer SpeedModSystem but runs in the renderer so the
+   * actual Three.js speed responds immediately.
+   */
+  updateSpeedMod(dt, boostWanted, brakeWanted) {
+    if (this.boostTimer > 0) {
+      this.boostTimer = Math.max(0, this.boostTimer - dt);
+      if (this.boostTimer === 0) this.boostCooldown = BOOST_COOLDOWN;
+    }
+    if (this.brakeTimer > 0) {
+      this.brakeTimer = Math.max(0, this.brakeTimer - dt);
+      if (this.brakeTimer === 0) this.brakeCooldown = BRAKE_COOLDOWN;
+    }
+    if (this.boostCooldown > 0) this.boostCooldown = Math.max(0, this.boostCooldown - dt);
+    if (this.brakeCooldown > 0) this.brakeCooldown = Math.max(0, this.brakeCooldown - dt);
+    if (brakeWanted && this.brakeTimer === 0 && this.brakeCooldown === 0) {
+      this.brakeTimer = BRAKE_DURATION;
+      this.boostTimer = 0;
+    } else if (boostWanted && this.boostTimer === 0 && this.boostCooldown === 0) {
+      this.boostTimer = BOOST_DURATION;
+      this.brakeTimer = 0;
+    }
+    let target = 1;
+    if (this.brakeTimer > 0) target = BRAKE_MULTIPLIER;
+    else if (this.boostTimer > 0) target = BOOST_MULTIPLIER;
+    const lerpFactor = 1 - Math.exp(-dt / SPEED_MOD_LERP_TIME);
+    this.speedMod += (target - this.speedMod) * lerpFactor;
+  }
+  /** Update boost/brake cooldown ring HUD elements. */
+  updateBoostBrakeHud() {
+    if (!this.hudBoostFillEl || !this.hudBrakeFillEl) return;
+    const circ = 2 * Math.PI * 11;
+    const boostFill = this.boostCooldown <= 0 ? 1 : 1 - this.boostCooldown / BOOST_COOLDOWN;
+    this.hudBoostFillEl.style.strokeDasharray = `${(boostFill * circ).toFixed(2)} ${circ.toFixed(2)}`;
+    if (this.boostCooldown <= 0) {
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 6e-3);
+      this.hudBoostFillEl.style.opacity = String(0.7 + pulse * 0.3);
+    } else {
+      this.hudBoostFillEl.style.opacity = "0.85";
+    }
+    const brakeFill = this.brakeCooldown <= 0 ? 1 : 1 - this.brakeCooldown / BRAKE_COOLDOWN;
+    this.hudBrakeFillEl.style.strokeDasharray = `${(brakeFill * circ).toFixed(2)} ${circ.toFixed(2)}`;
+    if (this.brakeCooldown <= 0) {
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 6e-3);
+      this.hudBrakeFillEl.style.opacity = String(0.7 + pulse * 0.3);
+    } else {
+      this.hudBrakeFillEl.style.opacity = "0.85";
     }
   }
   applyBiomeColors() {

@@ -6,6 +6,7 @@ export const RandomToken = createToken<() => number>('Random')
 export const SimulationInputToken = createToken<SimulationInput>('SimulationInput')
 export const SimulationWorldToken = createToken<SimulationWorld>('SimulationWorld')
 
+export const SpeedModSystemToken = createToken<(dt: number) => void>('SpeedModSystem')
 export const PlayerMovementSystemToken = createToken<(dt: number) => void>('PlayerMovementSystem')
 export const WorldScrollSystemToken = createToken<(dt: number) => void>('WorldScrollSystem')
 export const ObstacleSpawnSystemToken = createToken<(dt: number) => void>('ObstacleSpawnSystem')

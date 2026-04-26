@@ -25,6 +25,9 @@ export interface GameSnapshot {
 	shattered: boolean
 	shatterCooldown: number
 	speed: number
+	speedMod: number
+	boostCooldown: number
+	brakeCooldown: number
 	distance: number
 	score: number
 	alive: boolean
@@ -47,6 +50,8 @@ export type GameEvent =
 export interface SimulationInputState {
 	horizontal: number
 	shatter: boolean
+	boost: boolean
+	brake: boolean
 }
 
 export interface SimulationInput {

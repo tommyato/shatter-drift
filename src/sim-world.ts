@@ -40,6 +40,16 @@ export interface SimulationState {
 	/** Minimum-duration lock timer. While > 0, phase stays active even if input released. */
 	phaseMinTimer: number
 	speed: number
+	/** Lerp-smoothed speed multiplier applied by SpeedModSystem. 1.0 = normal. */
+	speedMod: number
+	/** Seconds remaining in active boost (0 = not active). */
+	boostTimer: number
+	/** Seconds until boost can be triggered again (0 = ready). */
+	boostCooldown: number
+	/** Seconds remaining in active brake (0 = not active). */
+	brakeTimer: number
+	/** Seconds until brake can be triggered again (0 = ready). */
+	brakeCooldown: number
 	score: number
 	alive: boolean
 	obstacles: SimulationObstacle[]
@@ -81,6 +91,11 @@ function createInitialState(): SimulationState {
 		phaseCooldown: 0,
 		phaseMinTimer: 0,
 		speed: 0,
+		speedMod: 1,
+		boostTimer: 0,
+		boostCooldown: 0,
+		brakeTimer: 0,
+		brakeCooldown: 0,
 		score: 0,
 		alive: true,
 		obstacles: [],
@@ -138,6 +153,9 @@ export function createSimulationWorld(
 				shattered: state.shattered,
 				shatterCooldown: cooldown,
 				speed: state.speed,
+				speedMod: state.speedMod,
+				boostCooldown: state.boostCooldown,
+				brakeCooldown: state.brakeCooldown,
 				distance: state.playerZ,
 				score: Math.round(state.score),
 				alive: state.alive,

@@ -14,6 +14,7 @@ import {
 	ShatterSystemToken,
 	SimulationInputToken,
 	SimulationWorldToken,
+	SpeedModSystemToken,
 	WorldScrollSystemToken,
 } from './tokens'
 import type { GameEvent, GameSnapshot, SimulationConfig } from './types'
@@ -25,6 +26,7 @@ import { createOrbSystem } from './systems/orb-system'
 import { createPlayerMovementSystem } from './systems/player-movement-system'
 import { createRiftFlipSystem } from './systems/rift-flip-system'
 import { createShatterSystem } from './systems/shatter-system'
+import { createSpeedModSystem } from './systems/speed-mod-system'
 import { createWorldScrollSystem } from './systems/world-scroll-system'
 
 export interface SimulationRuntime {
@@ -52,6 +54,11 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 		.withDeps(SimulationInputToken, RandomToken)
 		.asSingleton()
 
+	container
+		.bind(SpeedModSystemToken)
+		.toFactory(createSpeedModSystem)
+		.withDeps(SimulationWorldToken)
+		.asSingleton()
 	container
 		.bind(PlayerMovementSystemToken)
 		.toFactory(createPlayerMovementSystem)
@@ -99,6 +106,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 		.asSingleton()
 
 	const world = container.get(SimulationWorldToken)
+	const speedModSystem = container.get(SpeedModSystemToken)
 	const playerMovementSystem = container.get(PlayerMovementSystemToken)
 	const worldScrollSystem = container.get(WorldScrollSystemToken)
 	const obstacleSpawnSystem = container.get(ObstacleSpawnSystemToken)
@@ -116,6 +124,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 			world.reset()
 		},
 		update(dt: number) {
+			speedModSystem(dt)      // update speedMod first so worldScrollSystem sees it
 			worldScrollSystem(dt)
 			shatterSystem(dt)
 			playerMovementSystem(dt)

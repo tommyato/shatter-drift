@@ -44,6 +44,12 @@ import {
   type RiftFlipState,
 } from "./systems/gravity-flip-scheduler";
 import {
+  BOOST_COOLDOWN,
+  BOOST_DURATION,
+  BOOST_MULTIPLIER,
+  BRAKE_COOLDOWN,
+  BRAKE_DURATION,
+  BRAKE_MULTIPLIER,
   CLOSE_CALL_SCORE,
   COMBO_MAX,
   INITIAL_SPEED,
@@ -55,6 +61,7 @@ import {
   PHASE_MIN_THRESHOLD,
   PHASE_POST_COOLDOWN,
   PHASE_RECHARGE_RATE,
+  SPEED_MOD_LERP_TIME,
   computeSpeed,
 } from "./constants";
 
@@ -339,6 +346,15 @@ export class Game {
   private deathSlowMo = false;
   private deathSlowMoTimer = 0;
 
+  // Boost / brake speed-mod (mirrors sim-layer state in the renderer)
+  private boostTimer = 0;
+  private boostCooldown = 0;
+  private brakeTimer = 0;
+  private brakeCooldown = 0;
+  private speedMod = 1;
+  private hudBoostFillEl: SVGElement | null = null;
+  private hudBrakeFillEl: SVGElement | null = null;
+
   // Cosmic Rift gravity flip
   private riftFlip: RiftFlipState = createRiftFlipState();
   // Smoothed camera-up lerp (0 = upright, 1 = fully inverted)
@@ -604,6 +620,8 @@ export class Game {
     this.hudPhaseFill = document.getElementById("hud-phase-fill")!;
     this.hudGrazeMeter = document.getElementById("hud-graze-meter")!;
     this.hudGrazeFill = document.getElementById("hud-graze-fill")!;
+    this.hudBoostFillEl = document.getElementById("hud-boost-fill") as SVGElement | null;
+    this.hudBrakeFillEl = document.getElementById("hud-brake-fill") as SVGElement | null;
 
     // "NEAR MISS TO CHARGE" pulsing hint — appears near the meter when meter is low and an obstacle is approaching
     this.nearMissHintEl = document.createElement("div");
@@ -1286,6 +1304,11 @@ export class Game {
     this.riftFlip = createRiftFlipState();
     this.riftFlipLerp = 0;
     this.riftWarningTimer = 0;
+    this.boostTimer = 0;
+    this.boostCooldown = 0;
+    this.brakeTimer = 0;
+    this.brakeCooldown = 0;
+    this.speedMod = 1;
     if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
     this.player.laneX = 0;
     this.player.shattered = false;
@@ -1463,6 +1486,12 @@ export class Game {
 
     // Piecewise speed ramp — gentle in early biomes, punishing in later ones
     this.speed = this.computeSpeed(this.distance);
+
+    // Boost / brake speed mod — human mode only (ONNX/autopilot never trigger these)
+    if (!this.onnxMode && !this.autopilot) {
+      this.updateSpeedMod(dt, this.input.isBoostDown(), this.input.isBrakeDown());
+    }
+    this.speed *= this.speedMod;
 
     // Move forward
     this.playerZ += this.speed * dt;
@@ -2226,6 +2255,7 @@ export class Game {
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
     this.updatePhaseHud();
     this.updateGrazeMeterHud();
+    this.updateBoostBrakeHud();
 
     if (this.combo > 1) {
       const comboVal = Math.min(this.combo, COMBO_MAX);
@@ -2504,6 +2534,73 @@ export class Game {
       } else {
         this.nearMissHintEl.style.opacity = "0";
       }
+    }
+  }
+
+  /**
+   * Tick boost/brake timers and lerp speedMod toward the active target.
+   * Mirrors the sim-layer SpeedModSystem but runs in the renderer so the
+   * actual Three.js speed responds immediately.
+   */
+  private updateSpeedMod(dt: number, boostWanted: boolean, brakeWanted: boolean) {
+    // Tick active timers and start cooldown on expiry
+    if (this.boostTimer > 0) {
+      this.boostTimer = Math.max(0, this.boostTimer - dt);
+      if (this.boostTimer === 0) this.boostCooldown = BOOST_COOLDOWN;
+    }
+    if (this.brakeTimer > 0) {
+      this.brakeTimer = Math.max(0, this.brakeTimer - dt);
+      if (this.brakeTimer === 0) this.brakeCooldown = BRAKE_COOLDOWN;
+    }
+    if (this.boostCooldown > 0) this.boostCooldown = Math.max(0, this.boostCooldown - dt);
+    if (this.brakeCooldown > 0) this.brakeCooldown = Math.max(0, this.brakeCooldown - dt);
+
+    // Activate — brake wins if both pressed simultaneously
+    if (brakeWanted && this.brakeTimer === 0 && this.brakeCooldown === 0) {
+      this.brakeTimer = BRAKE_DURATION;
+      this.boostTimer = 0; // cancel boost (no cooldown penalty for canceled action)
+    } else if (boostWanted && this.boostTimer === 0 && this.boostCooldown === 0) {
+      this.boostTimer = BOOST_DURATION;
+      this.brakeTimer = 0; // cancel brake
+    }
+
+    // Lerp speedMod toward target (~150 ms)
+    let target = 1;
+    if (this.brakeTimer > 0) target = BRAKE_MULTIPLIER;
+    else if (this.boostTimer > 0) target = BOOST_MULTIPLIER;
+    const lerpFactor = 1 - Math.exp(-dt / SPEED_MOD_LERP_TIME);
+    this.speedMod += (target - this.speedMod) * lerpFactor;
+  }
+
+  /** Update boost/brake cooldown ring HUD elements. */
+  private updateBoostBrakeHud() {
+    if (!this.hudBoostFillEl || !this.hudBrakeFillEl) return;
+    const circ = 2 * Math.PI * 11; // circumference of r=11 SVG rings
+
+    // Boost ring (gold)
+    const boostFill = this.boostCooldown <= 0
+      ? 1
+      : 1 - this.boostCooldown / BOOST_COOLDOWN;
+    this.hudBoostFillEl.style.strokeDasharray =
+      `${(boostFill * circ).toFixed(2)} ${circ.toFixed(2)}`;
+    if (this.boostCooldown <= 0) {
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
+      this.hudBoostFillEl.style.opacity = String(0.7 + pulse * 0.3);
+    } else {
+      this.hudBoostFillEl.style.opacity = "0.85";
+    }
+
+    // Brake ring (cyan)
+    const brakeFill = this.brakeCooldown <= 0
+      ? 1
+      : 1 - this.brakeCooldown / BRAKE_COOLDOWN;
+    this.hudBrakeFillEl.style.strokeDasharray =
+      `${(brakeFill * circ).toFixed(2)} ${circ.toFixed(2)}`;
+    if (this.brakeCooldown <= 0) {
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
+      this.hudBrakeFillEl.style.opacity = String(0.7 + pulse * 0.3);
+    } else {
+      this.hudBrakeFillEl.style.opacity = "0.85";
     }
   }
 

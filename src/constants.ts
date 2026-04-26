@@ -59,6 +59,15 @@ export function getSystemRandom(): () => number {
 	return () => Math.random()
 }
 
+// Boost / brake speed-mod tuning
+export const BOOST_MULTIPLIER = 1.4
+export const BOOST_DURATION = 1.2   // seconds active
+export const BOOST_COOLDOWN = 5.0   // seconds before reuse
+export const BRAKE_MULTIPLIER = 0.65
+export const BRAKE_DURATION = 1.0
+export const BRAKE_COOLDOWN = 3.0
+export const SPEED_MOD_LERP_TIME = 0.15 // ~150ms ease in/out
+
 export function computeSpeed(distance: number, skillFactor = 1): number {
 	if (distance < 300) {
 		return (12 + (distance / 300) * 8) * skillFactor
