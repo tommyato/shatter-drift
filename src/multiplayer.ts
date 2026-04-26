@@ -1,6 +1,7 @@
 import * as THREE from "three";
-import type { ShatterDriftSimulation } from "./simulation";
 import type { MatchPlayerInfo, MatchStartMessage, MultiplayerConfig, PlayerState } from "./types";
+import { LockstepRunner, type InputFrame } from "./lockstep-runner";
+export { LockstepRunner } from "./lockstep-runner";
 import { initializeApp, getApp, getApps, type FirebaseApp } from "firebase/app";
 import {
   addDoc,
@@ -39,17 +40,12 @@ const SIGNAL_KIND_ICE = "ice";
 const MAX_PLAYERS = 4;
 const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 
-export type InputFrame = {
-  tick: number;
-  action: number;
-  playerIndex: number;
-};
-
 export type LobbyPlayer = {
   peerId: string;
   name: string;
   buildHash: string;
   joinedAtMs: number;
+  ready: boolean;
   playerIndex: number;
   isLocal: boolean;
 };
@@ -70,6 +66,7 @@ type MemberDoc = {
   buildHash: string;
   joinedAtMs: number;
   updatedAtMs: number;
+  ready?: boolean;
 };
 
 type SignalDoc = {
@@ -199,6 +196,7 @@ export class LobbyClient {
         name: this.playerName,
         buildHash: this.buildHash,
         joinedAtMs: now,
+        ready: false,
         playerIndex: 0,
         isLocal: true,
       },
@@ -241,6 +239,7 @@ export class LobbyClient {
       buildHash: this.buildHash,
       joinedAtMs: now,
       updatedAtMs: now,
+      ready: false,
       joinedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -263,6 +262,7 @@ export class LobbyClient {
         name: player.name,
         buildHash: player.buildHash,
         joinedAtMs: player.joinedAtMs,
+        ready: Boolean(player.ready),
         playerIndex: index,
         isLocal: player.peerId === this.peerId,
       }));
@@ -317,6 +317,15 @@ export class LobbyClient {
         updatedAt: serverTimestamp(),
       });
     }
+  }
+
+  async setReady(ready: boolean): Promise<void> {
+    if (!this.lobbyCode) return;
+    await updateDoc(this.getMemberRef(this.lobbyCode, this.peerId), {
+      ready,
+      updatedAtMs: Date.now(),
+      updatedAt: serverTimestamp(),
+    });
   }
 
   async sendSignal(
@@ -456,6 +465,7 @@ export class LobbyClient {
       name: data.name,
       buildHash: data.buildHash,
       joinedAtMs: data.joinedAtMs ?? 0,
+      ready: Boolean(data.ready),
       playerIndex: -1,
       isLocal: data.peerId === this.peerId,
     };
@@ -762,180 +772,6 @@ export class MeshTransport {
 }
 
 export { normalizeCode };
-
-// ===========================================================================
-// Lockstep runner (Phase 2.4)
-// ===========================================================================
-
-/**
- * Drives a `ShatterDriftSimulation` in lockstep across N peers. Each tick
- * advances only when an input frame for that tick has arrived from every
- * remote player AND the local player has submitted its own action. A peer
- * that goes silent for `dropTimeoutMs` is marked dropped and its slot is
- * filled with action=0 so the rest of the match can continue.
- *
- * Phase 2 wires this as a standalone runner — game.ts will integrate it
- * into the live render loop when the MP game state is enabled.
- */
-export interface LockstepRunnerConfig {
-  sim: ShatterDriftSimulation;
-  transport: MeshTransport;
-  /** Per-peer playerIndex assignments — every connected peerId must be in here. */
-  playerIndices: ReadonlyMap<string, number>;
-  /** This peer's playerIndex (used to know which slot to apply submitLocalInput to). */
-  localPlayerIndex: number;
-  /** Sim tick to start running at (handshake-agreed). */
-  startTick: number;
-  /** Per-peer dropout threshold in milliseconds. Default 2000. */
-  dropTimeoutMs?: number;
-  /** Optional callback invoked just before sim.tick() with the actions used. */
-  onTickAdvanced?: (tick: number, actions: Map<number, number>) => void;
-  /** Optional callback when a peer is marked dropped. */
-  onPeerDropped?: (peerId: string, playerIndex: number) => void;
-}
-
-export class LockstepRunner {
-  private readonly sim: ShatterDriftSimulation;
-  private readonly transport: MeshTransport;
-  private readonly playerIndices: Map<string, number>;
-  private readonly indexToPeerId: Map<number, string>;
-  private readonly localPlayerIndex: number;
-  private readonly dropTimeoutMs: number;
-  private readonly onTickAdvanced?: (tick: number, actions: Map<number, number>) => void;
-  private readonly onPeerDropped?: (peerId: string, playerIndex: number) => void;
-
-  /** Pending action frames by tick. Map<tick, Map<playerIndex, action>>. */
-  private readonly pending = new Map<number, Map<number, number>>();
-  private readonly droppedPlayers = new Set<number>();
-  /** Wall-clock timestamp we first noticed a tick was waiting (for timeout). */
-  private readonly firstWaitedAt = new Map<number, number>();
-
-  private currentTick: number;
-  private running = false;
-
-  constructor(config: LockstepRunnerConfig) {
-    this.sim = config.sim;
-    this.transport = config.transport;
-    this.playerIndices = new Map(config.playerIndices);
-    this.indexToPeerId = new Map();
-    for (const [peerId, idx] of this.playerIndices) this.indexToPeerId.set(idx, peerId);
-    this.localPlayerIndex = config.localPlayerIndex;
-    this.dropTimeoutMs = config.dropTimeoutMs ?? 2000;
-    this.onTickAdvanced = config.onTickAdvanced;
-    this.onPeerDropped = config.onPeerDropped;
-    this.currentTick = config.startTick;
-  }
-
-  start(): void {
-    this.running = true;
-  }
-
-  stop(): void {
-    this.running = false;
-    this.pending.clear();
-    this.firstWaitedAt.clear();
-  }
-
-  /** Return the next tick the runner is waiting on. */
-  getCurrentTick(): number {
-    return this.currentTick;
-  }
-
-  /** Submit the local player's action for tick `tick`. Should also be sent over transport. */
-  submitLocalInput(tick: number, action: number): void {
-    if (!this.running) return;
-    if (tick < this.currentTick) return; // already advanced past
-    let bucket = this.pending.get(tick);
-    if (!bucket) {
-      bucket = new Map();
-      this.pending.set(tick, bucket);
-    }
-    bucket.set(this.localPlayerIndex, action);
-  }
-
-  /**
-   * Advance the sim as many ticks as possible given currently-available
-   * frames. Drains MeshTransport's queue, then loops while every required
-   * player has submitted a frame for the current tick (or has been
-   * dropped). Returns the number of ticks advanced.
-   */
-  tryAdvance(nowMs: number = performance.now()): number {
-    if (!this.running) return 0;
-
-    // 1. Drain remote frames into the per-tick map.
-    const drained = this.transport.drainQueuedFrames();
-    for (const frame of drained) {
-      if (frame.tick < this.currentTick) continue;
-      let bucket = this.pending.get(frame.tick);
-      if (!bucket) {
-        bucket = new Map();
-        this.pending.set(frame.tick, bucket);
-      }
-      bucket.set(frame.playerIndex, frame.action);
-    }
-
-    // 2. Step while all required players have a frame for currentTick.
-    let advanced = 0;
-    while (this.canAdvance(nowMs)) {
-      const bucket = this.pending.get(this.currentTick) ?? new Map<number, number>();
-      // Fill in dropped players with action=0
-      for (const idx of this.droppedPlayers) {
-        if (!bucket.has(idx)) bucket.set(idx, 0);
-      }
-      // Apply per-player actions, then tick.
-      for (const [idx, action] of bucket) {
-        this.sim.setAction(action, idx);
-      }
-      this.sim.tick();
-      this.onTickAdvanced?.(this.currentTick, bucket);
-      this.pending.delete(this.currentTick);
-      this.firstWaitedAt.delete(this.currentTick);
-      this.currentTick += 1;
-      advanced += 1;
-    }
-    return advanced;
-  }
-
-  private canAdvance(nowMs: number): boolean {
-    const bucket = this.pending.get(this.currentTick);
-    const needed = this.allPlayerIndices();
-    let allHave = true;
-    let firstMissingIdx = -1;
-    for (const idx of needed) {
-      if (this.droppedPlayers.has(idx)) continue;
-      if (!bucket?.has(idx)) {
-        allHave = false;
-        if (firstMissingIdx < 0) firstMissingIdx = idx;
-      }
-    }
-    if (allHave) return true;
-
-    // Track wait start; trigger dropout after threshold.
-    if (!this.firstWaitedAt.has(this.currentTick)) {
-      this.firstWaitedAt.set(this.currentTick, nowMs);
-      return false;
-    }
-    const waitedFor = nowMs - this.firstWaitedAt.get(this.currentTick)!;
-    if (waitedFor >= this.dropTimeoutMs && firstMissingIdx >= 0) {
-      this.markDropped(firstMissingIdx);
-      // After marking dropped, recheck — there might be more missing peers,
-      // but we drop only one per call to keep the contract simple.
-      return this.canAdvance(nowMs);
-    }
-    return false;
-  }
-
-  private allPlayerIndices(): number[] {
-    return Array.from(this.indexToPeerId.keys());
-  }
-
-  private markDropped(playerIndex: number): void {
-    if (this.droppedPlayers.has(playerIndex)) return;
-    this.droppedPlayers.add(playerIndex);
-    const peerId = this.indexToPeerId.get(playerIndex);
-    if (peerId) this.onPeerDropped?.(peerId, playerIndex);
-  }
-}
 
 // ===========================================================================
 // Match start coordinator (Phase 2.6)
