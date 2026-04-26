@@ -98,6 +98,13 @@ export function normalizeCode(code: string): string {
   return code.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 12);
 }
 
+/**
+ * Matches a valid Colyseus room ID: exactly 9 characters from the nanoid
+ * URL-safe alphabet [A-Za-z0-9_-]. Case-sensitive; used for deep-link
+ * validation and invite-URL composition.
+ */
+export const LOBBY_CODE_RE = /^[A-Za-z0-9_-]{9}$/;
+
 export function pickPlayerColor(playerIndex: number): number {
   return PLAYER_COLOR_PALETTE[
     ((playerIndex % PLAYER_COLOR_PALETTE.length) + PLAYER_COLOR_PALETTE.length) % PLAYER_COLOR_PALETTE.length
