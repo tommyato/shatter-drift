@@ -37,7 +37,21 @@ import { fetchLeaderboard, submitScore, fetchGhosts, submitGhost, fetchGhostUplo
 import { GhostRecorder, GhostManager } from "./ghost";
 import { getLocalUsername, setLocalUsername, migrateLegacyUsername } from "./coolname";
 import { MenuNavigation } from "./menu-navigation";
-import { LobbyClient, MeshTransport, normalizeCode, type LobbyPlayer } from "./multiplayer";
+import {
+  LobbyClient,
+  MeshTransport,
+  MatchStartCoordinator,
+  createRemotePlayer,
+  disposeRemotePlayer,
+  normalizeCode,
+  updateRemotePlayer,
+  type LobbyPlayer,
+  type RemotePlayer,
+} from "./multiplayer";
+import { MULTIPLAYER_ENABLED, MULTIPLAYER_HASH_DEBUG, MULTIPLAYER_INPUT_DELAY_TICKS } from "./config";
+import { LockstepRunner, type LockstepTickResult } from "./lockstep-runner";
+import { ShatterDriftSimulation } from "./simulation";
+import type { AuthoritativeStateSnapshot, MultiplayerConfig } from "./types";
 import {
   createRiftFlipState,
   updateRiftFlip,
@@ -246,6 +260,8 @@ enum GameState {
   GameOver,
 }
 
+type MatchState = "idle" | "inLobby" | "inMatch" | "matchOver";
+
 // --- Graze meter tuning ---
 const GRAZE_PHASE_COST = 30;       // units consumed per phase activation
 const GRAZE_FILL_RATE = 20;        // units per second while grazing
@@ -417,11 +433,21 @@ export class Game {
   private multiplayerPlayerListEl!: HTMLElement;
   private multiplayerEmptyEl!: HTMLElement;
   private multiplayerCodeInput!: HTMLInputElement;
+  private multiplayerReadyBtn!: HTMLButtonElement;
   private multiplayerLeaveBtn!: HTMLButtonElement;
   private multiplayerBusy = false;
   private lobbyClient: LobbyClient | null = null;
   private meshTransport: MeshTransport | null = null;
-  private multiplayerTick = 0;
+  private matchCoordinator: MatchStartCoordinator | null = null;
+  private matchState: MatchState = "idle";
+  private lockstepRunner: LockstepRunner | null = null;
+  private multiplayerSim: ShatterDriftSimulation | null = null;
+  private multiplayerConfig: MultiplayerConfig | null = null;
+  private multiplayerAuthoritativeState: AuthoritativeStateSnapshot | null = null;
+  private multiplayerSubmittedTick = -1;
+  private multiplayerLastAdvancedTick = -1;
+  private multiplayerMatchRequested = false;
+  private remotePlayers = new Map<number, RemotePlayer>();
   private pauseMenu!: HTMLElement;
   private gameOverOverlay!: HTMLElement;
 
@@ -669,6 +695,7 @@ export class Game {
     this.multiplayerPlayerListEl = document.getElementById("multiplayer-player-list")!;
     this.multiplayerEmptyEl = document.getElementById("multiplayer-empty")!;
     this.multiplayerCodeInput = document.getElementById("multiplayer-code-input") as HTMLInputElement;
+    this.multiplayerReadyBtn = document.getElementById("multiplayer-ready-btn") as HTMLButtonElement;
     this.multiplayerLeaveBtn = document.getElementById("multiplayer-leave-btn") as HTMLButtonElement;
     this.pauseMenu = document.getElementById("pause-menu")!;
     this.gameOverOverlay = document.getElementById("gameover-overlay")!;
@@ -710,6 +737,10 @@ export class Game {
 
     // Multiplayer lobby UI
     this.initMultiplayerUI();
+    if (!MULTIPLAYER_ENABLED) {
+      const multiplayerBtn = document.getElementById("multiplayer-btn");
+      if (multiplayerBtn) multiplayerBtn.style.display = "none";
+    }
 
     // Daily Challenge button
     this.initDailyButton();
@@ -769,7 +800,7 @@ export class Game {
     const customizeBtn = document.getElementById("customize-btn");
     if (playBtn) items.push(playBtn);
     if (dailyBtn) items.push(dailyBtn);
-    if (multiplayerBtn) items.push(multiplayerBtn);
+    if (MULTIPLAYER_ENABLED && multiplayerBtn) items.push(multiplayerBtn);
     if (customizeBtn) items.push(customizeBtn);
     // Esc / B is a no-op on the title screen — there's nothing to back
     // out to. Pass undefined onCancel so the press is harmlessly ignored.
@@ -797,6 +828,7 @@ export class Game {
     const items: HTMLElement[] = [];
     const create = document.getElementById("multiplayer-create-btn");
     const join = document.getElementById("multiplayer-join-btn");
+    if (this.matchState === "inLobby") items.push(this.multiplayerReadyBtn);
     if (create) items.push(create);
     if (join) items.push(join);
     items.push(this.multiplayerLeaveBtn);
@@ -925,6 +957,7 @@ export class Game {
     // ESC to pause/resume
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
+        if (this.matchState !== "idle") return;
         if (this.state === GameState.Playing) {
           this.pauseGame();
         } else if (this.state === GameState.Paused) {
@@ -1044,10 +1077,18 @@ export class Game {
   }
 
   private initMultiplayerUI() {
+    if (!MULTIPLAYER_ENABLED) return;
     this.lobbyClient = new LobbyClient(getLocalUsername());
     this.meshTransport = new MeshTransport(this.lobbyClient);
+    this.matchCoordinator = new MatchStartCoordinator(this.lobbyClient, this.meshTransport, {
+      onMatchStart: (config) => this.beginMultiplayerMatch(config),
+      onError: (message) => this.setMultiplayerStatus(message, true),
+    });
     this.lobbyClient.subscribe({
-      onPlayersChanged: (players) => this.renderLobbyPlayers(players),
+      onPlayersChanged: (players) => {
+        this.renderLobbyPlayers(players);
+        this.maybeStartReadyMatch(players);
+      },
       onError: (message) => this.setMultiplayerStatus(message, true),
       onLobbyClosed: (message) => {
         this.setMultiplayerStatus(message, true);
@@ -1082,6 +1123,9 @@ export class Game {
     joinBtn.addEventListener("click", () => {
       void this.joinMultiplayerLobby();
     });
+    this.multiplayerReadyBtn.addEventListener("click", () => {
+      void this.readyMultiplayerLobby();
+    });
     this.multiplayerLeaveBtn.addEventListener("click", () => {
       void this.leaveOrCloseMultiplayer();
     });
@@ -1090,13 +1134,16 @@ export class Game {
   }
 
   private openMultiplayerModal() {
+    if (!MULTIPLAYER_ENABLED) return;
     if (this.multiplayerOpen) return;
     this.multiplayerOpen = true;
     this.multiplayerModal.classList.remove("hidden");
     this.multiplayerCodeInput.value = "";
-    this.setMultiplayerStatus("Create a lobby or join one with a 6-character code.");
-    this.multiplayerCodeEl.textContent = "";
-    this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+    if (this.matchState !== "inLobby") {
+      this.setMultiplayerStatus("Create a lobby or join one with a 6-character code.");
+      this.multiplayerCodeEl.textContent = "";
+    }
+    this.updateMultiplayerLobbyControls();
     this.applyMultiplayerMenuScope();
     this.menuNavSuppressFrames = 2;
   }
@@ -1113,7 +1160,7 @@ export class Game {
         ? "Waiting for players..."
         : "No active lobby yet.";
       this.multiplayerPlayerListEl.querySelectorAll(".mp-player-row").forEach((el) => el.remove());
-      this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+      this.updateMultiplayerLobbyControls();
       return;
     }
 
@@ -1125,11 +1172,11 @@ export class Game {
       row.innerHTML = `
         <span class="slot">P${player.playerIndex + 1}</span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${player.name}</span>
-        <span class="you">${player.isLocal ? "YOU" : "READY"}</span>
+        <span class="you">${player.isLocal ? (player.ready ? "YOU READY" : "YOU") : (player.ready ? "READY" : "WAITING")}</span>
       `;
       this.multiplayerPlayerListEl.appendChild(row);
     }
-    this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+    this.updateMultiplayerLobbyControls();
   }
 
   private async syncLobbyNameFromStorage() {
@@ -1139,13 +1186,14 @@ export class Game {
   }
 
   private async createMultiplayerLobby() {
-    if (!this.lobbyClient || !this.meshTransport || this.multiplayerBusy) return;
+    if (!this.lobbyClient || !this.meshTransport || !this.matchCoordinator || this.multiplayerBusy) return;
     this.multiplayerBusy = true;
     try {
       await this.syncLobbyNameFromStorage();
       const code = await this.lobbyClient.createLobby();
       this.meshTransport.start();
-      this.multiplayerTick = 0;
+      this.matchCoordinator.start();
+      this.transitionToLobby();
       this.multiplayerCodeEl.textContent = `LOBBY CODE: ${code}`;
       this.setMultiplayerStatus(`Lobby ${code} live. Share the code and wait for players.`);
       this.renderLobbyPlayers(this.lobbyClient.getPlayers());
@@ -1157,19 +1205,34 @@ export class Game {
   }
 
   private async joinMultiplayerLobby() {
-    if (!this.lobbyClient || !this.meshTransport || this.multiplayerBusy) return;
+    if (!this.lobbyClient || !this.meshTransport || !this.matchCoordinator || this.multiplayerBusy) return;
     this.multiplayerBusy = true;
     try {
       await this.syncLobbyNameFromStorage();
       const players = await this.lobbyClient.joinLobby(this.multiplayerCodeInput.value);
       this.meshTransport.start();
-      this.multiplayerTick = 0;
+      this.matchCoordinator.start();
+      this.transitionToLobby();
       const code = this.lobbyClient.getLobbyCode();
       this.multiplayerCodeEl.textContent = code ? `JOINED: ${code}` : "";
       this.setMultiplayerStatus(`Joined lobby ${code}. WebRTC mesh is connecting.`);
       this.renderLobbyPlayers(players);
     } catch (error) {
       this.setMultiplayerStatus(error instanceof Error ? error.message : "Failed to join lobby.", true);
+    } finally {
+      this.multiplayerBusy = false;
+    }
+  }
+
+  private async readyMultiplayerLobby() {
+    if (!this.lobbyClient || this.multiplayerBusy || this.matchState !== "inLobby") return;
+    this.multiplayerBusy = true;
+    try {
+      await this.lobbyClient.setReady(true);
+      this.setMultiplayerStatus("Ready. Waiting for the rest of the lobby.");
+      this.renderLobbyPlayers(this.lobbyClient.getPlayers());
+    } catch (error) {
+      this.setMultiplayerStatus(error instanceof Error ? error.message : "Failed to mark ready.", true);
     } finally {
       this.multiplayerBusy = false;
     }
@@ -1183,13 +1246,22 @@ export class Game {
     }
     this.multiplayerBusy = true;
     try {
+      this.matchCoordinator?.stop();
       await this.meshTransport.stop();
       await this.lobbyClient.leaveLobby();
+      this.disposeRemotePlayers();
+      this.multiplayerSim = null;
+      this.lockstepRunner = null;
+      this.multiplayerConfig = null;
+      this.multiplayerAuthoritativeState = null;
+      this.multiplayerSubmittedTick = -1;
+      this.multiplayerLastAdvancedTick = -1;
       this.multiplayerCodeEl.textContent = "";
       this.multiplayerCodeInput.value = "";
       this.setMultiplayerStatus("Returned to singleplayer title.");
       this.renderLobbyPlayers([]);
       this.closeMultiplayerModal();
+      this.transitionToIdle();
     } finally {
       this.multiplayerBusy = false;
     }
@@ -1264,13 +1336,13 @@ export class Game {
     let dt = Math.min(this.clock.getDelta(), 0.05);
 
     // Apply slow-mo from power-ups
-    if (this.state === GameState.Playing) {
+    if (this.state === GameState.Playing && this.matchState === "idle") {
       const puTimeScale = this.powerups.getTimeScale();
       dt *= puTimeScale;
     }
 
     // Death slow-mo — dramatic time dilation before game over screen
-    if (this.deathSlowMo) {
+    if (this.deathSlowMo && this.matchState === "idle") {
       this.deathSlowMoTimer -= dt;
       const deathProgress = 1 - Math.max(0, this.deathSlowMoTimer / 0.6);
       // Start at 20% speed, ease out to 5%
@@ -1315,10 +1387,6 @@ export class Game {
       this.handlePauseMenuLeftRight();
     }
 
-    if (this.meshTransport) {
-      this.meshTransport.sendInputFrame(this.multiplayerTick++, this.encodeNetworkAction());
-    }
-
     switch (this.state) {
       case GameState.Title:
         this.updateTitle(dt, menuConsumedActivate);
@@ -1327,7 +1395,13 @@ export class Game {
         this.updateLaunching(dt);
         break;
       case GameState.Playing:
-        this.updatePlaying(dt);
+        if (this.matchState === "inMatch") {
+          this.updateMultiplayerPlaying(dt);
+        } else if (this.matchState === "matchOver") {
+          this.updateMultiplayerMatchOver(dt, menuConsumedActivate);
+        } else {
+          this.updatePlaying(dt);
+        }
         break;
       case GameState.Paused:
         // Frozen — only render, don't update game logic
@@ -1452,6 +1526,301 @@ export class Game {
     if (boost) action |= 0x08;
     if (brake) action |= 0x10;
     return action;
+  }
+
+  private transitionToLobby() {
+    this.matchState = "inLobby";
+    this.multiplayerMatchRequested = false;
+    this.updateMultiplayerLobbyControls();
+  }
+
+  private transitionToIdle() {
+    this.matchState = "idle";
+    this.lockstepRunner?.stop();
+    this.lockstepRunner = null;
+    this.multiplayerSim = null;
+    this.multiplayerConfig = null;
+    this.multiplayerAuthoritativeState = null;
+    this.multiplayerSubmittedTick = -1;
+    this.multiplayerLastAdvancedTick = -1;
+    this.multiplayerMatchRequested = false;
+    this.disposeRemotePlayers();
+    this.world.reset();
+    this.world.setRenderMode("sp");
+    this.biomes.reset();
+    this.applyBiomeColors();
+    this.player.group.visible = this.customizeOpen;
+    this.player.shattered = false;
+    this.player.group.position.set(0, 0, 0);
+    this.hud.classList.add("hidden");
+    this.titleOverlay.classList.remove("hidden");
+    this.centerMessage.style.opacity = "0";
+    this.centerTitle.textContent = "";
+    this.centerStats.innerHTML = "";
+    this.centerRetry.textContent = "";
+    this.pauseMenu.classList.add("hidden");
+    this.multiplayerReadyBtn.disabled = false;
+    this.state = GameState.Title;
+    this.applyTitleMenuScope();
+    this.menuNavSuppressFrames = 2;
+  }
+
+  private transitionToMatch(config: MultiplayerConfig) {
+    this.matchState = "inMatch";
+    this.multiplayerConfig = config;
+    this.multiplayerMatchRequested = false;
+    this.lockstepRunner?.stop();
+    this.disposeRemotePlayers();
+
+    const sim = new ShatterDriftSimulation({
+      seed: config.seed,
+      playerCount: config.players.length,
+      localPlayerIndex: config.localPlayerIndex,
+      playerNames: config.players.map((player) => player.name),
+      playerColors: config.players.map((player) => player.color),
+    });
+    this.multiplayerSim = sim;
+    this.multiplayerSubmittedTick = config.startTick - 1;
+    this.multiplayerLastAdvancedTick = config.startTick - 1;
+
+    const playerIndices = new Map<string, number>();
+    for (const player of config.players) playerIndices.set(player.peerId, player.playerIndex);
+
+    this.lockstepRunner = new LockstepRunner({
+      sim,
+      transport: this.meshTransport!,
+      playerIndices,
+      localPlayerIndex: config.localPlayerIndex,
+      startTick: config.startTick,
+      onTickAdvanced: (tick: number, _actions: Map<number, number>, result: LockstepTickResult) => {
+        this.multiplayerLastAdvancedTick = tick;
+        this.multiplayerAuthoritativeState = sim.getAuthoritativeState();
+        if (MULTIPLAYER_HASH_DEBUG && (tick + 1) % 60 === 0) {
+          const hash = this.hashAuthoritativeState(this.multiplayerAuthoritativeState);
+          console.log("[sd-mp-hash]", { tick: tick + 1, hash, state: this.multiplayerAuthoritativeState });
+        }
+        if (result.events.some((event) => event.type === "death")) {
+          const local = this.multiplayerAuthoritativeState.players[config.localPlayerIndex];
+          if (local && !local.alive) {
+            this.transitionToMatchOver("You shattered.");
+          }
+        }
+      },
+      onPeerDropped: (_peerId: string, playerIndex: number) => {
+        this.setMultiplayerStatus(`Player ${playerIndex + 1} dropped. Filling idle inputs.`);
+      },
+    });
+    this.lockstepRunner.start();
+    this.matchCoordinator?.stop();
+
+    this.world.reset();
+    this.world.setRenderMode("mp-renderer");
+    this.biomes.reset();
+    this.powerups.reset();
+    this.bossWaves.reset();
+    this.speedGates.reset();
+    this.worldEvents.reset();
+    this.ghostManager.hideAll();
+    this.gameOverOverlay.classList.remove("active");
+
+    this.score = 0;
+    this.distance = 0;
+    this.speed = INITIAL_SPEED;
+    this.playerZ = 0;
+    this.phaseEnergy = 1;
+    this.phaseLocked = false;
+    this.phaseMeter = 100;
+    this.boostCooldown = 0;
+    this.brakeCooldown = 0;
+    this.player.applySkin(this.unlocks.getSelectedCrystal());
+    this.player.group.visible = true;
+    this.player.group.position.set(0, 0, 0);
+    this.player.shattered = false;
+    this.riftFlipLerp = 0;
+    this.riftWarningTimer = 0;
+    if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
+
+    this.titleOverlay.classList.add("hidden");
+    this.customizePanel.classList.add("hidden");
+    this.multiplayerOpen = false;
+    this.multiplayerModal.classList.add("hidden");
+    this.hud.classList.remove("hidden");
+    this.centerMessage.style.opacity = "0";
+    this.menuNav.detach();
+    this.menuNavSuppressFrames = 4;
+    this.state = GameState.Playing;
+
+    for (const player of config.players) {
+      if (player.playerIndex === config.localPlayerIndex) continue;
+      const remote = createRemotePlayer(player.playerIndex, player.name, player.color);
+      this.remotePlayers.set(player.playerIndex, remote);
+      this.scene.add(remote.group);
+    }
+
+    this.multiplayerAuthoritativeState = sim.getAuthoritativeState();
+    this.world.applyAuthoritativeState(sim.getState());
+    this.applyMultiplayerAuthoritativeState(1 / 60);
+    this.updateMultiplayerHud();
+    this.setMultiplayerStatus("Match live.");
+  }
+
+  private transitionToMatchOver(reason: string) {
+    if (this.matchState !== "inMatch") return;
+    this.matchState = "matchOver";
+    this.multiplayerMatchRequested = false;
+    this.lockstepRunner?.stop();
+    this.lockstepRunner = null;
+    this.multiplayerSim = null;
+    this.multiplayerConfig = null;
+    this.disposeRemotePlayers();
+    this.centerTitle.textContent = "MATCH ENDED";
+    this.centerStats.innerHTML = `<div>${reason}</div><div style="margin-top:8px">DISTANCE: ${Math.floor(this.distance)}m</div>`;
+    this.centerRetry.textContent = "PRESS SPACE OR CLICK TO RETURN";
+    this.centerMessage.style.opacity = "1";
+    this.menuNav.detach();
+    this.menuNavSuppressFrames = 6;
+  }
+
+  private maybeStartReadyMatch(players: LobbyPlayer[]) {
+    if (this.matchState !== "inLobby" || !this.matchCoordinator || !this.meshTransport || this.multiplayerBusy) return;
+    if (this.multiplayerMatchRequested) return;
+    if (players.length < 2) return;
+    const local = players.find((player) => player.isLocal);
+    if (!local?.ready) return;
+    if (!players.every((player) => player.ready)) return;
+    if (this.meshTransport.getConnectedPeerIds().length < players.length - 1) {
+      this.setMultiplayerStatus("Everyone is ready. Waiting for peer connections to finish.");
+      return;
+    }
+    const started = this.matchCoordinator.requestMatchStart();
+    this.multiplayerMatchRequested = true;
+    this.setMultiplayerStatus(started ? "All players ready. Starting match..." : "Ready. Waiting for the host to start.");
+  }
+
+  private updateMultiplayerLobbyControls() {
+    const inLobby = this.matchState === "inLobby" && !!this.lobbyClient?.getLobbyCode();
+    const createBtn = document.getElementById("multiplayer-create-btn") as HTMLButtonElement | null;
+    const joinBtn = document.getElementById("multiplayer-join-btn") as HTMLButtonElement | null;
+    this.multiplayerReadyBtn.style.display = inLobby ? "" : "none";
+    this.multiplayerReadyBtn.disabled = !inLobby || this.lobbyClient?.getPlayers().find((player) => player.isLocal)?.ready === true;
+    this.multiplayerLeaveBtn.textContent = inLobby ? "LEAVE" : "BACK";
+    if (createBtn) createBtn.disabled = inLobby;
+    if (joinBtn) joinBtn.disabled = inLobby;
+    this.multiplayerCodeInput.disabled = inLobby;
+  }
+
+  private disposeRemotePlayers() {
+    for (const remote of this.remotePlayers.values()) {
+      this.scene.remove(remote.group);
+      disposeRemotePlayer(remote);
+    }
+    this.remotePlayers.clear();
+  }
+
+  private updateMultiplayerPlaying(dt: number) {
+    if (!this.lockstepRunner || !this.multiplayerSim || !this.multiplayerConfig) return;
+
+    const targetTick = this.lockstepRunner.getCurrentTick() + MULTIPLAYER_INPUT_DELAY_TICKS;
+    const action = this.encodeNetworkAction();
+    while (this.multiplayerSubmittedTick < targetTick) {
+      this.multiplayerSubmittedTick += 1;
+      this.lockstepRunner.submitLocalInput(this.multiplayerSubmittedTick, action);
+      this.meshTransport?.sendInputFrame(this.multiplayerSubmittedTick, action);
+    }
+
+    this.lockstepRunner.tryAdvance();
+    if (this.matchState !== "inMatch") return;
+
+    const state = this.multiplayerSim.getState();
+    this.multiplayerAuthoritativeState = this.multiplayerSim.getAuthoritativeState();
+    this.world.applyAuthoritativeState(state);
+    this.applyMultiplayerAuthoritativeState(dt);
+    this.updateMultiplayerHud();
+  }
+
+  private applyMultiplayerAuthoritativeState(dt: number) {
+    if (!this.multiplayerAuthoritativeState || !this.multiplayerConfig) return;
+    const local = this.multiplayerAuthoritativeState.players[this.multiplayerConfig.localPlayerIndex];
+    if (!local) return;
+
+    this.playerZ = local.z;
+    this.distance = Math.floor(local.z);
+    this.score = Math.round(local.score);
+    this.speed = local.speed;
+    this.phaseEnergy = local.phaseEnergy;
+    this.phaseLocked = local.phaseLocked;
+    this.phaseMeter = local.phaseEnergy * 100;
+    this.boostCooldown = local.boostCooldown;
+    this.brakeCooldown = local.brakeCooldown;
+    this.player.shattered = local.shattered;
+    this.player.laneX = local.x;
+    this.player.setShieldActive(false);
+    this.player.update(dt, 0);
+    this.player.group.position.z = local.z;
+
+    for (const player of this.multiplayerAuthoritativeState.players) {
+      if (player.playerIndex === this.multiplayerConfig.localPlayerIndex) continue;
+      const remote = this.remotePlayers.get(player.playerIndex);
+      if (!remote) continue;
+      updateRemotePlayer(remote, player, dt);
+    }
+
+    const biomeChanged = this.biomes.update(this.distance);
+    if (biomeChanged) {
+      this.milestones.showBiomeAnnouncement(this.biomes.currentBiome.displayName);
+      playBiomeTransition();
+    }
+    this.applyBiomeColors();
+    this.world.update(dt, local.z, local.x, local.speed, local.shattered);
+
+    this.targetFOV = this.baseFOV + Math.min(local.speed / MAX_SPEED, 1) * 12;
+    this.targetCameraRoll = 0;
+    const targetCam = new THREE.Vector3(local.x, this.cameraOffset.y, local.z + this.cameraOffset.z);
+    this.camera.position.lerp(targetCam, 1 - Math.exp(-8 * dt));
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(local.x, 0.5, local.z + 15);
+
+    this.rimLight.position.set(local.x, 2, local.z - 3);
+    this.tunnelLight.position.set(local.x, 3, local.z + 15);
+    this.speedLines.update(Math.min(local.speed / MAX_SPEED, 1), 0x00ffcc);
+    this.vignette.setStyle(0x000000, false, 0.8);
+    this.vignette.setIntensity(Math.min(local.speed / MAX_SPEED, 1) * 0.25);
+  }
+
+  private updateMultiplayerHud() {
+    this.hudScore.textContent = this.score.toLocaleString();
+    this.hudDistance.textContent = `${Math.floor(this.distance)}m`;
+    this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
+    this.hudCombo.textContent = "MULTI";
+    this.hudState.textContent = this.player.shattered ? "PHASE" : "SOLID";
+    this.updatePhaseHud();
+    this.updateGrazeMeterHud();
+    this.updateBoostBrakeHud();
+  }
+
+  private updateMultiplayerMatchOver(dt: number, menuConsumedActivate: boolean) {
+    this.camera.position.y += dt * 0.2;
+    const shouldReturn =
+      !menuConsumedActivate &&
+      this.menuNavSuppressFrames === 0 &&
+      (this.input.justPressed("space") || this.input.justPressed("click"));
+    if (shouldReturn) {
+      void this.leaveOrCloseMultiplayer();
+    }
+  }
+
+  private beginMultiplayerMatch(config: MultiplayerConfig) {
+    this.transitionToMatch(config);
+  }
+
+  private hashAuthoritativeState(state: AuthoritativeStateSnapshot): string {
+    const json = JSON.stringify(state);
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < json.length; i++) {
+      hash ^= json.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0");
   }
 
   // --- Playing ---
