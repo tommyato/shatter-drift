@@ -45,6 +45,7 @@ import {
   createRemotePlayer,
   disposeRemotePlayer,
   normalizeCode,
+  LOBBY_CODE_RE,
   updateRemotePlayer,
   type LobbyPlayer,
   type RemotePlayer,
@@ -438,6 +439,8 @@ export class Game {
   private multiplayerCodeInput!: HTMLInputElement;
   private multiplayerReadyBtn!: HTMLButtonElement;
   private multiplayerLeaveBtn!: HTMLButtonElement;
+  private multiplayerCopyLinkBtn!: HTMLButtonElement;
+  private multiplayerCopyLinkFallbackEl!: HTMLInputElement;
   private multiplayerBusy = false;
   private lobbyClient: LobbyClient | null = null;
   private meshTransport: MeshTransport | null = null;
@@ -717,6 +720,8 @@ export class Game {
     this.multiplayerCodeInput = document.getElementById("multiplayer-code-input") as HTMLInputElement;
     this.multiplayerReadyBtn = document.getElementById("multiplayer-ready-btn") as HTMLButtonElement;
     this.multiplayerLeaveBtn = document.getElementById("multiplayer-leave-btn") as HTMLButtonElement;
+    this.multiplayerCopyLinkBtn = document.getElementById("multiplayer-copy-link-btn") as HTMLButtonElement;
+    this.multiplayerCopyLinkFallbackEl = document.getElementById("multiplayer-copy-link-fallback") as HTMLInputElement;
     this.pauseMenu = document.getElementById("pause-menu")!;
     this.gameOverOverlay = document.getElementById("gameover-overlay")!;
 
@@ -1164,6 +1169,30 @@ export class Game {
     this.multiplayerLeaveBtn.addEventListener("click", () => {
       void this.leaveOrCloseMultiplayer();
     });
+    this.multiplayerCopyLinkBtn.addEventListener("click", () => {
+      const code = this.lobbyClient?.getLobbyCode();
+      if (!code || !LOBBY_CODE_RE.test(code)) return;
+      const url = this.buildInviteUrl(code);
+      // Emit postMessage to parent frame so the portal can optionally handle it.
+      if (window.parent !== window) {
+        try { window.parent.postMessage({ type: "sd-mp-invite-link", code, fallbackUrl: url }, "*"); } catch { /* cross-origin */ }
+      }
+      const prevText = this.multiplayerStatusEl.textContent ?? "";
+      const prevIsError = this.multiplayerStatusEl.classList.contains("error");
+      void navigator.clipboard.writeText(url).then(() => {
+        this.setMultiplayerStatus("Invite link copied — send it to a friend.", false, true);
+        setTimeout(() => {
+          if (this.multiplayerStatusEl.textContent === "Invite link copied — send it to a friend.") {
+            this.setMultiplayerStatus(prevText, prevIsError);
+          }
+        }, 2000);
+      }).catch(() => {
+        this.multiplayerCopyLinkFallbackEl.value = url;
+        this.multiplayerCopyLinkFallbackEl.style.display = "";
+        this.multiplayerCopyLinkFallbackEl.select();
+        this.setMultiplayerStatus("Couldn't auto-copy — use the box below.");
+      });
+    });
 
     this.renderLobbyPlayers([]);
 
@@ -1184,6 +1213,11 @@ export class Game {
           this.setMultiplayerStatus(err instanceof Error ? err.message : "auto-quickmatch failed", true);
         }
       })();
+    } else {
+      // Deep-link auto-join: if the URL has ?lobby=<9-char code>, open the
+      // modal and trigger join automatically. Skipped when mp_auto is active
+      // (smoke harness) to avoid conflicting with the quickmatch flow.
+      this.checkDeepLinkLobby();
     }
   }
 
@@ -1202,9 +1236,10 @@ export class Game {
     this.menuNavSuppressFrames = 2;
   }
 
-  private setMultiplayerStatus(message: string, isError = false) {
+  private setMultiplayerStatus(message: string, isError = false, isInfo = false) {
     this.multiplayerStatusEl.textContent = message;
     this.multiplayerStatusEl.classList.toggle("error", isError);
+    this.multiplayerStatusEl.classList.toggle("info", isInfo && !isError);
   }
 
   private renderLobbyPlayers(players: LobbyPlayer[]) {
@@ -1271,8 +1306,10 @@ export class Game {
       this.multiplayerCodeEl.textContent = code ? `JOINED: ${code}` : "";
       this.setMultiplayerStatus(`Joined lobby ${code}. WebRTC mesh is connecting.`);
       this.renderLobbyPlayers(players);
+      this.clearLobbyUrlParam();
     } catch (error) {
       this.setMultiplayerStatus(error instanceof Error ? error.message : "Failed to join lobby.", true);
+      this.clearLobbyUrlParam();
     } finally {
       this.multiplayerBusy = false;
     }
@@ -1347,6 +1384,59 @@ export class Game {
     } finally {
       this.multiplayerBusy = false;
     }
+  }
+
+  /**
+   * Build a shareable invite URL embedding the lobby code.
+   * When iframed, prefers the parent page's URL (via document.referrer) so the
+   * link points at the portal rather than the iframe src. Otherwise uses the
+   * current window location. Existing query params are preserved; any stale
+   * `?lobby=` param is replaced.
+   */
+  private buildInviteUrl(code: string): string {
+    let basePath: string;
+    if (window.parent !== window && document.referrer) {
+      try {
+        const ref = new URL(document.referrer);
+        basePath = ref.origin + ref.pathname;
+      } catch {
+        basePath = window.location.origin + window.location.pathname;
+      }
+    } else {
+      basePath = window.location.origin + window.location.pathname;
+    }
+    const params = new URLSearchParams(window.location.search);
+    params.delete("lobby");
+    params.set("lobby", code);
+    return basePath + "?" + params.toString();
+  }
+
+  /** Remove `?lobby=` from the address bar without adding a history entry. */
+  private clearLobbyUrlParam() {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("lobby")) return;
+    params.delete("lobby");
+    const newSearch = params.toString();
+    history.replaceState({}, "", window.location.pathname + (newSearch ? "?" + newSearch : ""));
+  }
+
+  /**
+   * If the page loaded with `?lobby=<code>`, open the MP modal and auto-join.
+   * Called at the end of initMultiplayerUI() — skipped when mp_auto=1 (smoke harness).
+   * Silent no-op for invalid or absent codes.
+   */
+  private checkDeepLinkLobby() {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("lobby");
+    if (!code || !LOBBY_CODE_RE.test(code)) return;
+    // Open modal, pre-fill the code, then trigger join after a short delay so
+    // the audio context has a chance to initialise and the UI is painted first.
+    this.openMultiplayerModal();
+    this.multiplayerCodeInput.value = code;
+    this.setMultiplayerStatus(`Joining lobby ${code}…`);
+    setTimeout(() => {
+      void this.joinMultiplayerLobby();
+    }, 250);
   }
 
   private initDailyButton() {
@@ -1882,6 +1972,7 @@ export class Game {
 
   private updateMultiplayerLobbyControls() {
     const inLobby = this.matchState === "inLobby" && !!this.lobbyClient?.getLobbyCode();
+    const isHost = inLobby && (this.lobbyClient?.isHost() ?? false);
     const createBtn = document.getElementById("multiplayer-create-btn") as HTMLButtonElement | null;
     const joinBtn = document.getElementById("multiplayer-join-btn") as HTMLButtonElement | null;
     this.multiplayerReadyBtn.style.display = inLobby ? "" : "none";
@@ -1890,6 +1981,9 @@ export class Game {
     if (createBtn) createBtn.disabled = inLobby;
     if (joinBtn) joinBtn.disabled = inLobby;
     this.multiplayerCodeInput.disabled = inLobby;
+    // COPY LINK visible only when we're the host with an active lobby code.
+    this.multiplayerCopyLinkBtn.style.display = isHost ? "" : "none";
+    if (!isHost) this.multiplayerCopyLinkFallbackEl.style.display = "none";
   }
 
   private disposeRemotePlayers() {

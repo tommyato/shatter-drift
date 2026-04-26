@@ -627,14 +627,47 @@
       letter-spacing: 2px;
       text-transform: uppercase;
     }
+    #multiplayer-code-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      min-height: 18px;
+    }
     #multiplayer-current-code {
       font-family: 'Orbitron', monospace;
       font-size: 13px;
       letter-spacing: 3px;
       color: #7ce8ff;
       text-align: center;
-      margin-bottom: 12px;
-      min-height: 18px;
+      flex: 1;
+    }
+    #multiplayer-copy-link-btn {
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      padding: 7px 10px;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    #multiplayer-copy-link-fallback {
+      width: 100%;
+      font-family: 'Orbitron', monospace;
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      color: #7ce8ff;
+      background: rgba(0,12,22,0.78);
+      border: 1px solid rgba(124,232,255,0.18);
+      border-radius: 6px;
+      padding: 8px 10px;
+      text-align: center;
+      margin-bottom: 8px;
+      outline: none;
+      box-sizing: border-box;
+      cursor: text;
+    }
+    #multiplayer-status.info {
+      color: #00ffcc;
     }
     #multiplayer-player-list {
       flex: 1;
@@ -993,7 +1026,11 @@
           <input id="multiplayer-code-input" data-ui type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="12" placeholder="lobby code">
           <button id="multiplayer-join-btn" class="mp-btn" data-ui>JOIN</button>
         </div>
-        <div id="multiplayer-current-code"></div>
+        <div id="multiplayer-code-row">
+          <div id="multiplayer-current-code"></div>
+          <button id="multiplayer-copy-link-btn" class="mp-btn" style="display:none" data-ui>📋 COPY LINK</button>
+        </div>
+        <input id="multiplayer-copy-link-fallback" type="text" readonly tabindex="-1" style="display:none">
         <div id="multiplayer-player-list">
           <div id="multiplayer-empty">No active lobby yet.</div>
         </div>
