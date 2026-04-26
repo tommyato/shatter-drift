@@ -341,28 +341,47 @@ function createAgentInput() {
 }
 
 // src/sim-world.ts
-function createInitialState() {
+var DEFAULT_PLAYER_COLORS = [4973055, 16736162, 16765515, 8126303];
+function createInitialPlayer(index, name, color) {
   return {
-    playerX: 0,
-    playerZ: 0,
-    shattered: false,
-    phaseEnergy: 1,
-    phaseLocked: false,
-    phaseCooldown: 0,
-    phaseMinTimer: 0,
+    playerIndex: index,
+    name,
+    color,
+    x: 0,
+    z: 0,
     speed: 0,
     speedMod: 1,
     boostTimer: 0,
     boostCooldown: 0,
     brakeTimer: 0,
     brakeCooldown: 0,
-    score: 0,
     alive: true,
+    shattered: false,
+    phaseEnergy: 1,
+    phaseLocked: false,
+    phaseCooldown: 0,
+    phaseMinTimer: 0,
+    score: 0,
+    lastCloseCallZ: -10
+  };
+}
+function createInitialState(playerCount, playerNames, playerColors) {
+  const players = [];
+  for (let i = 0; i < playerCount; i++) {
+    players.push(
+      createInitialPlayer(
+        i,
+        playerNames[i] ?? `P${i + 1}`,
+        playerColors[i] ?? DEFAULT_PLAYER_COLORS[i % DEFAULT_PLAYER_COLORS.length]
+      )
+    );
+  }
+  return {
+    players,
     obstacles: [],
     orbs: [],
     nextObstacleZ: 30,
     nextOrbZ: 15,
-    lastCloseCallZ: -10,
     nextBossZ: 500,
     // matches BOSS_INTERVAL in bosswaves.ts
     bossCount: 0,
@@ -375,18 +394,50 @@ function createInitialState() {
     }
   };
 }
-function createSimulationWorld(input, random) {
-  let state = createInitialState();
+function createSimulationWorld(inputs, random, config = {}) {
+  const inputArray = Array.isArray(inputs) ? inputs : [inputs];
+  const playerCount = Math.max(1, config.playerCount ?? inputArray.length);
+  const localPlayerIndex = clamp(config.localPlayerIndex ?? 0, 0, playerCount - 1);
+  const playerNames = config.playerNames ?? [];
+  const playerColors = config.playerColors ?? [];
+  if (inputArray.length < playerCount) {
+    throw new Error(
+      `createSimulationWorld: playerCount=${playerCount} but only ${inputArray.length} input(s) provided`
+    );
+  }
+  let state = createInitialState(playerCount, playerNames, playerColors);
   const events = [];
+  function anchorZ() {
+    let max = -Infinity;
+    for (const p of state.players) {
+      if (!p.alive) continue;
+      if (p.z > max) max = p.z;
+    }
+    return max === -Infinity ? 0 : max;
+  }
+  function trailingZ() {
+    let min = Infinity;
+    for (const p of state.players) {
+      if (!p.alive) continue;
+      if (p.z < min) min = p.z;
+    }
+    return min === Infinity ? 0 : min;
+  }
   return {
-    input,
+    inputs: inputArray,
+    get input() {
+      return inputArray[localPlayerIndex];
+    },
     random,
+    localPlayerIndex,
     get state() {
       return state;
     },
+    anchorZ,
+    trailingZ,
     reset() {
-      state = createInitialState();
-      input.reset();
+      state = createInitialState(playerCount, playerNames, playerColors);
+      for (const input of inputArray) input.reset();
       events.length = 0;
     },
     pushEvent(event) {
@@ -397,22 +448,48 @@ function createSimulationWorld(input, random) {
       events.length = 0;
       return drained;
     },
-    addScore(points) {
-      state.score += points;
+    addScore(points, playerIndex) {
+      const idx = playerIndex ?? localPlayerIndex;
+      const player = state.players[idx];
+      if (player) player.score += points;
     },
     getState() {
-      const cooldown = state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_RECHARGE_RATE : 0;
+      const local = state.players[localPlayerIndex];
+      const cooldown = local.phaseLocked && local.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - local.phaseEnergy) / PHASE_RECHARGE_RATE : 0;
       return {
-        playerX: state.playerX,
-        shattered: state.shattered,
+        playerX: local.x,
+        shattered: local.shattered,
         shatterCooldown: cooldown,
-        speed: state.speed,
-        speedMod: state.speedMod,
-        boostCooldown: state.boostCooldown,
-        brakeCooldown: state.brakeCooldown,
-        distance: state.playerZ,
-        score: Math.round(state.score),
-        alive: state.alive,
+        speed: local.speed,
+        speedMod: local.speedMod,
+        boostCooldown: local.boostCooldown,
+        brakeCooldown: local.brakeCooldown,
+        distance: local.z,
+        score: Math.round(local.score),
+        alive: local.alive,
+        obstacles: state.obstacles.filter((obstacle) => obstacle.active).map((obstacle) => ({
+          z: obstacle.z,
+          x: obstacle.x,
+          halfWidth: obstacle.halfWidth,
+          halfHeight: obstacle.halfHeight,
+          isGate: obstacle.isGate,
+          gapX: obstacle.gapX,
+          gapHalfWidth: obstacle.gapHalfWidth,
+          active: obstacle.active,
+          wallSegments: obstacle.wallSegments?.map((segment) => ({
+            x: segment.x,
+            halfWidth: segment.halfWidth
+          }))
+        })),
+        orbs: state.orbs.filter((orb) => orb.active).map((orb) => ({
+          x: orb.x,
+          z: orb.z
+        }))
+      };
+    },
+    getAuthoritativeState() {
+      return {
+        players: state.players.map((player) => ({ ...player })),
         obstacles: state.obstacles.filter((obstacle) => obstacle.active).map((obstacle) => ({
           z: obstacle.z,
           x: obstacle.x,
@@ -434,17 +511,18 @@ function createSimulationWorld(input, random) {
       };
     },
     getObservation() {
+      const local = state.players[localPlayerIndex];
       const observation = new Float64Array(4 + LOOKAHEAD_OBSTACLES * 4);
-      observation[0] = clamp(state.playerX / PLAYABLE_HALF_WIDTH, -1, 1);
-      observation[1] = state.shattered ? 1 : 0;
-      observation[2] = clamp(state.speed / MAX_SPEED, 0, 1);
-      const energyLock = state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_MIN_THRESHOLD : 0;
-      const cooldownLock = state.phaseCooldown > 0 ? state.phaseCooldown / PHASE_POST_COOLDOWN : 0;
+      observation[0] = clamp(local.x / PLAYABLE_HALF_WIDTH, -1, 1);
+      observation[1] = local.shattered ? 1 : 0;
+      observation[2] = clamp(local.speed / MAX_SPEED, 0, 1);
+      const energyLock = local.phaseLocked && local.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - local.phaseEnergy) / PHASE_MIN_THRESHOLD : 0;
+      const cooldownLock = local.phaseCooldown > 0 ? local.phaseCooldown / PHASE_POST_COOLDOWN : 0;
       observation[3] = clamp(Math.max(energyLock, cooldownLock), 0, 1);
-      const upcoming = state.obstacles.filter((obstacle) => obstacle.active && obstacle.z >= state.playerZ).sort((a, b) => a.z - b.z).slice(0, LOOKAHEAD_OBSTACLES);
+      const upcoming = state.obstacles.filter((obstacle) => obstacle.active && obstacle.z >= local.z).sort((a, b) => a.z - b.z).slice(0, LOOKAHEAD_OBSTACLES);
       upcoming.forEach((obstacle, index) => {
         const offset = 4 + index * 4;
-        observation[offset] = clamp((obstacle.z - state.playerZ) / LOOKAHEAD_DISTANCE, 0, 1);
+        observation[offset] = clamp((obstacle.z - local.z) / LOOKAHEAD_DISTANCE, 0, 1);
         observation[offset + 1] = clamp(
           (obstacle.isGate ? obstacle.gapX : obstacle.x) / PLAYABLE_HALF_WIDTH,
           -1,
@@ -461,12 +539,12 @@ function createSimulationWorld(input, random) {
     }
   };
 }
-function markOrbCollected(world) {
-  world.addScore(ORB_SCORE);
+function markOrbCollected(world, playerIndex) {
+  world.addScore(ORB_SCORE, playerIndex);
   world.pushEvent({ type: "orb_collected" });
 }
-function markCloseCall(world) {
-  world.addScore(CLOSE_CALL_SCORE);
+function markCloseCall(world, playerIndex) {
+  world.addScore(CLOSE_CALL_SCORE, playerIndex);
   world.pushEvent({ type: "close_call" });
 }
 
@@ -490,6 +568,8 @@ function createToken(description) {
 
 // src/tokens.ts
 var RandomToken = createToken("Random");
+var SimulationConfigToken = createToken("SimulationConfig");
+var SimulationInputsToken = createToken("SimulationInputs");
 var SimulationInputToken = createToken("SimulationInput");
 var SimulationWorldToken = createToken("SimulationWorld");
 var SpeedModSystemToken = createToken("SpeedModSystem");
@@ -527,25 +607,25 @@ function createBossAnimationSystem(world) {
 }
 
 // src/systems/collision-system.ts
-function findCollision(world) {
+function findCollisionFor(world, player) {
   for (const obstacle of world.state.obstacles) {
     if (!obstacle.active) {
       continue;
     }
-    const dz = Math.abs(world.state.playerZ - obstacle.z);
+    const dz = Math.abs(player.z - obstacle.z);
     if (dz > 2) {
       continue;
     }
     if (obstacle.isGate && obstacle.wallSegments) {
       for (const segment of obstacle.wallSegments) {
-        const dx2 = Math.abs(world.state.playerX - segment.x);
+        const dx2 = Math.abs(player.x - segment.x);
         if (dx2 < segment.halfWidth + PLAYER_COLLISION_RADIUS - 0.15) {
           return obstacle;
         }
       }
       continue;
     }
-    const dx = Math.abs(world.state.playerX - obstacle.x);
+    const dx = Math.abs(player.x - obstacle.x);
     if (dx < obstacle.halfWidth + PLAYER_COLLISION_RADIUS) {
       return obstacle;
     }
@@ -554,26 +634,25 @@ function findCollision(world) {
 }
 function createCollisionSystem(world) {
   return (_dt) => {
-    if (!world.state.alive || world.state.shattered) {
-      return;
+    for (const player of world.state.players) {
+      if (!player.alive || player.shattered) continue;
+      const hit = findCollisionFor(world, player);
+      if (!hit) continue;
+      player.alive = false;
+      world.pushEvent({ type: "death" });
     }
-    const hit = findCollision(world);
-    if (!hit) {
-      return;
-    }
-    world.state.alive = false;
-    world.pushEvent({ type: "death" });
   };
 }
 
 // src/systems/obstacle-despawn-system.ts
 function createObstacleDespawnSystem(world) {
   return (_dt) => {
+    const cutoff = world.trailingZ();
     for (const obstacle of world.state.obstacles) {
       if (!obstacle.active) {
         continue;
       }
-      if (obstacle.z < world.state.playerZ + DESPAWN_DISTANCE) {
+      if (obstacle.z < cutoff + DESPAWN_DISTANCE) {
         obstacle.active = false;
         if (!obstacle.passed) {
           obstacle.passed = true;
@@ -582,7 +661,7 @@ function createObstacleDespawnSystem(world) {
       }
     }
     for (const orb of world.state.orbs) {
-      if (orb.active && orb.z < world.state.playerZ + DESPAWN_DISTANCE) {
+      if (orb.active && orb.z < cutoff + DESPAWN_DISTANCE) {
         orb.active = false;
       }
     }
@@ -861,7 +940,7 @@ function materializeSpec(world, z, spec) {
   }
 }
 function getObstacleSpacing(world) {
-  const distance = world.state.playerZ;
+  const distance = world.anchorZ();
   if (distance < 300) {
     return 18 + world.random() * 6;
   }
@@ -981,7 +1060,7 @@ function spawnOrbCluster(world, z) {
 function emitPattern(world) {
   const startZ = world.state.nextObstacleZ;
   const ctx = {
-    playerZ: world.state.playerZ,
+    playerZ: world.anchorZ(),
     biome: biomeFromDistance(startZ),
     difficultyT: clamp(startZ / 2e3, 0, 1)
   };
@@ -1008,15 +1087,16 @@ function createObstacleSpawnSystem(world) {
     if (world.state.nextOrbZ === 0) {
       world.state.nextOrbZ = INITIAL_ORB_Z;
     }
-    while (world.state.nextObstacleZ < world.state.playerZ + SPAWN_DISTANCE) {
+    const anchor = world.anchorZ();
+    while (world.state.nextObstacleZ < anchor + SPAWN_DISTANCE) {
       const advance = emitPattern(world);
       world.state.nextObstacleZ += advance;
     }
-    while (world.state.nextOrbZ < world.state.playerZ + SPAWN_DISTANCE) {
+    while (world.state.nextOrbZ < anchor + SPAWN_DISTANCE) {
       spawnOrbCluster(world, world.state.nextOrbZ);
       world.state.nextOrbZ += ORB_SPACING + world.random() * 5;
     }
-    while (world.state.nextBossZ < world.state.playerZ + SPAWN_DISTANCE) {
+    while (world.state.nextBossZ < anchor + SPAWN_DISTANCE) {
       spawnBossWave(world, world.state.nextBossZ);
       world.state.nextBossZ += BOSS_WAVE_INTERVAL;
       world.state.bossCount += 1;
@@ -1070,18 +1150,17 @@ function destroyObstacle(world, obstacle, impactX) {
 // src/systems/orb-system.ts
 function createOrbSystem(world) {
   return (_dt) => {
-    if (!world.state.alive || world.state.shattered) {
-      return;
-    }
     for (const orb of world.state.orbs) {
-      if (!orb.active) {
-        continue;
-      }
-      const dx = world.state.playerX - orb.x;
-      const dz = world.state.playerZ - orb.z;
-      if (Math.sqrt(dx * dx + dz * dz) < 1.1) {
-        orb.active = false;
-        markOrbCollected(world);
+      if (!orb.active) continue;
+      for (const player of world.state.players) {
+        if (!player.alive || player.shattered) continue;
+        const dx = player.x - orb.x;
+        const dz = player.z - orb.z;
+        if (Math.sqrt(dx * dx + dz * dz) < 1.1) {
+          orb.active = false;
+          markOrbCollected(world, player.playerIndex);
+          break;
+        }
       }
     }
   };
@@ -1090,12 +1169,16 @@ function createOrbSystem(world) {
 // src/systems/player-movement-system.ts
 function createPlayerMovementSystem(world) {
   return (dt) => {
-    const input = world.input.getState();
-    world.state.playerX = clamp(
-      world.state.playerX + input.horizontal * PLAYER_MOVE_SPEED * dt,
-      -PLAYABLE_HALF_WIDTH,
-      PLAYABLE_HALF_WIDTH
-    );
+    for (const player of world.state.players) {
+      if (!player.alive) continue;
+      const input = world.inputs[player.playerIndex]?.getState();
+      if (!input) continue;
+      player.x = clamp(
+        player.x + input.horizontal * PLAYER_MOVE_SPEED * dt,
+        -PLAYABLE_HALF_WIDTH,
+        PLAYABLE_HALF_WIDTH
+      );
+    }
   };
 }
 
@@ -1144,12 +1227,14 @@ function updateRiftFlip(state, dt, distance, biomeIndex, canTrigger, rng) {
 // src/systems/rift-flip-system.ts
 function createRiftFlipSystem(world) {
   return (dt) => {
-    const biome = biomeFromDistance(world.state.playerZ);
-    const canTrigger = !world.state.shattered;
+    const anchor = world.anchorZ();
+    const biome = biomeFromDistance(anchor);
+    const anyPhasing = world.state.players.some((p) => p.alive && p.shattered);
+    const canTrigger = !anyPhasing;
     const events = updateRiftFlip(
       world.state.riftFlip,
       dt,
-      world.state.playerZ,
+      anchor,
       biome,
       canTrigger,
       world.random
@@ -1163,82 +1248,85 @@ function createRiftFlipSystem(world) {
 // src/systems/shatter-system.ts
 function createShatterSystem(world) {
   return (dt) => {
-    if (!world.state.alive) {
-      world.state.shattered = false;
-      world.state.phaseMinTimer = 0;
-      return;
-    }
-    const input = world.input.getState();
-    const wasShattered = world.state.shattered;
-    if (world.state.phaseCooldown > 0) {
-      world.state.phaseCooldown = Math.max(0, world.state.phaseCooldown - dt);
-    }
-    if (world.state.phaseMinTimer > 0) {
-      world.state.phaseMinTimer = Math.max(0, world.state.phaseMinTimer - dt);
-    }
-    const wantsToShatter = input.shatter && !world.state.phaseLocked && world.state.phaseCooldown <= 0;
-    const forcedByMinTimer = world.state.phaseMinTimer > 0 && !world.state.phaseLocked;
-    const isPhasing = (wantsToShatter || forcedByMinTimer) && world.state.phaseEnergy > 0;
-    if (isPhasing) {
-      world.state.phaseEnergy = Math.max(0, world.state.phaseEnergy - PHASE_DRAIN_RATE * dt);
-    } else {
-      world.state.phaseEnergy = Math.min(1, world.state.phaseEnergy + PHASE_RECHARGE_RATE * dt);
-    }
-    if (world.state.phaseEnergy <= 0) {
-      world.state.phaseEnergy = 0;
-      world.state.phaseLocked = true;
-      world.state.phaseMinTimer = 0;
-      world.state.shattered = false;
-    } else if (world.state.phaseLocked && world.state.phaseEnergy >= PHASE_MIN_THRESHOLD) {
-      world.state.phaseLocked = false;
-    }
-    world.state.shattered = isPhasing && !world.state.phaseLocked && world.state.phaseEnergy > 0;
-    if (wasShattered && !world.state.shattered) {
-      world.state.phaseCooldown = PHASE_POST_COOLDOWN;
-    }
-    if (world.state.shattered && !wasShattered) {
-      world.state.phaseEnergy = Math.max(0, world.state.phaseEnergy - PHASE_ACTIVATION_COST);
-      world.state.phaseMinTimer = PHASE_MIN_DURATION;
-      if (world.state.phaseEnergy <= 0) {
-        world.state.phaseEnergy = 0;
-        world.state.phaseLocked = true;
-        world.state.phaseMinTimer = 0;
-        world.state.shattered = false;
-      }
-      world.pushEvent({ type: "shatter_activated" });
-    }
-    if (!world.state.shattered) {
-      return;
-    }
-    for (const obstacle of world.state.obstacles) {
-      if (!obstacle.active) {
+    for (const player of world.state.players) {
+      if (!player.alive) {
+        player.shattered = false;
+        player.phaseMinTimer = 0;
         continue;
       }
-      const dz = Math.abs(world.state.playerZ - obstacle.z);
-      if (dz > 1.5) {
+      const input = world.inputs[player.playerIndex]?.getState();
+      if (!input) continue;
+      const wasShattered = player.shattered;
+      if (player.phaseCooldown > 0) {
+        player.phaseCooldown = Math.max(0, player.phaseCooldown - dt);
+      }
+      if (player.phaseMinTimer > 0) {
+        player.phaseMinTimer = Math.max(0, player.phaseMinTimer - dt);
+      }
+      const wantsToShatter = input.shatter && !player.phaseLocked && player.phaseCooldown <= 0;
+      const forcedByMinTimer = player.phaseMinTimer > 0 && !player.phaseLocked;
+      const isPhasing = (wantsToShatter || forcedByMinTimer) && player.phaseEnergy > 0;
+      if (isPhasing) {
+        player.phaseEnergy = Math.max(0, player.phaseEnergy - PHASE_DRAIN_RATE * dt);
+      } else {
+        player.phaseEnergy = Math.min(1, player.phaseEnergy + PHASE_RECHARGE_RATE * dt);
+      }
+      if (player.phaseEnergy <= 0) {
+        player.phaseEnergy = 0;
+        player.phaseLocked = true;
+        player.phaseMinTimer = 0;
+        player.shattered = false;
+      } else if (player.phaseLocked && player.phaseEnergy >= PHASE_MIN_THRESHOLD) {
+        player.phaseLocked = false;
+      }
+      player.shattered = isPhasing && !player.phaseLocked && player.phaseEnergy > 0;
+      if (wasShattered && !player.shattered) {
+        player.phaseCooldown = PHASE_POST_COOLDOWN;
+      }
+      if (player.shattered && !wasShattered) {
+        player.phaseEnergy = Math.max(0, player.phaseEnergy - PHASE_ACTIVATION_COST);
+        player.phaseMinTimer = PHASE_MIN_DURATION;
+        if (player.phaseEnergy <= 0) {
+          player.phaseEnergy = 0;
+          player.phaseLocked = true;
+          player.phaseMinTimer = 0;
+          player.shattered = false;
+        }
+        world.pushEvent({ type: "shatter_activated" });
+      }
+      if (!player.shattered) {
         continue;
       }
-      let withinCloseCall = false;
-      if (obstacle.isGate && obstacle.wallSegments) {
-        if (obstacle.partiallyShattered) {
+      for (const obstacle of world.state.obstacles) {
+        if (!obstacle.active) {
           continue;
         }
-        for (const segment of obstacle.wallSegments) {
-          if (Math.abs(world.state.playerX - segment.x) < segment.halfWidth + 0.8) {
-            withinCloseCall = true;
-            break;
-          }
+        const dz = Math.abs(player.z - obstacle.z);
+        if (dz > 1.5) {
+          continue;
         }
-      } else {
-        withinCloseCall = Math.abs(world.state.playerX - obstacle.x) < obstacle.halfWidth + 0.8;
-      }
-      if (!withinCloseCall) {
-        continue;
-      }
-      destroyObstacle(world, obstacle, world.state.playerX);
-      if (world.state.playerZ - world.state.lastCloseCallZ > 3) {
-        world.state.lastCloseCallZ = world.state.playerZ;
-        markCloseCall(world);
+        let withinCloseCall = false;
+        if (obstacle.isGate && obstacle.wallSegments) {
+          if (obstacle.partiallyShattered) {
+            continue;
+          }
+          for (const segment of obstacle.wallSegments) {
+            if (Math.abs(player.x - segment.x) < segment.halfWidth + 0.8) {
+              withinCloseCall = true;
+              break;
+            }
+          }
+        } else {
+          withinCloseCall = Math.abs(player.x - obstacle.x) < obstacle.halfWidth + 0.8;
+        }
+        if (!withinCloseCall) {
+          continue;
+        }
+        destroyObstacle(world, obstacle, player.x);
+        if (player.z - player.lastCloseCallZ > 3) {
+          player.lastCloseCallZ = player.z;
+          markCloseCall(world, player.playerIndex);
+        }
       }
     }
   };
@@ -1247,49 +1335,59 @@ function createShatterSystem(world) {
 // src/systems/speed-mod-system.ts
 function createSpeedModSystem(world) {
   return (dt) => {
-    const input = world.input.getState();
-    const s = world.state;
-    if (s.boostTimer > 0) {
-      s.boostTimer = Math.max(0, s.boostTimer - dt);
-      if (s.boostTimer === 0) s.boostCooldown = BOOST_COOLDOWN;
+    for (const player of world.state.players) {
+      const input = world.inputs[player.playerIndex]?.getState();
+      if (!input) continue;
+      if (player.boostTimer > 0) {
+        player.boostTimer = Math.max(0, player.boostTimer - dt);
+        if (player.boostTimer === 0) player.boostCooldown = BOOST_COOLDOWN;
+      }
+      if (player.brakeTimer > 0) {
+        player.brakeTimer = Math.max(0, player.brakeTimer - dt);
+        if (player.brakeTimer === 0) player.brakeCooldown = BRAKE_COOLDOWN;
+      }
+      if (player.boostCooldown > 0) player.boostCooldown = Math.max(0, player.boostCooldown - dt);
+      if (player.brakeCooldown > 0) player.brakeCooldown = Math.max(0, player.brakeCooldown - dt);
+      if (input.brake && player.brakeTimer === 0 && player.brakeCooldown === 0) {
+        player.brakeTimer = BRAKE_DURATION;
+        player.boostTimer = 0;
+      } else if (input.boost && player.boostTimer === 0 && player.boostCooldown === 0) {
+        player.boostTimer = BOOST_DURATION;
+        player.brakeTimer = 0;
+      }
+      let target = 1;
+      if (player.brakeTimer > 0) target = BRAKE_MULTIPLIER;
+      else if (player.boostTimer > 0) target = BOOST_MULTIPLIER;
+      const lerpFactor = 1 - Math.exp(-dt / SPEED_MOD_LERP_TIME);
+      player.speedMod += (target - player.speedMod) * lerpFactor;
     }
-    if (s.brakeTimer > 0) {
-      s.brakeTimer = Math.max(0, s.brakeTimer - dt);
-      if (s.brakeTimer === 0) s.brakeCooldown = BRAKE_COOLDOWN;
-    }
-    if (s.boostCooldown > 0) s.boostCooldown = Math.max(0, s.boostCooldown - dt);
-    if (s.brakeCooldown > 0) s.brakeCooldown = Math.max(0, s.brakeCooldown - dt);
-    if (input.brake && s.brakeTimer === 0 && s.brakeCooldown === 0) {
-      s.brakeTimer = BRAKE_DURATION;
-      s.boostTimer = 0;
-    } else if (input.boost && s.boostTimer === 0 && s.boostCooldown === 0) {
-      s.boostTimer = BOOST_DURATION;
-      s.brakeTimer = 0;
-    }
-    let target = 1;
-    if (s.brakeTimer > 0) target = BRAKE_MULTIPLIER;
-    else if (s.boostTimer > 0) target = BOOST_MULTIPLIER;
-    const lerpFactor = 1 - Math.exp(-dt / SPEED_MOD_LERP_TIME);
-    s.speedMod += (target - s.speedMod) * lerpFactor;
   };
 }
 
 // src/systems/world-scroll-system.ts
 function createWorldScrollSystem(world) {
   return (dt) => {
-    world.state.speed = computeSpeed(world.state.playerZ) * world.state.speedMod;
-    world.state.playerZ += world.state.speed * dt;
-    world.addScore(Math.floor(world.state.speed * dt));
+    for (const player of world.state.players) {
+      if (!player.alive) continue;
+      player.speed = computeSpeed(player.z) * player.speedMod;
+      player.z += player.speed * dt;
+      player.score += Math.floor(player.speed * dt);
+    }
   };
 }
 
 // src/runtime.ts
 function createRuntime(config = {}) {
   const container = createContainer();
+  const playerCount = Math.max(1, config.playerCount ?? 1);
+  const localPlayerIndex = Math.max(0, Math.min(playerCount - 1, config.localPlayerIndex ?? 0));
   const random = Number.isFinite(config.seed) && config.seed !== void 0 ? mulberry32(Number(config.seed)) : getSystemRandom();
+  const inputs = Array.from({ length: playerCount }, () => createAgentInput());
   container.bind(RandomToken).toValue(random);
-  container.bind(SimulationInputToken).toFactory(createAgentInput).asSingleton();
-  container.bind(SimulationWorldToken).toFactory(createSimulationWorld).withDeps(SimulationInputToken, RandomToken).asSingleton();
+  container.bind(SimulationConfigToken).toValue(config);
+  container.bind(SimulationInputsToken).toValue(inputs);
+  container.bind(SimulationInputToken).toValue(inputs[localPlayerIndex]);
+  container.bind(SimulationWorldToken).toFactory(createSimulationWorld).withDeps(SimulationInputsToken, RandomToken, SimulationConfigToken).asSingleton();
   container.bind(SpeedModSystemToken).toFactory(createSpeedModSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(PlayerMovementSystemToken).toFactory(createPlayerMovementSystem).withDeps(SimulationWorldToken).asSingleton();
   container.bind(WorldScrollSystemToken).toFactory(createWorldScrollSystem).withDeps(SimulationWorldToken).asSingleton();
@@ -1311,7 +1409,6 @@ function createRuntime(config = {}) {
   const obstacleDespawnSystem = container.get(ObstacleDespawnSystemToken);
   const bossAnimationSystem = container.get(BossAnimationSystemToken);
   const riftFlipSystem = container.get(RiftFlipSystemToken);
-  const input = container.get(SimulationInputToken);
   return {
     container,
     reset() {
@@ -1329,11 +1426,16 @@ function createRuntime(config = {}) {
       obstacleDespawnSystem(dt);
       riftFlipSystem(dt);
     },
-    setAction(action) {
-      input.setAction(action);
+    setAction(action, playerIndex) {
+      const idx = playerIndex ?? localPlayerIndex;
+      const input = inputs[idx];
+      if (input) input.setAction(action);
     },
     getState() {
       return world.getState();
+    },
+    getAuthoritativeState() {
+      return world.getAuthoritativeState();
     },
     getObservation() {
       return world.getObservation().slice();
@@ -1361,6 +1463,10 @@ var ShatterDriftSimulation = class {
       events: []
     };
   }
+  /**
+   * Singleplayer-style step: applies `action` to the local player and advances one tick.
+   * For multiplayer, use `setAction(playerIndex, action)` for each peer's frame, then `tick()`.
+   */
   step(action, dt) {
     const stepDt = this.config.fixedDt ?? (Number.isFinite(dt) ? Number(dt) : DEFAULT_FIXED_DT);
     if (!this.runtime.getState().alive || stepDt <= 0) {
@@ -1376,11 +1482,30 @@ var ShatterDriftSimulation = class {
       events: this.runtime.drainEvents()
     };
   }
+  /** Set a player's input. Default targets the local player. */
+  setAction(action, playerIndex) {
+    this.runtime.setAction(action, playerIndex);
+  }
+  /** Advance one tick using whatever inputs were last set per player. Used by the lockstep runner. */
+  tick(dt) {
+    const stepDt = this.config.fixedDt ?? (Number.isFinite(dt) ? Number(dt) : DEFAULT_FIXED_DT);
+    if (stepDt <= 0) {
+      return { state: this.runtime.getState(), events: [] };
+    }
+    this.runtime.update(stepDt);
+    return {
+      state: this.runtime.getState(),
+      events: this.runtime.drainEvents()
+    };
+  }
   getObservation() {
     return this.runtime.getObservation();
   }
   getState() {
     return this.runtime.getState();
+  }
+  getAuthoritativeState() {
+    return this.runtime.getAuthoritativeState();
   }
 };
 export {

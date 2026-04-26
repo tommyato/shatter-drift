@@ -35,6 +35,12 @@ export interface GameSnapshot {
 	orbs: OrbData[]
 }
 
+export interface AuthoritativeStateSnapshot {
+	players: PlayerState[]
+	obstacles: ObstacleData[]
+	orbs: OrbData[]
+}
+
 export type GameEvent =
 	| { type: 'obstacle_passed' }
 	| { type: 'orb_collected' }

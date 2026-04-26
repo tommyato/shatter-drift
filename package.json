@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && node build.mjs",
     "preview": "vite preview",
-    "test:harness": "node tests/harness.spec.mjs"
+    "test:harness": "node tests/harness.spec.mjs",
+    "determinism": "node tests/harness.spec.mjs",
+    "mp-smoke": "npm run build && node tools/mp-smoke-test.mjs"
   },
   "dependencies": {
     "firebase": "^12.12.1",
