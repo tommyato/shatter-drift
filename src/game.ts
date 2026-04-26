@@ -1095,6 +1095,13 @@ export class Game {
         void this.leaveOrCloseMultiplayer();
       },
     });
+    // Re-evaluate match-start eligibility whenever a mesh peer finishes
+    // connecting. Without this hook, both players can be ready before the
+    // WebRTC data channels finish handshaking — `maybeStartReadyMatch` then
+    // bails on the "waiting for peer connections" branch and never retries.
+    this.meshTransport.setPeerConnectedHandler(() => {
+      if (this.lobbyClient) this.maybeStartReadyMatch(this.lobbyClient.getPlayers());
+    });
 
     const openBtn = document.getElementById("multiplayer-btn")!;
     const createBtn = document.getElementById("multiplayer-create-btn") as HTMLButtonElement;

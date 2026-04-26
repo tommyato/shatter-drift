@@ -52814,7 +52814,7 @@ var LobbyClient = class {
   app = createFirebaseApp();
   db = getFirestore(this.app);
   peerId = createPeerId();
-  buildHash = "6b6bd5a";
+  buildHash = "7900511";
   playerName;
   lobbyCode = null;
   hostPeerId = null;
@@ -53121,6 +53121,7 @@ var MeshTransport = class {
   unsubscribe = null;
   active = false;
   matchHandler = null;
+  peerConnectedHandler = null;
   start() {
     if (this.active) return;
     this.active = true;
@@ -53182,6 +53183,15 @@ var MeshTransport = class {
   /** Register a callback for incoming match-start handshake messages. */
   setMatchHandler(handler) {
     this.matchHandler = handler;
+  }
+  /**
+   * Register a callback that fires when a peer's data channel becomes
+   * hello-validated (i.e. fully usable for match-start handshakes). Used by
+   * the lobby UI to re-evaluate match-start eligibility once mesh peers
+   * finish connecting after both players have already pressed READY.
+   */
+  setPeerConnectedHandler(handler) {
+    this.peerConnectedHandler = handler;
   }
   /** Broadcast a match-start handshake message to every connected peer. */
   broadcastMatchMessage(msg) {
@@ -53322,6 +53332,7 @@ var MeshTransport = class {
       } else {
         state.helloValidated = true;
       }
+      this.peerConnectedHandler?.(state.peerId);
       return;
     }
     if (message.type === "input_frame") {
@@ -55866,6 +55877,9 @@ var Game = class {
         this.setMultiplayerStatus(message, true);
         void this.leaveOrCloseMultiplayer();
       }
+    });
+    this.meshTransport.setPeerConnectedHandler(() => {
+      if (this.lobbyClient) this.maybeStartReadyMatch(this.lobbyClient.getPlayers());
     });
     const openBtn = document.getElementById("multiplayer-btn");
     const createBtn = document.getElementById("multiplayer-create-btn");

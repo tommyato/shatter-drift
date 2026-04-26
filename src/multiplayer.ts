@@ -481,6 +481,7 @@ export class LobbyClient {
 }
 
 type MatchMessageHandler = (msg: MatchStartMessage, fromPeerId: string) => void;
+type PeerConnectedHandler = (peerId: string) => void;
 
 export class MeshTransport {
   private readonly peers = new Map<string, PeerState>();
@@ -489,6 +490,7 @@ export class MeshTransport {
   private unsubscribe: (() => void) | null = null;
   private active = false;
   private matchHandler: MatchMessageHandler | null = null;
+  private peerConnectedHandler: PeerConnectedHandler | null = null;
 
   constructor(private readonly lobby: LobbyClient) {}
 
@@ -559,6 +561,16 @@ export class MeshTransport {
   /** Register a callback for incoming match-start handshake messages. */
   setMatchHandler(handler: MatchMessageHandler | null): void {
     this.matchHandler = handler;
+  }
+
+  /**
+   * Register a callback that fires when a peer's data channel becomes
+   * hello-validated (i.e. fully usable for match-start handshakes). Used by
+   * the lobby UI to re-evaluate match-start eligibility once mesh peers
+   * finish connecting after both players have already pressed READY.
+   */
+  setPeerConnectedHandler(handler: PeerConnectedHandler | null): void {
+    this.peerConnectedHandler = handler;
   }
 
   /** Broadcast a match-start handshake message to every connected peer. */
@@ -713,6 +725,7 @@ export class MeshTransport {
       } else {
         state.helloValidated = true;
       }
+      this.peerConnectedHandler?.(state.peerId);
       return;
     }
 
