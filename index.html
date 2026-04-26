@@ -18,7 +18,31 @@
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #020208; }
+    /* html = letterbox container (fills viewport, dark bars).
+       body = the 16:9 game frame, centered in the viewport.
+       transform on body establishes a containing block for `position:fixed`
+       descendants, so every screen-space overlay (HUD, vignette, popups,
+       speed lines, etc.) anchors to the frame and letterboxes for free
+       without touching any of those modules. */
+    html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #020208;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    body {
+      width: min(100vw, calc(100vh * 16 / 9));
+      height: min(100vh, calc(100vw * 9 / 16));
+      position: relative;
+      overflow: hidden;
+      background: #020208;
+      /* Promotes body to a containing block for fixed-position descendants
+         AND a stacking context. Cheap GPU layer; standard modal-library trick. */
+      transform: translateZ(0);
+    }
     canvas { display: block; }
 
     #game-container {

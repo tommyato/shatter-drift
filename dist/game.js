@@ -29428,6 +29428,14 @@ var Input = class {
   init(canvas) {
     this.canvasWidth = canvas.clientWidth;
     this.canvasHeight = canvas.clientHeight;
+    let canvasOffsetX = 0;
+    let canvasOffsetY = 0;
+    const updateCanvasOffset = () => {
+      const r = canvas.getBoundingClientRect();
+      canvasOffsetX = r.left;
+      canvasOffsetY = r.top;
+    };
+    updateCanvasOffset();
     window.addEventListener("keydown", (e) => {
       const key = e.key === " " ? "space" : e.key.toLowerCase();
       this.keys.add(key);
@@ -29440,8 +29448,8 @@ var Input = class {
       this.keys.delete(key);
     });
     window.addEventListener("mousemove", (e) => {
-      this.mouseX = e.clientX;
-      this.mouseY = e.clientY;
+      this.mouseX = e.clientX - canvasOffsetX;
+      this.mouseY = e.clientY - canvasOffsetY;
     });
     window.addEventListener("mousedown", (e) => {
       const target = e.target;
@@ -29457,10 +29465,17 @@ var Input = class {
       this.scrollAccum += e.deltaY;
     });
     window.addEventListener("contextmenu", (e) => e.preventDefault());
-    window.addEventListener("resize", () => {
+    const onLayoutChange = () => {
       this.canvasWidth = canvas.clientWidth;
       this.canvasHeight = canvas.clientHeight;
-    });
+      updateCanvasOffset();
+    };
+    window.addEventListener("resize", onLayoutChange);
+    window.addEventListener("scroll", updateCanvasOffset, { passive: true });
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(onLayoutChange);
+      ro.observe(canvas);
+    }
     window.addEventListener("blur", () => {
       this.keys.clear();
     });
@@ -35528,15 +35543,15 @@ var ScorePopups = class {
     const vec = new Vector3(worldX, 1.5, worldZ);
     vec.project(camera);
     if (vec.z > 1) return;
-    const halfW = window.innerWidth / 2;
+    const halfW = document.body.clientWidth / 2;
     const sx = vec.x * halfW + halfW;
     const sy = Math.min(80, 40 + Math.random() * 40);
     this.show(text, sx, sy, color, size, 0.4);
   }
   /** Show a centered large popup (for milestones) — positioned in upper zone to avoid obstructing gameplay */
   showCenter(text, subtitle = "", color = "#ffcc00") {
-    const cx = window.innerWidth / 2;
-    const cy = window.innerHeight * 0.22;
+    const cx = document.body.clientWidth / 2;
+    const cy = document.body.clientHeight * 0.22;
     this.show(text, cx, cy, color, 18, 0.4);
     if (subtitle) {
       this.show(subtitle, cx, cy + 26, "#aaccdd", 10, 0.4);
@@ -52878,7 +52893,7 @@ var LobbyClient = class {
   app = createFirebaseApp();
   db = getFirestore(this.app);
   peerId = createPeerId();
-  buildHash = "5713c4b";
+  buildHash = "2e0f410";
   playerName;
   lobbyCode = null;
   hostPeerId = null;
@@ -55281,6 +55296,8 @@ var Game = class {
   composer;
   bloomPass;
   clock = new Clock();
+  /** The 16:9 letterbox frame element. Renderer + camera read its dims. */
+  gameContainer;
   // Game objects
   player;
   world;
@@ -55497,8 +55514,11 @@ var Game = class {
     this.bestGrade = localStorage.getItem("shatterDriftBestGrade") || "";
     this.bestDistance = parseInt(localStorage.getItem("shatterDriftBestDistance") || "0", 10);
     const container = document.getElementById("game-container");
+    this.gameContainer = container;
+    const initW = container.clientWidth || 1;
+    const initH = container.clientHeight || 1;
     this.renderer = new WebGLRenderer({ antialias: true, alpha: false });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(initW, initH);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
@@ -55508,7 +55528,7 @@ var Game = class {
     this.scene.fog = new FogExp2(131592, 0.015);
     this.camera = new PerspectiveCamera(
       this.baseFOV,
-      window.innerWidth / window.innerHeight,
+      initW / initH,
       0.1,
       300
     );
@@ -55527,7 +55547,7 @@ var Game = class {
     this.composer = composer;
     this.bloomPass = bloom;
     this.postfx = new PostFXPass();
-    this.postfx.setResolution(window.innerWidth, window.innerHeight);
+    this.postfx.setResolution(initW, initH);
     this.composer.addPass(this.postfx.pass);
     this.input.init(this.renderer.domElement);
     this.riftWarningEl = document.createElement("div");
@@ -55679,6 +55699,10 @@ var Game = class {
       this.titleHighScore.textContent = statsText;
     }
     window.addEventListener("resize", () => this.onResize());
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => this.onResize());
+      ro.observe(this.gameContainer);
+    }
     const playBtn = document.getElementById("play-btn");
     if (playBtn) {
       playBtn.addEventListener("click", (e) => {
@@ -58193,8 +58217,8 @@ var Game = class {
   }
   // --- Resize ---
   onResize() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    const w = this.gameContainer.clientWidth || 1;
+    const h = this.gameContainer.clientHeight || 1;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
