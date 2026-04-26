@@ -18,8 +18,9 @@ The ECS refactor that already shipped is what makes this tractable. SD's sim is 
 
 | # | Phase | Status | Hash |
 |---|---|---|---|
-| 1 | Lobby + WebRTC mesh transport | Planned | — |
-| 2 | Shared deterministic sim with N player entities | Planned | — |
+| 1 | Lobby + WebRTC mesh transport | **SHIPPED** | (Phase 1 commits on main) |
+| 2 | Shared deterministic sim — headless building blocks | **SHIPPED** (PR #1, branch `feat/sd-mp-phase-2-shared-sim`, not yet merged to main) | `5831df0`, `6b6bd5a` |
+| 2.5 | Live world integration — bridge headless ↔ live `World`/`game.ts` | Planned | — |
 | 3 | Sphere-bump player-vs-player collision | Planned | — |
 | 4 | Survival rules + winner declaration + spectator | Planned | — |
 
@@ -54,9 +55,10 @@ The ECS refactor that already shipped is what makes this tractable. SD's sim is 
 
 See per-phase files:
 
-- [`phase-1-lobby-transport.md`](./phase-1-lobby-transport.md) — WebRTC mesh + lobby UI. Codebase remains runnable as singleplayer; lobby is an opt-in panel.
-- [`phase-2-shared-sim.md`](./phase-2-shared-sim.md) — Refactor `SimulationWorld` to N player entities; render remote players. Codebase still runs singleplayer (N=1 is the default).
-- [`phase-3-sphere-bump.md`](./phase-3-sphere-bump.md) — New `PlayerCollisionSystem` for sphere-sphere bump. No-op when N=1.
+- [`phase-1-lobby-transport.md`](./phase-1-lobby-transport.md) — WebRTC mesh + lobby UI. Codebase remains runnable as singleplayer; lobby is an opt-in panel. **SHIPPED.**
+- [`phase-2-shared-sim.md`](./phase-2-shared-sim.md) — Refactor `SimulationWorld` to N player entities; render remote players. **SHIPPED (headless building blocks)** — PR #1 on `feat/sd-mp-phase-2-shared-sim`, awaiting Phase 2.5 before merge to main.
+- [`phase-2-5-live-world-integration.md`](./phase-2-5-live-world-integration.md) — **NEW.** Bridge headless `SimulationWorld` ↔ live `World`/`game.ts` so MP rounds actually play in the browser. Surfaced by Phase 2's discovery that `game.ts` runs a separate live world from the headless sim.
+- [`phase-3-sphere-bump.md`](./phase-3-sphere-bump.md) — New `PlayerCollisionSystem` for sphere-sphere bump. No-op when N=1. **Now depends on Phase 2.5.**
 - [`phase-4-survival-rules.md`](./phase-4-survival-rules.md) — Death broadcast, last-survivor wins, spectator camera, results screen.
 
 ## Files Created / Modified (high level)

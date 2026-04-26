@@ -1,9 +1,12 @@
 ---
 phase: 2
 parent: multiplayer-survival
-title: Shared deterministic sim with N player entities
+title: Shared deterministic sim with N player entities (headless building blocks)
 created: 2026-04-25
-status: planned
+updated: 2026-04-26
+status: shipped-partial
+shipped_hashes: [5831df0, 6b6bd5a]
+follow_up: phase-2-5-live-world-integration.md
 ---
 
 # Phase 2 — Shared Sim with N Player Entities
@@ -18,14 +21,20 @@ Refactor `SimulationWorld` to carry an array of `PlayerState` instead of a singl
 - The existing single-player path uses `world.playerX`, `world.playerZ`, `world.speed`, etc. as scalars on `SimulationState`. This phase moves them to `world.players[i]`.
 - Lockstep delay: 3 ticks. Each peer broadcasts action for tick `currentTick + 3`. Sim only advances tick `T` when all peers' action for `T` has arrived (or peer has been marked dropped).
 
+## Status (2026-04-26)
+
+Worker `089c8660` (claude-code, opus-4-7) shipped the headless half of this phase: 15 files changed, +970/-242, 19/19 harness tests pass including determinism (FNV-1a hash match). SP code path bit-identical. Branch `feat/sd-mp-phase-2-shared-sim` opened as PR #1, **not merged to main** — waiting for Phase 2.5 (live world integration) so that MP actually plays in the browser before main absorbs the change.
+
+The worker correctly used the plan's escape hatch when it discovered `game.ts` does not drive the headless `SimulationWorld` — that integration is now Phase 2.5 ([`phase-2-5-live-world-integration.md`](./phase-2-5-live-world-integration.md)).
+
 ## Sprints
 
-- [ ] **Sprint 2.1 — `PlayerState` extraction.** Define `PlayerState { x, z, speed, alive, shattered, phaseEnergy, phaseLocked, phaseCooldown, phaseMinTimer, boostCooldown, brakeCooldown, boostTimer, brakeTimer, playerIndex, name, color }`. Move all per-player fields off `SimulationState` into `players: PlayerState[]`. Add `localPlayerIndex` to `SimulationConfig`.
-- [ ] **Sprint 2.2 — System refactor.** `PlayerMovementSystem`, `ShatterSystem`, `CollisionSystem`, and `SpeedModSystem` (from Plan 2) all iterate `players[]`. Obstacles remain shared. World scroll is driven by the *fastest live player* (camera-anchor decision below). Verify singleplayer (N=1) still passes determinism harness.
-- [ ] **Sprint 2.3 — Camera and world scroll anchor.** SD's world scrolls toward the player. With N players, choose: anchor on **local player**. World physics (obstacles) are shared, but each peer's *render camera* tracks their own player. Players see their own ship centered; rivals appear ahead/behind based on relative `z`.
-- [ ] **Sprint 2.4 — Lockstep runner.** New `LockstepRunner` wraps `simulation.step`. Polls the input-frame queue from `MeshTransport`. Advances sim only when frame for tick `T` is available from every peer. Times out a peer after 2s of missing frames → marks dropped, fills with `action=0`.
-- [ ] **Sprint 2.5 — Remote player rendering.** Each remote player gets a `THREE.Mesh` (icosahedron, solid, player-color tint). Position from `players[i]`. Name sprite above. Mirror the ghost rendering pattern but with full opacity + collision-eligible.
-- [ ] **Sprint 2.6 — Match start handshake.** All peers in the lobby agree on `seed`, `localPlayerIndex` assignments, and `startTick`. One peer (lowest connection ID, deterministic) generates seed; broadcasts. Wait for ack from all peers. Start sim.
+- [x] **Sprint 2.1 — `PlayerState` extraction.** **SHIPPED** `5831df0`. Three fields added beyond the verbatim spec (`speedMod`, `score`, `lastCloseCallZ`) — per-player correctness required them; the system refactor implied they were per-player. Define `PlayerState { x, z, speed, alive, shattered, phaseEnergy, phaseLocked, phaseCooldown, phaseMinTimer, boostCooldown, brakeCooldown, boostTimer, brakeTimer, playerIndex, name, color }`. Move all per-player fields off `SimulationState` into `players: PlayerState[]`. Add `localPlayerIndex` to `SimulationConfig`.
+- [x] **Sprint 2.2 — System refactor.** **SHIPPED** `5831df0`. `PlayerMovementSystem`, `ShatterSystem`, `CollisionSystem`, `SpeedModSystem`, plus also `OrbSystem`, `RiftFlipSystem`, `ObstacleDespawnSystem`, `ObstacleSpawnSystem`, `WorldScrollSystem` — all iterate `players[]`. Determinism harness 19/19 green.
+- [x] **Sprint 2.3 — Camera and world scroll anchor.** **SHIPPED (headless half)** `5831df0`. `world.getState()` returns a `GameSnapshot` for the local `playerIndex` — anchor-by-local-player is correct in the headless sim. Live-renderer camera anchor wiring lands in Phase 2.5.
+- [x] **Sprint 2.4 — Lockstep runner.** **SHIPPED** `6b6bd5a`. `LockstepRunner` exported from `src/multiplayer.ts:797`. Drains `MeshTransport`'s queue, advances when all peers have submitted frame for tick `T`, 2s peer-drop timeout fills `action=0`.
+- [x] **Sprint 2.5 — Remote player rendering (factory).** **SHIPPED (factory only)** `6b6bd5a`. `createRemotePlayer`, `updateRemotePlayer`, `disposeRemotePlayer`, `pickPlayerColor` exported from `src/multiplayer.ts`. Wiring into `game.ts`'s render loop is Phase 2.5.
+- [x] **Sprint 2.6 — Match start handshake.** **SHIPPED** `6b6bd5a`. `MatchStartCoordinator` exported from `src/multiplayer.ts:960`. Lowest-connection-ID peer generates seed, broadcasts, waits for acks, fires `onMatchStart` callback. Game-loop integration is Phase 2.5.
 
 ## Verification
 
@@ -50,7 +59,7 @@ Refactor `SimulationWorld` to carry an array of `PlayerState` instead of a singl
 
 ## Acceptance for Phase Done
 
-- [ ] N=1 singleplayer determinism harness passes (no regressions)
-- [ ] Two browsers in a lobby start a synced match — same world, different cameras
-- [ ] Players can pass through each other (no collision yet — Phase 3)
-- [ ] Disconnect handling: dead peer → inert player, match continues
+- [x] N=1 singleplayer determinism harness passes (no regressions) — 19/19 green
+- [ ] Two browsers in a lobby start a synced match — same world, different cameras → **moved to Phase 2.5**
+- [ ] Players can pass through each other (no collision yet — Phase 3) → **moved to Phase 2.5**
+- [x] Disconnect handling: dead peer → inert player, match continues — `LockstepRunner` 2s timeout + action=0 fill landed
