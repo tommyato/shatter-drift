@@ -1,3 +1,6 @@
+import * as THREE from "three";
+import type { ShatterDriftSimulation } from "./simulation";
+import type { MatchPlayerInfo, MatchStartMessage, MultiplayerConfig, PlayerState } from "./types";
 import { initializeApp, getApp, getApps, type FirebaseApp } from "firebase/app";
 import {
   addDoc,
@@ -91,7 +94,9 @@ type TransportMessage =
   | { type: "hello"; buildHash: string; peerId: string }
   | { type: "hello_ack"; buildHash: string; peerId: string }
   | { type: "input_frame"; frame: InputFrame }
-  | { type: "frame_ack"; tick: number; playerIndex: number };
+  | { type: "frame_ack"; tick: number; playerIndex: number }
+  | { type: "match_propose"; seed: number; startTick: number; players: MatchPlayerInfo[]; proposerPeerId: string }
+  | { type: "match_ack"; proposerPeerId: string; ackerPeerId: string };
 
 type PeerState = {
   peerId: string;
@@ -465,12 +470,15 @@ export class LobbyClient {
   }
 }
 
+type MatchMessageHandler = (msg: MatchStartMessage, fromPeerId: string) => void;
+
 export class MeshTransport {
   private readonly peers = new Map<string, PeerState>();
   private readonly frameQueue = new Map<number, Map<number, InputFrame>>();
   private readonly frameAckSentAt = new Map<string, number>();
   private unsubscribe: (() => void) | null = null;
   private active = false;
+  private matchHandler: MatchMessageHandler | null = null;
 
   constructor(private readonly lobby: LobbyClient) {}
 
@@ -504,6 +512,7 @@ export class MeshTransport {
     this.peers.clear();
     this.frameQueue.clear();
     this.frameAckSentAt.clear();
+    this.matchHandler = null;
   }
 
   sendInputFrame(tick: number, action: number): void {
@@ -535,6 +544,37 @@ export class MeshTransport {
     let total = 0;
     for (const byPlayer of this.frameQueue.values()) total += byPlayer.size;
     return total;
+  }
+
+  /** Register a callback for incoming match-start handshake messages. */
+  setMatchHandler(handler: MatchMessageHandler | null): void {
+    this.matchHandler = handler;
+  }
+
+  /** Broadcast a match-start handshake message to every connected peer. */
+  broadcastMatchMessage(msg: MatchStartMessage): void {
+    if (!this.active) return;
+    for (const state of this.peers.values()) {
+      if (!state.channel || state.channel.readyState !== "open" || !state.helloValidated) continue;
+      this.sendMessage(state.channel, msg);
+    }
+  }
+
+  /** Send a match-start handshake message to a single peer. */
+  sendMatchMessageTo(peerId: string, msg: MatchStartMessage): void {
+    if (!this.active) return;
+    const state = this.peers.get(peerId);
+    if (!state || !state.channel || state.channel.readyState !== "open" || !state.helloValidated) return;
+    this.sendMessage(state.channel, msg);
+  }
+
+  /** Snapshot of currently-connected, hello-validated peer IDs. */
+  getConnectedPeerIds(): string[] {
+    const out: string[] = [];
+    for (const [peerId, state] of this.peers) {
+      if (state.helloValidated && state.channel?.readyState === "open") out.push(peerId);
+    }
+    return out;
   }
 
   private async syncPeers(players: LobbyPlayer[]): Promise<void> {
@@ -688,6 +728,13 @@ export class MeshTransport {
         this.frameAckSentAt.delete(key);
         console.log(`[sd-mp] frame ${message.tick} ack from ${state.peerId} in ${rttMs.toFixed(1)} ms`);
       }
+      return;
+    }
+
+    if (message.type === "match_propose" || message.type === "match_ack") {
+      if (!state.helloValidated) return;
+      this.matchHandler?.(message, state.peerId);
+      return;
     }
   }
 
@@ -715,3 +762,477 @@ export class MeshTransport {
 }
 
 export { normalizeCode };
+
+// ===========================================================================
+// Lockstep runner (Phase 2.4)
+// ===========================================================================
+
+/**
+ * Drives a `ShatterDriftSimulation` in lockstep across N peers. Each tick
+ * advances only when an input frame for that tick has arrived from every
+ * remote player AND the local player has submitted its own action. A peer
+ * that goes silent for `dropTimeoutMs` is marked dropped and its slot is
+ * filled with action=0 so the rest of the match can continue.
+ *
+ * Phase 2 wires this as a standalone runner — game.ts will integrate it
+ * into the live render loop when the MP game state is enabled.
+ */
+export interface LockstepRunnerConfig {
+  sim: ShatterDriftSimulation;
+  transport: MeshTransport;
+  /** Per-peer playerIndex assignments — every connected peerId must be in here. */
+  playerIndices: ReadonlyMap<string, number>;
+  /** This peer's playerIndex (used to know which slot to apply submitLocalInput to). */
+  localPlayerIndex: number;
+  /** Sim tick to start running at (handshake-agreed). */
+  startTick: number;
+  /** Per-peer dropout threshold in milliseconds. Default 2000. */
+  dropTimeoutMs?: number;
+  /** Optional callback invoked just before sim.tick() with the actions used. */
+  onTickAdvanced?: (tick: number, actions: Map<number, number>) => void;
+  /** Optional callback when a peer is marked dropped. */
+  onPeerDropped?: (peerId: string, playerIndex: number) => void;
+}
+
+export class LockstepRunner {
+  private readonly sim: ShatterDriftSimulation;
+  private readonly transport: MeshTransport;
+  private readonly playerIndices: Map<string, number>;
+  private readonly indexToPeerId: Map<number, string>;
+  private readonly localPlayerIndex: number;
+  private readonly dropTimeoutMs: number;
+  private readonly onTickAdvanced?: (tick: number, actions: Map<number, number>) => void;
+  private readonly onPeerDropped?: (peerId: string, playerIndex: number) => void;
+
+  /** Pending action frames by tick. Map<tick, Map<playerIndex, action>>. */
+  private readonly pending = new Map<number, Map<number, number>>();
+  private readonly droppedPlayers = new Set<number>();
+  /** Wall-clock timestamp we first noticed a tick was waiting (for timeout). */
+  private readonly firstWaitedAt = new Map<number, number>();
+
+  private currentTick: number;
+  private running = false;
+
+  constructor(config: LockstepRunnerConfig) {
+    this.sim = config.sim;
+    this.transport = config.transport;
+    this.playerIndices = new Map(config.playerIndices);
+    this.indexToPeerId = new Map();
+    for (const [peerId, idx] of this.playerIndices) this.indexToPeerId.set(idx, peerId);
+    this.localPlayerIndex = config.localPlayerIndex;
+    this.dropTimeoutMs = config.dropTimeoutMs ?? 2000;
+    this.onTickAdvanced = config.onTickAdvanced;
+    this.onPeerDropped = config.onPeerDropped;
+    this.currentTick = config.startTick;
+  }
+
+  start(): void {
+    this.running = true;
+  }
+
+  stop(): void {
+    this.running = false;
+    this.pending.clear();
+    this.firstWaitedAt.clear();
+  }
+
+  /** Return the next tick the runner is waiting on. */
+  getCurrentTick(): number {
+    return this.currentTick;
+  }
+
+  /** Submit the local player's action for tick `tick`. Should also be sent over transport. */
+  submitLocalInput(tick: number, action: number): void {
+    if (!this.running) return;
+    if (tick < this.currentTick) return; // already advanced past
+    let bucket = this.pending.get(tick);
+    if (!bucket) {
+      bucket = new Map();
+      this.pending.set(tick, bucket);
+    }
+    bucket.set(this.localPlayerIndex, action);
+  }
+
+  /**
+   * Advance the sim as many ticks as possible given currently-available
+   * frames. Drains MeshTransport's queue, then loops while every required
+   * player has submitted a frame for the current tick (or has been
+   * dropped). Returns the number of ticks advanced.
+   */
+  tryAdvance(nowMs: number = performance.now()): number {
+    if (!this.running) return 0;
+
+    // 1. Drain remote frames into the per-tick map.
+    const drained = this.transport.drainQueuedFrames();
+    for (const frame of drained) {
+      if (frame.tick < this.currentTick) continue;
+      let bucket = this.pending.get(frame.tick);
+      if (!bucket) {
+        bucket = new Map();
+        this.pending.set(frame.tick, bucket);
+      }
+      bucket.set(frame.playerIndex, frame.action);
+    }
+
+    // 2. Step while all required players have a frame for currentTick.
+    let advanced = 0;
+    while (this.canAdvance(nowMs)) {
+      const bucket = this.pending.get(this.currentTick) ?? new Map<number, number>();
+      // Fill in dropped players with action=0
+      for (const idx of this.droppedPlayers) {
+        if (!bucket.has(idx)) bucket.set(idx, 0);
+      }
+      // Apply per-player actions, then tick.
+      for (const [idx, action] of bucket) {
+        this.sim.setAction(action, idx);
+      }
+      this.sim.tick();
+      this.onTickAdvanced?.(this.currentTick, bucket);
+      this.pending.delete(this.currentTick);
+      this.firstWaitedAt.delete(this.currentTick);
+      this.currentTick += 1;
+      advanced += 1;
+    }
+    return advanced;
+  }
+
+  private canAdvance(nowMs: number): boolean {
+    const bucket = this.pending.get(this.currentTick);
+    const needed = this.allPlayerIndices();
+    let allHave = true;
+    let firstMissingIdx = -1;
+    for (const idx of needed) {
+      if (this.droppedPlayers.has(idx)) continue;
+      if (!bucket?.has(idx)) {
+        allHave = false;
+        if (firstMissingIdx < 0) firstMissingIdx = idx;
+      }
+    }
+    if (allHave) return true;
+
+    // Track wait start; trigger dropout after threshold.
+    if (!this.firstWaitedAt.has(this.currentTick)) {
+      this.firstWaitedAt.set(this.currentTick, nowMs);
+      return false;
+    }
+    const waitedFor = nowMs - this.firstWaitedAt.get(this.currentTick)!;
+    if (waitedFor >= this.dropTimeoutMs && firstMissingIdx >= 0) {
+      this.markDropped(firstMissingIdx);
+      // After marking dropped, recheck — there might be more missing peers,
+      // but we drop only one per call to keep the contract simple.
+      return this.canAdvance(nowMs);
+    }
+    return false;
+  }
+
+  private allPlayerIndices(): number[] {
+    return Array.from(this.indexToPeerId.keys());
+  }
+
+  private markDropped(playerIndex: number): void {
+    if (this.droppedPlayers.has(playerIndex)) return;
+    this.droppedPlayers.add(playerIndex);
+    const peerId = this.indexToPeerId.get(playerIndex);
+    if (peerId) this.onPeerDropped?.(peerId, playerIndex);
+  }
+}
+
+// ===========================================================================
+// Match start coordinator (Phase 2.6)
+// ===========================================================================
+
+export type MatchStartCallbacks = {
+  onMatchStart: (config: MultiplayerConfig) => void;
+  onError?: (msg: string) => void;
+};
+
+/**
+ * Coordinates the seed + player-slot agreement before a multiplayer match
+ * begins. The peer with the lowest peerId in the lobby acts as proposer:
+ * generates a seed + startTick + ordered player slots and broadcasts a
+ * `match_propose`. Each non-proposer responds with `match_ack` and emits
+ * `onMatchStart` immediately. The proposer emits `onMatchStart` once acks
+ * from every other connected peer have arrived.
+ *
+ * Race-safe: if two peers both send proposals (e.g. clock skew), the
+ * proposal from the lowest peerId wins; higher-ID proposals are ignored.
+ */
+export class MatchStartCoordinator {
+  private readonly lobby: LobbyClient;
+  private readonly transport: MeshTransport;
+  private readonly callbacks: MatchStartCallbacks;
+  private active = false;
+  private pendingProposal: {
+    seed: number;
+    startTick: number;
+    players: MatchPlayerInfo[];
+    awaitingAcks: Set<string>;
+  } | null = null;
+
+  constructor(lobby: LobbyClient, transport: MeshTransport, callbacks: MatchStartCallbacks) {
+    this.lobby = lobby;
+    this.transport = transport;
+    this.callbacks = callbacks;
+  }
+
+  start(): void {
+    if (this.active) return;
+    this.active = true;
+    this.transport.setMatchHandler((msg, fromPeerId) => this.handleIncoming(msg, fromPeerId));
+  }
+
+  stop(): void {
+    this.active = false;
+    this.transport.setMatchHandler(null);
+    this.pendingProposal = null;
+  }
+
+  /**
+   * Initiate a match-start handshake from this peer if and only if we are
+   * the lowest-peerId peer in the lobby (deterministic proposer). Returns
+   * true if a propose was actually sent.
+   */
+  requestMatchStart(opts: { startTickOffset?: number } = {}): boolean {
+    if (!this.active) return false;
+    const players = this.lobby.getPlayers();
+    if (players.length < 2) {
+      this.callbacks.onError?.("Need at least 2 players in the lobby to start a match.");
+      return false;
+    }
+    const localPeerId = this.lobby.getLocalPeerId();
+    const lowestPeerId = players
+      .map((p) => p.peerId)
+      .reduce((a, b) => (a < b ? a : b));
+    if (lowestPeerId !== localPeerId) {
+      // Not the proposer — wait for the lowest-ID peer to send propose.
+      return false;
+    }
+
+    const seed = this.generateSeed();
+    const startTickOffset = opts.startTickOffset ?? 6; // ~100ms at 60Hz
+    const startTick = startTickOffset; // sim ticks start at 0; offset gives peers buffer to receive propose
+    const slots = this.assignPlayerSlots(players);
+    const awaitingAcks = new Set<string>();
+    for (const slot of slots) {
+      if (slot.peerId !== localPeerId) awaitingAcks.add(slot.peerId);
+    }
+
+    this.pendingProposal = { seed, startTick, players: slots, awaitingAcks };
+
+    const msg: MatchStartMessage = {
+      type: "match_propose",
+      seed,
+      startTick,
+      players: slots,
+      proposerPeerId: localPeerId,
+    };
+    this.transport.broadcastMatchMessage(msg);
+
+    if (awaitingAcks.size === 0) {
+      // Solo lobby (shouldn't happen — we guard above) — start immediately.
+      this.fireMatchStart(seed, startTick, slots);
+    }
+    return true;
+  }
+
+  private handleIncoming(msg: MatchStartMessage, fromPeerId: string): void {
+    if (!this.active) return;
+    if (msg.type === "match_propose") {
+      // Defensive: only accept proposals from the lowest peerId in the lobby.
+      const players = this.lobby.getPlayers();
+      const lowestPeerId = players
+        .map((p) => p.peerId)
+        .reduce((a, b) => (a < b ? a : b), msg.proposerPeerId);
+      if (msg.proposerPeerId !== lowestPeerId) {
+        // Race: a higher-ID peer also proposed. Ignore — wait for the lowest's.
+        return;
+      }
+      // Ack and start.
+      const ack: MatchStartMessage = {
+        type: "match_ack",
+        proposerPeerId: msg.proposerPeerId,
+        ackerPeerId: this.lobby.getLocalPeerId(),
+      };
+      this.transport.sendMatchMessageTo(fromPeerId, ack);
+      this.fireMatchStart(msg.seed, msg.startTick, msg.players);
+      return;
+    }
+    if (msg.type === "match_ack") {
+      if (!this.pendingProposal) return;
+      if (msg.proposerPeerId !== this.lobby.getLocalPeerId()) return; // not for us
+      this.pendingProposal.awaitingAcks.delete(msg.ackerPeerId);
+      if (this.pendingProposal.awaitingAcks.size === 0) {
+        const { seed, startTick, players } = this.pendingProposal;
+        this.pendingProposal = null;
+        this.fireMatchStart(seed, startTick, players);
+      }
+    }
+  }
+
+  private fireMatchStart(seed: number, startTick: number, players: MatchPlayerInfo[]): void {
+    const localPeerId = this.lobby.getLocalPeerId();
+    const local = players.find((p) => p.peerId === localPeerId);
+    if (!local) {
+      this.callbacks.onError?.("Match started but local peer is not in the player list.");
+      return;
+    }
+    const config: MultiplayerConfig = {
+      seed,
+      startTick,
+      localPlayerIndex: local.playerIndex,
+      players,
+    };
+    this.callbacks.onMatchStart(config);
+  }
+
+  private generateSeed(): number {
+    // mulberry32 has a degenerate sequence from seed 0; guard against it.
+    let s = 0;
+    while (s === 0) s = Math.floor(Math.random() * 0xffffffff);
+    return s;
+  }
+
+  private assignPlayerSlots(players: LobbyPlayer[]): MatchPlayerInfo[] {
+    // Use the lobby's existing playerIndex assignment (sorted by joinedAtMs+peerId).
+    return players
+      .slice()
+      .sort((a, b) => a.playerIndex - b.playerIndex)
+      .map((p) => ({
+        peerId: p.peerId,
+        name: p.name,
+        playerIndex: p.playerIndex,
+        color: pickPlayerColor(p.playerIndex),
+      }));
+  }
+}
+
+const PLAYER_COLOR_PALETTE = [0x4be1ff, 0xff5fa2, 0xffd24b, 0x7bff5f] as const;
+
+export function pickPlayerColor(playerIndex: number): number {
+  return PLAYER_COLOR_PALETTE[((playerIndex % PLAYER_COLOR_PALETTE.length) + PLAYER_COLOR_PALETTE.length) % PLAYER_COLOR_PALETTE.length]!;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Remote player rendering (Sprint 2.5)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A remote player visual: a solid color-tinted icosahedron crystal mirroring
+ * the local player's geometry, with a name sprite floating above. Mirrors the
+ * `Ghost` shape from `src/ghost.ts` but full-opacity (it's a live peer, not a
+ * recording) and collision-eligible once Phase 3 wires sphere-bumps.
+ */
+export interface RemotePlayer {
+  playerIndex: number;
+  name: string;
+  color: number;
+  group: THREE.Group;
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  nameSprite: THREE.Sprite;
+  nameMaterial: THREE.SpriteMaterial;
+}
+
+const REMOTE_PLAYER_RADIUS = 0.6;
+const REMOTE_NAME_SPRITE_SCALE = 0.7;
+
+/**
+ * Build a remote-player visual ready to add to a scene. Caller owns the
+ * lifecycle: position via `updateRemotePlayer`, dispose via `disposeRemotePlayer`.
+ *
+ * Color and name come from the match-start handshake's `MatchPlayerInfo`.
+ */
+export function createRemotePlayer(playerIndex: number, name: string, color: number): RemotePlayer {
+  const group = new THREE.Group();
+
+  // Solid icosahedron — same geo as local player crystal. Wireframe overlay
+  // gives the same fractured look without a second pass at the shader level.
+  const geo = new THREE.IcosahedronGeometry(REMOTE_PLAYER_RADIUS, 0);
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: false,
+    wireframe: false,
+  });
+  const mesh = new THREE.Mesh(geo, material);
+  group.add(mesh);
+
+  // Wireframe overlay — thin colored edges so the silhouette pops on dark BG.
+  const wireMat = new THREE.MeshBasicMaterial({
+    color,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.6,
+    depthWrite: false,
+  });
+  const wireMesh = new THREE.Mesh(geo, wireMat);
+  wireMesh.scale.setScalar(1.05);
+  group.add(wireMesh);
+
+  // Name label as a billboarded sprite.
+  const nameTexture = makeRemoteNameTexture(name, color);
+  const nameMaterial = new THREE.SpriteMaterial({
+    map: nameTexture,
+    transparent: true,
+    opacity: 0.9,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const nameSprite = new THREE.Sprite(nameMaterial);
+  nameSprite.scale.set(REMOTE_NAME_SPRITE_SCALE * 4, REMOTE_NAME_SPRITE_SCALE * 0.5, 1);
+  nameSprite.position.y = 1.4;
+  group.add(nameSprite);
+
+  return { playerIndex, name, color, group, mesh, material, nameSprite, nameMaterial };
+}
+
+/**
+ * Snap a remote player visual to its current sim position. World coords —
+ * camera anchoring is the renderer's responsibility (see Sprint 2.3).
+ *
+ * `dt` drives the idle spin so a stationary remote still feels alive, matching
+ * the ghost playback feel.
+ */
+export function updateRemotePlayer(remote: RemotePlayer, player: PlayerState, dt: number): void {
+  remote.group.visible = player.alive;
+  if (!player.alive) return;
+
+  remote.group.position.set(player.x, 0, player.z);
+  remote.mesh.rotation.y += dt * 1.2;
+  remote.mesh.rotation.x = Math.sin(performance.now() * 0.0017) * 0.15;
+
+  // Phase flicker: dim while shattered (matches ghost rendering convention).
+  const targetOpacity = player.shattered ? 0.35 : 1;
+  remote.material.opacity = THREE.MathUtils.lerp(
+    remote.material.opacity || 1,
+    targetOpacity,
+    1 - Math.exp(-8 * dt),
+  );
+  remote.material.transparent = player.shattered;
+}
+
+export function disposeRemotePlayer(remote: RemotePlayer): void {
+  remote.mesh.geometry.dispose();
+  remote.material.dispose();
+  if (remote.nameMaterial.map) remote.nameMaterial.map.dispose();
+  remote.nameMaterial.dispose();
+}
+
+/** Render a short name label to a CanvasTexture — same recipe as ghost.ts. */
+function makeRemoteNameTexture(name: string, color: number): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const hex = "#" + color.toString(16).padStart(6, "0");
+  ctx.font = "bold 36px 'Orbitron', monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = hex;
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = hex;
+  ctx.fillText(name.slice(0, 16).toUpperCase(), canvas.width / 2, canvas.height / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
