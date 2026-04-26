@@ -94,7 +94,9 @@ export class ScorePopups {
     // Don't show if behind camera
     if (vec.z > 1) return;
 
-    const halfW = window.innerWidth / 2;
+    // Body is the 16:9 letterbox frame (see index.html), so its
+    // clientWidth is the canvas width — popups stay inside the frame.
+    const halfW = document.body.clientWidth / 2;
     // Push popup to top margin — keeps it visible but out of the play area
     const sx = vec.x * halfW + halfW;
     const sy = Math.min(80, 40 + Math.random() * 40);
@@ -104,8 +106,8 @@ export class ScorePopups {
 
   /** Show a centered large popup (for milestones) — positioned in upper zone to avoid obstructing gameplay */
   showCenter(text: string, subtitle: string = "", color: string = "#ffcc00") {
-    const cx = window.innerWidth / 2;
-    const cy = window.innerHeight * 0.22;
+    const cx = document.body.clientWidth / 2;
+    const cy = document.body.clientHeight * 0.22;
     this.show(text, cx, cy, color, 18, 0.4);
     if (subtitle) {
       this.show(subtitle, cx, cy + 26, "#aaccdd", 10, 0.4);

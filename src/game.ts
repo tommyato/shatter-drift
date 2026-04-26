@@ -293,6 +293,8 @@ export class Game {
   private composer!: EffectComposer;
   private bloomPass!: UnrealBloomPass;
   private clock = new THREE.Clock();
+  /** The 16:9 letterbox frame element. Renderer + camera read its dims. */
+  private gameContainer!: HTMLElement;
 
   // Game objects
   private player!: Player;
@@ -523,9 +525,16 @@ export class Game {
     this.bestDistance = parseInt(localStorage.getItem("shatterDriftBestDistance") || "0", 10);
 
     // Init Three.js
+    // The page now letterboxes to 16:9 — `body` is the centered 16:9 frame
+    // (see index.html). `#game-container` fills the frame, so its
+    // `clientWidth/clientHeight` give us the canvas pixel dims to render at,
+    // independent of the actual viewport size.
     const container = document.getElementById("game-container")!;
+    this.gameContainer = container;
+    const initW = container.clientWidth || 1;
+    const initH = container.clientHeight || 1;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(initW, initH);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
@@ -537,7 +546,7 @@ export class Game {
 
     this.camera = new THREE.PerspectiveCamera(
       this.baseFOV,
-      window.innerWidth / window.innerHeight,
+      initW / initH,
       0.1,
       300
     );
@@ -567,7 +576,7 @@ export class Game {
 
     // Custom post-processing: chromatic aberration, film grain, scan lines, distortion
     this.postfx = new PostFXPass();
-    this.postfx.setResolution(window.innerWidth, window.innerHeight);
+    this.postfx.setResolution(initW, initH);
     this.composer.addPass(this.postfx.pass);
 
     // Input
@@ -763,8 +772,16 @@ export class Game {
       this.titleHighScore.textContent = statsText;
     }
 
-    // Resize
+    // Resize. `window.resize` fires when the viewport changes (which
+    // recomputes body's `min(...)` 16:9 formula). We also subscribe to a
+    // ResizeObserver on the container itself as a belt-and-braces signal —
+    // important for the portal iframe embed, where the parent iframe can
+    // resize without firing a `window.resize` event in this document.
     window.addEventListener("resize", () => this.onResize());
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => this.onResize());
+      ro.observe(this.gameContainer);
+    }
 
     // Wire the explicit PLAY button on the title screen (added for
     // universal polish rule 4 — a clear index-0 menu target). Same
@@ -3912,8 +3929,11 @@ export class Game {
   // --- Resize ---
 
   private onResize() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    // Read the 16:9 frame's dims, NOT the viewport's. The viewport may be
+    // ultrawide/portrait/square — body's CSS `min(...)` formulas resolve to
+    // a 16:9 box inside it, and #game-container fills that box.
+    const w = this.gameContainer.clientWidth || 1;
+    const h = this.gameContainer.clientHeight || 1;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);

@@ -63,6 +63,18 @@ export class Input {
   init(canvas: HTMLCanvasElement) {
     this.canvasWidth = canvas.clientWidth;
     this.canvasHeight = canvas.clientHeight;
+    // Canvas is no longer guaranteed to fill the viewport — the page
+    // letterboxes the canvas to 16:9 and centers it. We track the canvas's
+    // top/left offset so mousemove (and touch) coordinates can be mapped
+    // into canvas-local space, which is what mouseNDC expects.
+    let canvasOffsetX = 0;
+    let canvasOffsetY = 0;
+    const updateCanvasOffset = () => {
+      const r = canvas.getBoundingClientRect();
+      canvasOffsetX = r.left;
+      canvasOffsetY = r.top;
+    };
+    updateCanvasOffset();
 
     window.addEventListener("keydown", (e) => {
       // Normalize spacebar: e.key returns " " but we use "space" everywhere
@@ -80,8 +92,8 @@ export class Input {
     });
 
     window.addEventListener("mousemove", (e) => {
-      this.mouseX = e.clientX;
-      this.mouseY = e.clientY;
+      this.mouseX = e.clientX - canvasOffsetX;
+      this.mouseY = e.clientY - canvasOffsetY;
     });
 
     window.addEventListener("mousedown", (e) => {
@@ -104,11 +116,21 @@ export class Input {
     // Prevent context menu on right-click
     window.addEventListener("contextmenu", (e) => e.preventDefault());
 
-    // Track canvas resize
-    window.addEventListener("resize", () => {
+    // Track canvas resize. Both width/height (for NDC math) AND the
+    // top/left offset (the letterbox bars change as the viewport changes).
+    // ResizeObserver also covers the portal-iframe case where the parent
+    // iframe resizes without firing a window resize event in this document.
+    const onLayoutChange = () => {
       this.canvasWidth = canvas.clientWidth;
       this.canvasHeight = canvas.clientHeight;
-    });
+      updateCanvasOffset();
+    };
+    window.addEventListener("resize", onLayoutChange);
+    window.addEventListener("scroll", updateCanvasOffset, { passive: true });
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(onLayoutChange);
+      ro.observe(canvas);
+    }
 
     // Handle blur — release all keys
     window.addEventListener("blur", () => {
