@@ -99,12 +99,15 @@ try {
 	await new Promise((r) => setTimeout(r, 4000))
 
 	// Both tabs should now be in match (server auto-starts at 2 players).
-	// Drive both: tab 1 holds left, tab 2 holds right — they should ram in the middle.
-	log('driving both tabs for 10s — t1=ArrowRight, t2=ArrowLeft (ram in the middle)')
+	// Drive both so they converge and ram in the middle. Slot 0 spawns at
+	// world x=0 (screen-center), slot 1 spawns at world x=4 (screen-LEFT, since
+	// camera faces +Z and world +X = screen LEFT). To ram: t1 visually moves
+	// LEFT (world +X, toward slot 1), t2 visually moves RIGHT (world -X, toward slot 0).
+	log('driving both tabs for 10s — t1=ArrowLeft, t2=ArrowRight (ram in the middle)')
 	await t1.bringToFront()
-	await t1.keyboard.down('ArrowRight')
+	await t1.keyboard.down('ArrowLeft')
 	await t2.bringToFront()
-	await t2.keyboard.down('ArrowLeft')
+	await t2.keyboard.down('ArrowRight')
 
 	for (let s = 0; s < PLAY_SECONDS; s++) {
 		await new Promise((r) => setTimeout(r, 1000))
@@ -115,8 +118,8 @@ try {
 		log(`tick ${s + 1}/${PLAY_SECONDS}: t1.matchState=${t1State.matchState}`)
 	}
 
-	await t1.keyboard.up('ArrowRight')
-	await t2.keyboard.up('ArrowLeft')
+	await t1.keyboard.up('ArrowLeft')
+	await t2.keyboard.up('ArrowRight')
 
 	const t1Path = join(SMOKE_DIR, 'tab-1.png')
 	const t2Path = join(SMOKE_DIR, 'tab-2.png')
