@@ -1,47 +1,47 @@
+/**
+ * Shatter Drift multiplayer client.
+ *
+ * Connects to the Colyseus server-authoritative match server (`@sd/server`).
+ * Server is authoritative for player movement + collision; world / obstacles /
+ * crystals stay client-side and agree across peers via the shared `seed` the
+ * server announces in its `start` broadcast.
+ *
+ * The previous implementation (Firestore lobbies + WebRTC mesh + lockstep
+ * input exchange) is gone. Public class names are preserved as thin façades so
+ * `game.ts` only sees a small surface change:
+ *   - `LobbyClient`            — wraps the colyseus.js Client + active Room
+ *   - `MeshTransport`          — sends input messages to the server
+ *   - `MatchStartCoordinator`  — listens for the server's `start` broadcast
+ *
+ * Remote-player rendering helpers (`createRemotePlayer`, `updateRemotePlayer`,
+ * `disposeRemotePlayer`, `pickPlayerColor`) are unchanged from the previous
+ * version — single-player rendering didn't depend on them, and game.ts uses
+ * them as-is.
+ */
 import * as THREE from "three";
-import type { MatchPlayerInfo, MatchStartMessage, MultiplayerConfig, PlayerState } from "@sd/sim";
-import type { InputFrame } from "@sd/sim";
-export { LockstepRunner } from "@sd/sim";
-import { initializeApp, getApp, getApps, type FirebaseApp } from "firebase/app";
-import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  getFirestore,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  setDoc,
-  type Firestore,
-  type QueryDocumentSnapshot,
-  type Unsubscribe,
-  updateDoc,
-  where,
-} from "firebase/firestore";
+import { Client, Room } from "colyseus.js";
+import type {
+  MatchPlayerInfo,
+  MultiplayerConfig,
+  PlayerState,
+} from "@sd/sim";
+
+import { SD_MP_URL } from "./config";
 
 declare const __BUILD_HASH__: string;
 
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyBO4CUdtMB5Njhq6NDdYf1A1ltOx_OvnI0",
-  authDomain: "tommyato-deployments.firebaseapp.com",
-  projectId: "tommyato-deployments",
-  storageBucket: "tommyato-deployments.firebasestorage.app",
-  messagingSenderId: "856931391351",
-  appId: "1:856931391351:web:456c4709f968c7c0ec3372",
-};
-
-const COLLECTION_LOBBIES = "sd-mp-lobbies";
-const SIGNAL_KIND_OFFER = "offer";
-const SIGNAL_KIND_ANSWER = "answer";
-const SIGNAL_KIND_ICE = "ice";
+const ROOM_NAME = "shatter-drift";
 const MAX_PLAYERS = 4;
-const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+// 6-character lobby code alphabet preserved purely for the input box's
+// normalize-as-you-type cosmetics. Colyseus room IDs are 9 chars and
+// lowercase-alphanumeric, so we widen `normalizeCode` to accept those too.
+const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+const PLAYER_COLOR_PALETTE = [0x4be1ff, 0xff5fa2, 0xffd24b, 0x7bff5f] as const;
 
 export type LobbyPlayer = {
-  peerId: string;
+  peerId: string; // Colyseus sessionId
   name: string;
   buildHash: string;
   joinedAtMs: number;
@@ -50,84 +50,62 @@ export type LobbyPlayer = {
   isLocal: boolean;
 };
 
-type LobbyDoc = {
-  code: string;
-  hostPeerId: string;
-  hostName: string;
-  buildHash: string;
-  createdAtMs: number;
-  updatedAtMs: number;
-  closedAtMs?: number;
-};
-
-type MemberDoc = {
-  peerId: string;
-  name: string;
-  buildHash: string;
-  joinedAtMs: number;
-  updatedAtMs: number;
-  ready?: boolean;
-};
-
-type SignalDoc = {
-  from: string;
-  to: string;
-  kind: typeof SIGNAL_KIND_OFFER | typeof SIGNAL_KIND_ANSWER | typeof SIGNAL_KIND_ICE;
-  sdp?: string;
-  candidate?: RTCIceCandidateInit;
-  createdAtMs: number;
-};
-
 type LobbyCallbacks = {
   onPlayersChanged?: (players: LobbyPlayer[]) => void;
-  onSignal?: (signal: SignalEnvelope) => void | Promise<void>;
   onError?: (message: string) => void;
   onLobbyClosed?: (message: string) => void;
 };
 
-export type SignalEnvelope = SignalDoc & { id: string };
-
-type TransportMessage =
-  | { type: "hello"; buildHash: string; peerId: string }
-  | { type: "hello_ack"; buildHash: string; peerId: string }
-  | { type: "input_frame"; frame: InputFrame }
-  | { type: "frame_ack"; tick: number; playerIndex: number }
-  | { type: "match_propose"; seed: number; startTick: number; players: MatchPlayerInfo[]; proposerPeerId: string }
-  | { type: "match_ack"; proposerPeerId: string; ackerPeerId: string };
-
-type PeerState = {
-  peerId: string;
-  pc: RTCPeerConnection;
-  channel: RTCDataChannel | null;
-  helloValidated: boolean;
+type StartBroadcast = {
+  seed: string | number;
+  startedAt: number;
+  tick: number;
+  slots: MatchPlayerInfo[];
 };
 
-function createFirebaseApp(): FirebaseApp {
-  if (getApps().length > 0) return getApp();
-  return initializeApp(FIREBASE_CONFIG);
-}
+type SnapshotPlayer = {
+  sessionId: string;
+  slot: number;
+  color: number;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  bumpVelX: number;
+  boostActive: boolean;
+  alive: boolean;
+  lastInputTick: number;
+};
+
+export type ServerSnapshot = {
+  receivedAtMs: number;
+  tick: number;
+  seed: string;
+  startedAt: number;
+  players: SnapshotPlayer[];
+};
 
 function normalizeName(name: string): string {
   const clean = name.trim().replace(/[\x00-\x1F\x7F]/g, "").slice(0, 24).trim();
   return clean || "Player";
 }
 
-function normalizeCode(code: string): string {
+export function normalizeCode(code: string): string {
   const allowed = new Set(CODE_ALPHABET.split(""));
   return code
-    .toUpperCase()
     .split("")
     .filter((char) => allowed.has(char))
-    .slice(0, 6)
+    .slice(0, 12)
     .join("");
 }
 
-function generateLobbyCode(): string {
-  let out = "";
-  for (let i = 0; i < 6; i++) {
-    out += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
-  }
-  return out;
+export function pickPlayerColor(playerIndex: number): number {
+  return PLAYER_COLOR_PALETTE[
+    ((playerIndex % PLAYER_COLOR_PALETTE.length) + PLAYER_COLOR_PALETTE.length) % PLAYER_COLOR_PALETTE.length
+  ]!;
 }
 
 function createPeerId(): string {
@@ -137,20 +115,54 @@ function createPeerId(): string {
   return `peer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function buildPlayerListFromRoom(room: Room | null, localSessionId: string, buildHash: string): LobbyPlayer[] {
+  if (!room) return [];
+  const state = room.state as { slots?: { sessionId?: string; slot?: number; playerIndex?: number; name?: string; color?: number }[] } | undefined;
+  const slots = state?.slots;
+  if (!slots) return [];
+
+  const out: LobbyPlayer[] = [];
+  let i = 0;
+  for (const slot of slots) {
+    out.push({
+      peerId: slot.sessionId ?? `slot-${i}`,
+      name: slot.name ?? `P${(slot.playerIndex ?? i) + 1}`,
+      buildHash,
+      joinedAtMs: 0,
+      ready: true, // Colyseus server takes "joined" as "ready" — match starts at 2 players
+      playerIndex: slot.playerIndex ?? i,
+      isLocal: slot.sessionId === localSessionId,
+    });
+    i++;
+  }
+  return out;
+}
+
+// ===========================================================================
+// LobbyClient — Colyseus connection + room lifecycle
+// ===========================================================================
+
+/**
+ * Façade over `colyseus.js`'s Client + Room. Preserves the surface the game
+ * UI consumed from the old Firestore implementation (`createLobby`,
+ * `joinLobby`, `leaveLobby`, `setReady`, `subscribe`, `getPlayers`, etc.) so
+ * the lobby/HUD code in `game.ts` doesn't need wholesale rewrites.
+ *
+ * Match-start handshake is server-driven: when the second player joins, the
+ * server broadcasts `start` and `MatchStartCoordinator` fires onMatchStart.
+ */
 export class LobbyClient {
-  private readonly app = createFirebaseApp();
-  private readonly db: Firestore = getFirestore(this.app);
-  private readonly peerId = createPeerId();
+  private readonly client = new Client(SD_MP_URL);
+  private readonly localPeerId = createPeerId();
   private readonly buildHash = __BUILD_HASH__;
   private playerName: string;
-  private lobbyCode: string | null = null;
-  private hostPeerId: string | null = null;
+  private room: Room | null = null;
   private hostSelf = false;
   private players: LobbyPlayer[] = [];
   private callbacks = new Set<LobbyCallbacks>();
-  private signalUnsub: Unsubscribe | null = null;
-  private membersUnsub: Unsubscribe | null = null;
-  private lobbyUnsub: Unsubscribe | null = null;
+  private latestSnapshot: ServerSnapshot | null = null;
+  private snapshotListeners = new Set<(snapshot: ServerSnapshot) => void>();
+  private startListeners = new Set<(start: StartBroadcast) => void>();
 
   constructor(playerName: string) {
     this.playerName = normalizeName(playerName);
@@ -164,192 +176,101 @@ export class LobbyClient {
     };
   }
 
+  /** Listen for authoritative-state snapshots derived from server schema patches. */
+  onSnapshot(listener: (snapshot: ServerSnapshot) => void): () => void {
+    this.snapshotListeners.add(listener);
+    if (this.latestSnapshot) listener(this.latestSnapshot);
+    return () => {
+      this.snapshotListeners.delete(listener);
+    };
+  }
+
+  /** Listen for the server's `start` broadcast (fired once per room when ≥2 players present). */
+  onStart(listener: (start: StartBroadcast) => void): () => void {
+    this.startListeners.add(listener);
+    return () => {
+      this.startListeners.delete(listener);
+    };
+  }
+
   async createLobby(): Promise<string> {
     await this.leaveLobby();
-    const code = await this.reserveLobbyCode();
-    const now = Date.now();
-    const lobbyRef = this.getLobbyRef(code);
-    const memberRef = this.getMemberRef(code, this.peerId);
-    const lobby: LobbyDoc = {
-      code,
-      hostPeerId: this.peerId,
-      hostName: this.playerName,
-      buildHash: this.buildHash,
-      createdAtMs: now,
-      updatedAtMs: now,
-    };
-    const member: MemberDoc = {
-      peerId: this.peerId,
-      name: this.playerName,
-      buildHash: this.buildHash,
-      joinedAtMs: now,
-      updatedAtMs: now,
-    };
-    await setDoc(lobbyRef, { ...lobby, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-    await setDoc(memberRef, { ...member, joinedAt: serverTimestamp(), updatedAt: serverTimestamp() });
-    this.lobbyCode = code;
-    this.hostPeerId = this.peerId;
-    this.hostSelf = true;
-    this.players = [
-      {
-        peerId: this.peerId,
-        name: this.playerName,
-        buildHash: this.buildHash,
-        joinedAtMs: now,
-        ready: false,
-        playerIndex: 0,
-        isLocal: true,
-      },
-    ];
-    this.emitPlayersChanged();
-    this.watchLobby(code);
-    return code;
+    const room = await this.client.create(ROOM_NAME, { name: this.playerName });
+    this.bindRoom(room, true);
+    return room.roomId;
   }
 
   async joinLobby(code: string): Promise<LobbyPlayer[]> {
     await this.leaveLobby();
-    const cleanCode = normalizeCode(code);
-    if (cleanCode.length !== 6) {
-      throw new Error("Enter a valid 6-character lobby code.");
+    const cleanCode = code.trim();
+    if (cleanCode.length === 0) {
+      throw new Error("Enter a lobby code to join.");
     }
-    const lobbySnap = await getDoc(this.getLobbyRef(cleanCode));
-    if (!lobbySnap.exists()) {
-      throw new Error(`Lobby ${cleanCode} not found.`);
+    let room: Room;
+    try {
+      room = await this.client.joinById(cleanCode, { name: this.playerName });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "join failed";
+      throw new Error(`Could not join lobby ${cleanCode}: ${reason}`);
     }
-    const lobby = lobbySnap.data() as LobbyDoc;
-    if (lobby.closedAtMs) {
-      throw new Error(`Lobby ${cleanCode} is no longer active.`);
-    }
-    if (lobby.buildHash !== this.buildHash) {
-      throw new Error(`Build mismatch. Host is on ${lobby.buildHash}; this build is ${this.buildHash}.`);
-    }
-    const membersSnap = await getDoc(this.getMemberRef(cleanCode, lobby.hostPeerId));
-    if (!membersSnap.exists()) {
-      throw new Error(`Lobby ${cleanCode} is missing its host.`);
-    }
-    const membersCol = collection(this.getLobbyRef(cleanCode), "members");
-    const allMembers = (await getDocs(membersCol)).docs.map((docSnap) => docSnap.data() as MemberDoc);
-    if (allMembers.length >= MAX_PLAYERS) {
-      throw new Error(`Lobby ${cleanCode} is full.`);
-    }
-    const now = Date.now();
-    await setDoc(this.getMemberRef(cleanCode, this.peerId), {
-      peerId: this.peerId,
-      name: this.playerName,
-      buildHash: this.buildHash,
-      joinedAtMs: now,
-      updatedAtMs: now,
-      ready: false,
-      joinedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    this.lobbyCode = cleanCode;
-    this.hostPeerId = lobby.hostPeerId;
-    this.hostSelf = false;
-    this.players = [...allMembers, {
-      peerId: this.peerId,
-      name: this.playerName,
-      buildHash: this.buildHash,
-      joinedAtMs: now,
-      updatedAtMs: now,
-    }]
-      .sort((a, b) => {
-        if (a.joinedAtMs !== b.joinedAtMs) return a.joinedAtMs - b.joinedAtMs;
-        return a.peerId.localeCompare(b.peerId);
-      })
-      .map((player, index) => ({
-        peerId: player.peerId,
-        name: player.name,
-        buildHash: player.buildHash,
-        joinedAtMs: player.joinedAtMs,
-        ready: Boolean(player.ready),
-        playerIndex: index,
-        isLocal: player.peerId === this.peerId,
-      }));
-    this.emitPlayersChanged();
-    this.watchLobby(cleanCode);
+    this.bindRoom(room, false);
     return this.players.slice();
   }
 
+  /**
+   * Convenience: join any open `shatter-drift` room or create one. Used by the
+   * mp-smoke harness which doesn't care about lobby codes — just wants two
+   * tabs to find each other.
+   */
+  async quickMatch(): Promise<string> {
+    await this.leaveLobby();
+    const room = await this.client.joinOrCreate(ROOM_NAME, { name: this.playerName });
+    this.bindRoom(room, false);
+    return room.roomId;
+  }
+
   async leaveLobby(): Promise<void> {
-    const code = this.lobbyCode;
-    const wasHost = this.hostSelf;
-    this.cleanupWatchers();
-    this.players = [];
-    this.lobbyCode = null;
-    this.hostPeerId = null;
-    this.hostSelf = false;
-    if (!code) return;
-
+    if (!this.room) return;
     try {
-      await deleteDoc(this.getMemberRef(code, this.peerId));
+      await this.room.leave(true);
     } catch {
-      // Best-effort cleanup.
+      // Room already disconnected — best-effort cleanup.
     }
-
-    if (wasHost) {
-      try {
-        await updateDoc(this.getLobbyRef(code), {
-          closedAtMs: Date.now(),
-          updatedAtMs: Date.now(),
-          closedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      } catch {
-        // Best-effort cleanup.
-      }
-    }
+    this.room = null;
+    this.hostSelf = false;
+    this.players = [];
+    this.latestSnapshot = null;
+    this.emitPlayersChanged();
   }
 
   async setPlayerName(name: string): Promise<void> {
     this.playerName = normalizeName(name);
-    if (!this.lobbyCode) return;
-    const updates = {
-      name: this.playerName,
-      updatedAtMs: Date.now(),
-      updatedAt: serverTimestamp(),
-    };
-    await updateDoc(this.getMemberRef(this.lobbyCode, this.peerId), updates);
-    if (this.hostSelf) {
-      await updateDoc(this.getLobbyRef(this.lobbyCode), {
-        hostName: this.playerName,
-        updatedAtMs: Date.now(),
-        updatedAt: serverTimestamp(),
-      });
+    // The Colyseus server reads the name once at join — name changes mid-room
+    // would require a custom message. For now it's fixed at room entry; the
+    // HUD echoes the in-room name from the schema on next snapshot.
+  }
+
+  async setReady(_ready: boolean): Promise<void> {
+    // The Colyseus server treats "joined" as "ready". This call is kept so
+    // game.ts's lobby UI flow doesn't need to change shape — it just refreshes
+    // the player list.
+    if (this.room) {
+      this.players = buildPlayerListFromRoom(this.room, this.room.sessionId, this.buildHash);
+      this.emitPlayersChanged();
     }
   }
 
-  async setReady(ready: boolean): Promise<void> {
-    if (!this.lobbyCode) return;
-    await updateDoc(this.getMemberRef(this.lobbyCode, this.peerId), {
-      ready,
-      updatedAtMs: Date.now(),
-      updatedAt: serverTimestamp(),
-    });
-  }
-
-  async sendSignal(
-    to: string,
-    kind: SignalDoc["kind"],
-    payload: { sdp?: string; candidate?: RTCIceCandidateInit },
-  ): Promise<void> {
-    if (!this.lobbyCode) return;
-    await addDoc(collection(this.getLobbyRef(this.lobbyCode), "signals"), {
-      from: this.peerId,
-      to,
-      kind,
-      createdAtMs: Date.now(),
-      createdAt: serverTimestamp(),
-      ...payload,
-    });
+  /** Send the manual "start" trigger (host-only). Server is the source of truth. */
+  requestStart(): void {
+    this.room?.send("start", {});
   }
 
   getLobbyCode(): string | null {
-    return this.lobbyCode;
+    return this.room?.roomId ?? null;
   }
 
   getLocalPeerId(): string {
-    return this.peerId;
+    return this.room?.sessionId ?? this.localPeerId;
   }
 
   getLocalName(): string {
@@ -365,84 +286,58 @@ export class LobbyClient {
   }
 
   getLocalPlayerIndex(): number {
-    return this.players.find((player) => player.peerId === this.peerId)?.playerIndex ?? -1;
+    const local = this.players.find((p) => p.isLocal);
+    return local?.playerIndex ?? -1;
   }
 
   isHost(): boolean {
     return this.hostSelf;
   }
 
-  private async reserveLobbyCode(): Promise<string> {
-    for (let attempt = 0; attempt < 12; attempt++) {
-      const code = generateLobbyCode();
-      const snap = await getDoc(this.getLobbyRef(code));
-      if (!snap.exists()) return code;
+  /** Underlying Colyseus room — used by MeshTransport to send input messages. */
+  getRoom(): Room | null {
+    return this.room;
+  }
+
+  reportError(message: string): void {
+    for (const callbacks of this.callbacks) {
+      callbacks.onError?.(message);
     }
-    throw new Error("Could not allocate a lobby code. Try again.");
   }
 
-  private watchLobby(code: string): void {
-    this.cleanupWatchers();
+  private bindRoom(room: Room, isHost: boolean): void {
+    this.room = room;
+    this.hostSelf = isHost;
 
-    this.membersUnsub = onSnapshot(collection(this.getLobbyRef(code), "members"), (snapshot) => {
-      this.players = snapshot.docs
-        .map((docSnap) => this.memberDocToPlayer(docSnap))
-        .sort((a, b) => {
-          if (a.joinedAtMs !== b.joinedAtMs) return a.joinedAtMs - b.joinedAtMs;
-          return a.peerId.localeCompare(b.peerId);
-        })
-        .map((player, index) => ({
-          ...player,
-          playerIndex: index,
-        }));
+    room.onStateChange((_state) => {
+      this.players = buildPlayerListFromRoom(room, room.sessionId, this.buildHash);
       this.emitPlayersChanged();
+      this.emitSnapshot(room);
     });
 
-    this.signalUnsub = onSnapshot(
-      query(collection(this.getLobbyRef(code), "signals"), where("to", "==", this.peerId)),
-      (snapshot) => {
-        for (const change of snapshot.docChanges()) {
-          if (change.type !== "added") continue;
-          const data = change.doc.data() as SignalDoc;
-          const envelope: SignalEnvelope = { id: change.doc.id, ...data };
-          this.emitSignal(envelope);
-          void deleteDoc(change.doc.ref);
-        }
-      },
-    );
+    room.onMessage("start", (payload: StartBroadcast) => {
+      for (const listener of this.startListeners) listener(payload);
+    });
 
-    this.lobbyUnsub = onSnapshot(this.getLobbyRef(code), (snapshot) => {
-      if (!snapshot.exists()) {
-        this.emitLobbyClosed("Lobby closed.");
-        return;
-      }
-      const lobby = snapshot.data() as LobbyDoc;
-      this.hostPeerId = lobby.hostPeerId;
-      if (lobby.closedAtMs && !this.hostSelf) {
-        this.emitLobbyClosed("Host left the lobby.");
+    room.onLeave((code) => {
+      const wasIntentional = code === 1000 || code === 4000; // 4000 = client-initiated leave in colyseus.js
+      this.room = null;
+      this.players = [];
+      this.emitPlayersChanged();
+      if (!wasIntentional) {
+        this.emitLobbyClosed("Disconnected from match server.");
       }
     });
-  }
 
-  private cleanupWatchers(): void {
-    this.signalUnsub?.();
-    this.signalUnsub = null;
-    this.membersUnsub?.();
-    this.membersUnsub = null;
-    this.lobbyUnsub?.();
-    this.lobbyUnsub = null;
+    room.onError((code, message) => {
+      this.reportError(`Server error ${code}: ${message ?? ""}`.trim());
+    });
   }
 
   private emitPlayersChanged(): void {
-    const players = this.players.slice();
+    const snapshot = this.players.slice();
     for (const callbacks of this.callbacks) {
-      callbacks.onPlayersChanged?.(players);
-    }
-  }
-
-  private emitSignal(signal: SignalEnvelope): void {
-    for (const callbacks of this.callbacks) {
-      void callbacks.onSignal?.(signal);
+      callbacks.onPlayersChanged?.(snapshot);
     }
   }
 
@@ -452,342 +347,110 @@ export class LobbyClient {
     }
   }
 
-  reportError(message: string): void {
-    for (const callbacks of this.callbacks) {
-      callbacks.onError?.(message);
-    }
-  }
-
-  private memberDocToPlayer(docSnap: QueryDocumentSnapshot): LobbyPlayer {
-    const data = docSnap.data() as MemberDoc;
-    return {
-      peerId: data.peerId,
-      name: data.name,
-      buildHash: data.buildHash,
-      joinedAtMs: data.joinedAtMs ?? 0,
-      ready: Boolean(data.ready),
-      playerIndex: -1,
-      isLocal: data.peerId === this.peerId,
+  private emitSnapshot(room: Room): void {
+    const state = room.state as
+      | {
+          tick?: number;
+          seed?: string;
+          startedAt?: number;
+          players?: { forEach: (cb: (value: SnapshotPlayer, key: string) => void) => void };
+        }
+      | undefined;
+    if (!state) return;
+    const snap: ServerSnapshot = {
+      receivedAtMs: performance.now(),
+      tick: state.tick ?? 0,
+      seed: state.seed ?? "0",
+      startedAt: state.startedAt ?? 0,
+      players: [],
     };
-  }
-
-  private getLobbyRef(code: string) {
-    return doc(this.db, COLLECTION_LOBBIES, code);
-  }
-
-  private getMemberRef(code: string, peerId: string) {
-    return doc(this.db, COLLECTION_LOBBIES, code, "members", peerId);
+    state.players?.forEach((p, sessionId) => {
+      snap.players.push({
+        sessionId,
+        slot: p.slot ?? 0,
+        color: p.color ?? 0,
+        name: p.name ?? "Player",
+        x: p.x ?? 0,
+        y: p.y ?? 0,
+        z: p.z ?? 0,
+        vx: p.vx ?? 0,
+        vy: p.vy ?? 0,
+        vz: p.vz ?? 0,
+        bumpVelX: p.bumpVelX ?? 0,
+        boostActive: !!p.boostActive,
+        alive: p.alive !== false,
+        lastInputTick: p.lastInputTick ?? 0,
+      });
+    });
+    this.latestSnapshot = snap;
+    for (const listener of this.snapshotListeners) listener(snap);
   }
 }
 
-type MatchMessageHandler = (msg: MatchStartMessage, fromPeerId: string) => void;
-type PeerConnectedHandler = (peerId: string) => void;
+// ===========================================================================
+// MeshTransport — input message sender
+// ===========================================================================
 
+/**
+ * Used to be the WebRTC mesh manager. Now a thin wrapper that sends the local
+ * client's input messages to the Colyseus room. Kept under the same name so
+ * `game.ts` doesn't have to relearn the spelling.
+ */
 export class MeshTransport {
-  private readonly peers = new Map<string, PeerState>();
-  private readonly frameQueue = new Map<number, Map<number, InputFrame>>();
-  private readonly frameAckSentAt = new Map<string, number>();
-  private unsubscribe: (() => void) | null = null;
   private active = false;
-  private matchHandler: MatchMessageHandler | null = null;
-  private peerConnectedHandler: PeerConnectedHandler | null = null;
 
   constructor(private readonly lobby: LobbyClient) {}
 
   start(): void {
-    if (this.active) return;
     this.active = true;
-    this.unsubscribe = this.lobby.subscribe({
-      onPlayersChanged: (players) => {
-        void this.syncPeers(players);
-      },
-      onSignal: (signal) => {
-        void this.handleSignal(signal);
-      },
-      onLobbyClosed: () => {
-        void this.stop();
-      },
-      onError: () => {
-        // Errors are surfaced by the lobby UI; transport just stays quiet.
-      },
-    });
   }
 
   async stop(): Promise<void> {
-    this.unsubscribe?.();
-    this.unsubscribe = null;
     this.active = false;
-    for (const state of this.peers.values()) {
-      state.channel?.close();
-      state.pc.close();
-    }
-    this.peers.clear();
-    this.frameQueue.clear();
-    this.frameAckSentAt.clear();
-    this.matchHandler = null;
-  }
-
-  sendInputFrame(tick: number, action: number): void {
-    if (!this.active) return;
-    const playerIndex = this.lobby.getLocalPlayerIndex();
-    if (playerIndex < 0) return;
-    const frame: InputFrame = { tick, action, playerIndex };
-    for (const [peerId, state] of this.peers) {
-      if (!state.channel || state.channel.readyState !== "open" || !state.helloValidated) continue;
-      this.frameAckSentAt.set(`${peerId}:${tick}:${playerIndex}`, performance.now());
-      this.sendMessage(state.channel, { type: "input_frame", frame });
-    }
-  }
-
-  drainQueuedFrames(): InputFrame[] {
-    const out: InputFrame[] = [];
-    const sortedTicks = Array.from(this.frameQueue.keys()).sort((a, b) => a - b);
-    for (const tick of sortedTicks) {
-      const byPlayer = this.frameQueue.get(tick);
-      if (!byPlayer) continue;
-      const frames = Array.from(byPlayer.values()).sort((a, b) => a.playerIndex - b.playerIndex);
-      out.push(...frames);
-    }
-    this.frameQueue.clear();
-    return out;
-  }
-
-  getQueuedFrameCount(): number {
-    let total = 0;
-    for (const byPlayer of this.frameQueue.values()) total += byPlayer.size;
-    return total;
-  }
-
-  /** Register a callback for incoming match-start handshake messages. */
-  setMatchHandler(handler: MatchMessageHandler | null): void {
-    this.matchHandler = handler;
   }
 
   /**
-   * Register a callback that fires when a peer's data channel becomes
-   * hello-validated (i.e. fully usable for match-start handshakes). Used by
-   * the lobby UI to re-evaluate match-start eligibility once mesh peers
-   * finish connecting after both players have already pressed READY.
+   * Send a single input frame. `tick` is the client's current sim tick;
+   * `action` is the agent-input encoded action int (see `@sd/sim` agent-input.ts).
    */
-  setPeerConnectedHandler(handler: PeerConnectedHandler | null): void {
-    this.peerConnectedHandler = handler;
-  }
-
-  /** Broadcast a match-start handshake message to every connected peer. */
-  broadcastMatchMessage(msg: MatchStartMessage): void {
+  sendInputFrame(tick: number, action: number): void {
     if (!this.active) return;
-    for (const state of this.peers.values()) {
-      if (!state.channel || state.channel.readyState !== "open" || !state.helloValidated) continue;
-      this.sendMessage(state.channel, msg);
-    }
+    const room = this.lobby.getRoom();
+    if (!room) return;
+    room.send("input", { tick, action });
   }
 
-  /** Send a match-start handshake message to a single peer. */
-  sendMatchMessageTo(peerId: string, msg: MatchStartMessage): void {
-    if (!this.active) return;
-    const state = this.peers.get(peerId);
-    if (!state || !state.channel || state.channel.readyState !== "open" || !state.helloValidated) return;
-    this.sendMessage(state.channel, msg);
+  // The legacy mesh-only methods below are no longer used by Colyseus, but we
+  // keep no-op stubs so any straggler call sites in `game.ts` don't blow up
+  // before the larger refactor lands.
+
+  setMatchHandler(_handler: unknown): void {
+    /* noop — server is authoritative now, no peer-to-peer messaging */
   }
 
-  /** Snapshot of currently-connected, hello-validated peer IDs. */
+  setPeerConnectedHandler(_handler: unknown): void {
+    /* noop — Colyseus connection state is owned by LobbyClient */
+  }
+
+  broadcastMatchMessage(_msg: unknown): void {
+    /* noop */
+  }
+
+  sendMatchMessageTo(_peerId: string, _msg: unknown): void {
+    /* noop */
+  }
+
   getConnectedPeerIds(): string[] {
-    const out: string[] = [];
-    for (const [peerId, state] of this.peers) {
-      if (state.helloValidated && state.channel?.readyState === "open") out.push(peerId);
-    }
-    return out;
+    return this.lobby.getPlayers().filter((p) => !p.isLocal).map((p) => p.peerId);
   }
 
-  private async syncPeers(players: LobbyPlayer[]): Promise<void> {
-    const localPeerId = this.lobby.getLocalPeerId();
-    const remoteIds = new Set(players.filter((player) => !player.isLocal).map((player) => player.peerId));
-    for (const peerId of Array.from(this.peers.keys())) {
-      if (!remoteIds.has(peerId)) {
-        this.closePeer(peerId);
-      }
-    }
-    for (const player of players) {
-      if (player.peerId === localPeerId) continue;
-      if (this.peers.has(player.peerId)) continue;
-      const initiator = localPeerId.localeCompare(player.peerId) < 0;
-      const state = this.createPeer(player.peerId);
-      this.peers.set(player.peerId, state);
-      if (initiator) {
-        this.attachChannel(state, state.pc.createDataChannel("input-frames", { ordered: true }));
-        const offer = await state.pc.createOffer();
-        await state.pc.setLocalDescription(offer);
-        await this.lobby.sendSignal(player.peerId, SIGNAL_KIND_OFFER, { sdp: offer.sdp ?? "" });
-      }
-    }
-  }
-
-  private createPeer(peerId: string): PeerState {
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
-    const state: PeerState = {
-      peerId,
-      pc,
-      channel: null,
-      helloValidated: false,
-    };
-
-    pc.onicecandidate = (event) => {
-      if (!event.candidate) return;
-      void this.lobby.sendSignal(peerId, SIGNAL_KIND_ICE, {
-        candidate: event.candidate.toJSON(),
-      });
-    };
-
-    pc.ondatachannel = (event) => {
-      this.attachChannel(state, event.channel);
-    };
-
-    pc.onconnectionstatechange = () => {
-      const conn = pc.connectionState;
-      if (conn === "failed" || conn === "disconnected" || conn === "closed") {
-        this.closePeer(peerId);
-      }
-    };
-
-    return state;
-  }
-
-  private attachChannel(state: PeerState, channel: RTCDataChannel): void {
-    state.channel = channel;
-    channel.onopen = () => {
-      console.log(`[sd-mp] data channel open with ${state.peerId}`);
-      this.sendMessage(channel, {
-        type: "hello",
-        buildHash: this.lobby.getBuildHash(),
-        peerId: this.lobby.getLocalPeerId(),
-      });
-    };
-    channel.onmessage = (event) => {
-      this.handleMessage(state, event.data);
-    };
-    channel.onclose = () => {
-      console.log(`[sd-mp] data channel closed with ${state.peerId}`);
-    };
-  }
-
-  private async handleSignal(signal: SignalEnvelope): Promise<void> {
-    if (signal.from === this.lobby.getLocalPeerId()) return;
-    let state = this.peers.get(signal.from);
-    if (!state) {
-      state = this.createPeer(signal.from);
-      this.peers.set(signal.from, state);
-    }
-    if (signal.kind === SIGNAL_KIND_OFFER && signal.sdp) {
-      await state.pc.setRemoteDescription({ type: "offer", sdp: signal.sdp });
-      const answer = await state.pc.createAnswer();
-      await state.pc.setLocalDescription(answer);
-      await this.lobby.sendSignal(signal.from, SIGNAL_KIND_ANSWER, { sdp: answer.sdp ?? "" });
-      return;
-    }
-    if (signal.kind === SIGNAL_KIND_ANSWER && signal.sdp) {
-      await state.pc.setRemoteDescription({ type: "answer", sdp: signal.sdp });
-      return;
-    }
-    if (signal.kind === SIGNAL_KIND_ICE && signal.candidate) {
-      try {
-        await state.pc.addIceCandidate(signal.candidate);
-      } catch {
-        // ICE candidates can legitimately race remote-description setup.
-      }
-    }
-  }
-
-  private handleMessage(state: PeerState, raw: string): void {
-    let message: TransportMessage;
-    try {
-      message = JSON.parse(raw) as TransportMessage;
-    } catch {
-      return;
-    }
-
-    if (message.type === "hello" || message.type === "hello_ack") {
-      if (message.buildHash !== this.lobby.getBuildHash()) {
-        this.lobby.reportError(
-          `Build mismatch. Peer ${state.peerId} is on ${message.buildHash}; this build is ${this.lobby.getBuildHash()}.`,
-        );
-        this.closePeer(state.peerId);
-        return;
-      }
-      if (message.type === "hello") {
-        state.helloValidated = true;
-        this.sendMessage(state.channel, {
-          type: "hello_ack",
-          buildHash: this.lobby.getBuildHash(),
-          peerId: this.lobby.getLocalPeerId(),
-        });
-      } else {
-        state.helloValidated = true;
-      }
-      this.peerConnectedHandler?.(state.peerId);
-      return;
-    }
-
-    if (message.type === "input_frame") {
-      if (!state.helloValidated || !state.channel) return;
-      this.queueFrame(message.frame);
-      console.log(
-        `[sd-mp] frame ${message.frame.tick} from ${state.peerId} p${message.frame.playerIndex} queued (${this.getQueuedFrameCount()} total)`,
-      );
-      this.sendMessage(state.channel, {
-        type: "frame_ack",
-        tick: message.frame.tick,
-        playerIndex: message.frame.playerIndex,
-      });
-      return;
-    }
-
-    if (message.type === "frame_ack") {
-      const key = `${state.peerId}:${message.tick}:${message.playerIndex}`;
-      const sentAt = this.frameAckSentAt.get(key);
-      if (sentAt !== undefined) {
-        const rttMs = performance.now() - sentAt;
-        this.frameAckSentAt.delete(key);
-        console.log(`[sd-mp] frame ${message.tick} ack from ${state.peerId} in ${rttMs.toFixed(1)} ms`);
-      }
-      return;
-    }
-
-    if (message.type === "match_propose" || message.type === "match_ack") {
-      if (!state.helloValidated) return;
-      this.matchHandler?.(message, state.peerId);
-      return;
-    }
-  }
-
-  private queueFrame(frame: InputFrame): void {
-    let byPlayer = this.frameQueue.get(frame.tick);
-    if (!byPlayer) {
-      byPlayer = new Map();
-      this.frameQueue.set(frame.tick, byPlayer);
-    }
-    byPlayer.set(frame.playerIndex, frame);
-  }
-
-  private closePeer(peerId: string): void {
-    const state = this.peers.get(peerId);
-    if (!state) return;
-    state.channel?.close();
-    state.pc.close();
-    this.peers.delete(peerId);
-  }
-
-  private sendMessage(channel: RTCDataChannel | null, message: TransportMessage): void {
-    if (!channel || channel.readyState !== "open") return;
-    channel.send(JSON.stringify(message));
+  drainQueuedFrames(): never[] {
+    return [];
   }
 }
 
-export { normalizeCode };
-
 // ===========================================================================
-// Match start coordinator (Phase 2.6)
+// MatchStartCoordinator — listens for server `start` broadcast
 // ===========================================================================
 
 export type MatchStartCallbacks = {
@@ -795,182 +458,63 @@ export type MatchStartCallbacks = {
   onError?: (msg: string) => void;
 };
 
-/**
- * Coordinates the seed + player-slot agreement before a multiplayer match
- * begins. The peer with the lowest peerId in the lobby acts as proposer:
- * generates a seed + startTick + ordered player slots and broadcasts a
- * `match_propose`. Each non-proposer responds with `match_ack` and emits
- * `onMatchStart` immediately. The proposer emits `onMatchStart` once acks
- * from every other connected peer have arrived.
- *
- * Race-safe: if two peers both send proposals (e.g. clock skew), the
- * proposal from the lowest peerId wins; higher-ID proposals are ignored.
- */
 export class MatchStartCoordinator {
-  private readonly lobby: LobbyClient;
-  private readonly transport: MeshTransport;
-  private readonly callbacks: MatchStartCallbacks;
   private active = false;
-  private pendingProposal: {
-    seed: number;
-    startTick: number;
-    players: MatchPlayerInfo[];
-    awaitingAcks: Set<string>;
-  } | null = null;
+  private unsubscribe: (() => void) | null = null;
 
-  constructor(lobby: LobbyClient, transport: MeshTransport, callbacks: MatchStartCallbacks) {
-    this.lobby = lobby;
-    this.transport = transport;
-    this.callbacks = callbacks;
-  }
+  constructor(
+    private readonly lobby: LobbyClient,
+    private readonly _transport: MeshTransport,
+    private readonly callbacks: MatchStartCallbacks,
+  ) {}
 
   start(): void {
     if (this.active) return;
     this.active = true;
-    this.transport.setMatchHandler((msg, fromPeerId) => this.handleIncoming(msg, fromPeerId));
+    this.unsubscribe = this.lobby.onStart((payload) => this.handleServerStart(payload));
   }
 
   stop(): void {
     this.active = false;
-    this.transport.setMatchHandler(null);
-    this.pendingProposal = null;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
   }
 
   /**
-   * Initiate a match-start handshake from this peer if and only if we are
-   * the lowest-peerId peer in the lobby (deterministic proposer). Returns
-   * true if a propose was actually sent.
+   * No-op preserved for compatibility — the server decides when the match
+   * actually begins. We forward a manual "start" message in case the server
+   * supports a host-triggered launch path; auto-start at 2 players still works
+   * regardless.
    */
-  requestMatchStart(opts: { startTickOffset?: number } = {}): boolean {
+  requestMatchStart(_opts: { startTickOffset?: number } = {}): boolean {
     if (!this.active) return false;
-    const players = this.lobby.getPlayers();
-    if (players.length < 2) {
-      this.callbacks.onError?.("Need at least 2 players in the lobby to start a match.");
-      return false;
-    }
-    const localPeerId = this.lobby.getLocalPeerId();
-    const lowestPeerId = players
-      .map((p) => p.peerId)
-      .reduce((a, b) => (a < b ? a : b));
-    if (lowestPeerId !== localPeerId) {
-      // Not the proposer — wait for the lowest-ID peer to send propose.
-      return false;
-    }
-
-    const seed = this.generateSeed();
-    const startTickOffset = opts.startTickOffset ?? 6; // ~100ms at 60Hz
-    const startTick = startTickOffset; // sim ticks start at 0; offset gives peers buffer to receive propose
-    const slots = this.assignPlayerSlots(players);
-    const awaitingAcks = new Set<string>();
-    for (const slot of slots) {
-      if (slot.peerId !== localPeerId) awaitingAcks.add(slot.peerId);
-    }
-
-    this.pendingProposal = { seed, startTick, players: slots, awaitingAcks };
-
-    const msg: MatchStartMessage = {
-      type: "match_propose",
-      seed,
-      startTick,
-      players: slots,
-      proposerPeerId: localPeerId,
-    };
-    this.transport.broadcastMatchMessage(msg);
-
-    if (awaitingAcks.size === 0) {
-      // Solo lobby (shouldn't happen — we guard above) — start immediately.
-      this.fireMatchStart(seed, startTick, slots);
-    }
+    this.lobby.requestStart();
     return true;
   }
 
-  private handleIncoming(msg: MatchStartMessage, fromPeerId: string): void {
-    if (!this.active) return;
-    if (msg.type === "match_propose") {
-      // Defensive: only accept proposals from the lowest peerId in the lobby.
-      const players = this.lobby.getPlayers();
-      const lowestPeerId = players
-        .map((p) => p.peerId)
-        .reduce((a, b) => (a < b ? a : b), msg.proposerPeerId);
-      if (msg.proposerPeerId !== lowestPeerId) {
-        // Race: a higher-ID peer also proposed. Ignore — wait for the lowest's.
-        return;
-      }
-      // Ack and start.
-      const ack: MatchStartMessage = {
-        type: "match_ack",
-        proposerPeerId: msg.proposerPeerId,
-        ackerPeerId: this.lobby.getLocalPeerId(),
-      };
-      this.transport.sendMatchMessageTo(fromPeerId, ack);
-      this.fireMatchStart(msg.seed, msg.startTick, msg.players);
-      return;
-    }
-    if (msg.type === "match_ack") {
-      if (!this.pendingProposal) return;
-      if (msg.proposerPeerId !== this.lobby.getLocalPeerId()) return; // not for us
-      this.pendingProposal.awaitingAcks.delete(msg.ackerPeerId);
-      if (this.pendingProposal.awaitingAcks.size === 0) {
-        const { seed, startTick, players } = this.pendingProposal;
-        this.pendingProposal = null;
-        this.fireMatchStart(seed, startTick, players);
-      }
-    }
-  }
-
-  private fireMatchStart(seed: number, startTick: number, players: MatchPlayerInfo[]): void {
+  private handleServerStart(payload: StartBroadcast): void {
     const localPeerId = this.lobby.getLocalPeerId();
-    const local = players.find((p) => p.peerId === localPeerId);
+    const local = payload.slots.find((s) => s.peerId === localPeerId);
     if (!local) {
-      this.callbacks.onError?.("Match started but local peer is not in the player list.");
+      this.callbacks.onError?.("Match started but local peer is not in the slot list.");
       return;
     }
+    const seedNum = typeof payload.seed === "string" ? parseInt(payload.seed, 10) : payload.seed;
     const config: MultiplayerConfig = {
-      seed,
-      startTick,
+      seed: Number.isFinite(seedNum) && seedNum !== 0 ? seedNum : 1,
+      startTick: payload.tick ?? 0,
       localPlayerIndex: local.playerIndex,
-      players,
+      players: payload.slots,
     };
     this.callbacks.onMatchStart(config);
   }
-
-  private generateSeed(): number {
-    // mulberry32 has a degenerate sequence from seed 0; guard against it.
-    let s = 0;
-    while (s === 0) s = Math.floor(Math.random() * 0xffffffff);
-    return s;
-  }
-
-  private assignPlayerSlots(players: LobbyPlayer[]): MatchPlayerInfo[] {
-    // Use the lobby's existing playerIndex assignment (sorted by joinedAtMs+peerId).
-    return players
-      .slice()
-      .sort((a, b) => a.playerIndex - b.playerIndex)
-      .map((p) => ({
-        peerId: p.peerId,
-        name: p.name,
-        playerIndex: p.playerIndex,
-        color: pickPlayerColor(p.playerIndex),
-      }));
-  }
-}
-
-const PLAYER_COLOR_PALETTE = [0x4be1ff, 0xff5fa2, 0xffd24b, 0x7bff5f] as const;
-
-export function pickPlayerColor(playerIndex: number): number {
-  return PLAYER_COLOR_PALETTE[((playerIndex % PLAYER_COLOR_PALETTE.length) + PLAYER_COLOR_PALETTE.length) % PLAYER_COLOR_PALETTE.length]!;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Remote player rendering (Sprint 2.5)
+// Remote player rendering (carried over verbatim from the previous mesh
+// implementation — purely visual, no transport coupling)
 // ────────────────────────────────────────────────────────────────────────────
 
-/**
- * A remote player visual: a solid color-tinted icosahedron crystal mirroring
- * the local player's geometry, with a name sprite floating above. Mirrors the
- * `Ghost` shape from `src/ghost.ts` but full-opacity (it's a live peer, not a
- * recording) and collision-eligible once Phase 3 wires sphere-bumps.
- */
 export interface RemotePlayer {
   playerIndex: number;
   name: string;
@@ -985,17 +529,9 @@ export interface RemotePlayer {
 const REMOTE_PLAYER_RADIUS = 0.6;
 const REMOTE_NAME_SPRITE_SCALE = 0.7;
 
-/**
- * Build a remote-player visual ready to add to a scene. Caller owns the
- * lifecycle: position via `updateRemotePlayer`, dispose via `disposeRemotePlayer`.
- *
- * Color and name come from the match-start handshake's `MatchPlayerInfo`.
- */
 export function createRemotePlayer(playerIndex: number, name: string, color: number): RemotePlayer {
   const group = new THREE.Group();
 
-  // Solid icosahedron — same geo as local player crystal. Wireframe overlay
-  // gives the same fractured look without a second pass at the shader level.
   const geo = new THREE.IcosahedronGeometry(REMOTE_PLAYER_RADIUS, 0);
   const material = new THREE.MeshBasicMaterial({
     color,
@@ -1005,7 +541,6 @@ export function createRemotePlayer(playerIndex: number, name: string, color: num
   const mesh = new THREE.Mesh(geo, material);
   group.add(mesh);
 
-  // Wireframe overlay — thin colored edges so the silhouette pops on dark BG.
   const wireMat = new THREE.MeshBasicMaterial({
     color,
     wireframe: true,
@@ -1017,7 +552,6 @@ export function createRemotePlayer(playerIndex: number, name: string, color: num
   wireMesh.scale.setScalar(1.05);
   group.add(wireMesh);
 
-  // Name label as a billboarded sprite.
   const nameTexture = makeRemoteNameTexture(name, color);
   const nameMaterial = new THREE.SpriteMaterial({
     map: nameTexture,
@@ -1034,13 +568,6 @@ export function createRemotePlayer(playerIndex: number, name: string, color: num
   return { playerIndex, name, color, group, mesh, material, nameSprite, nameMaterial };
 }
 
-/**
- * Snap a remote player visual to its current sim position. World coords —
- * camera anchoring is the renderer's responsibility (see Sprint 2.3).
- *
- * `dt` drives the idle spin so a stationary remote still feels alive, matching
- * the ghost playback feel.
- */
 export function updateRemotePlayer(remote: RemotePlayer, player: PlayerState, dt: number): void {
   remote.group.visible = player.alive;
   if (!player.alive) return;
@@ -1049,7 +576,6 @@ export function updateRemotePlayer(remote: RemotePlayer, player: PlayerState, dt
   remote.mesh.rotation.y += dt * 1.2;
   remote.mesh.rotation.x = Math.sin(performance.now() * 0.0017) * 0.15;
 
-  // Phase flicker: dim while shattered (matches ghost rendering convention).
   const targetOpacity = player.shattered ? 0.35 : 1;
   remote.material.opacity = THREE.MathUtils.lerp(
     remote.material.opacity || 1,
@@ -1066,7 +592,6 @@ export function disposeRemotePlayer(remote: RemotePlayer): void {
   remote.nameMaterial.dispose();
 }
 
-/** Render a short name label to a CanvasTexture — same recipe as ghost.ts. */
 function makeRemoteNameTexture(name: string, color: number): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = 512;
@@ -1085,3 +610,327 @@ function makeRemoteNameTexture(name: string, color: number): THREE.CanvasTexture
   tex.needsUpdate = true;
   return tex;
 }
+
+// Re-export `LockstepRunner` from the sim package — single-player still uses
+// it for deterministic ghost replay and validate-sim. Multiplayer no longer
+// uses lockstep on the wire.
+export { LockstepRunner } from "@sd/sim";
+
+// ===========================================================================
+// MpRunner — local prediction + server reconciliation + remote interpolation
+// ===========================================================================
+
+import { ShatterDriftSimulation } from "@sd/sim";
+import type { AuthoritativeStateSnapshot, GameSnapshot, PlayerState as SimPlayerState } from "@sd/sim";
+
+/** Render delay for remote-player snapshot interpolation. ~3 server ticks at 30 Hz. */
+const REMOTE_RENDER_DELAY_MS = 100;
+/** Client logic tick rate — must match server's `setSimulationInterval` cadence. */
+const CLIENT_TICK_HZ = 30;
+const CLIENT_TICK_DT = 1 / CLIENT_TICK_HZ;
+/** How many input ticks we keep in the local replay buffer (drop older). */
+const INPUT_BUFFER_LIMIT_TICKS = 120; // ~4s at 30Hz
+
+export type MpRunnerEvents = {
+  type: "player_bumped";
+  playerA: number;
+  playerB: number;
+  contactX: number;
+  contactZ: number;
+};
+
+export interface MpRunnerOptions {
+  config: MultiplayerConfig;
+  transport: MeshTransport;
+  onTickAdvanced?: (tick: number, state: GameSnapshot) => void;
+  onEvent?: (event: MpRunnerEvents) => void;
+  onLocalDeath?: () => void;
+}
+
+interface RemotePlayerSample {
+  receivedAtMs: number;
+  player: SnapshotPlayer;
+}
+
+/**
+ * Drives the local prediction sim during a Colyseus match.
+ *
+ * Each frame: accumulates real-time dt, runs the local sim at a fixed 30 Hz
+ * matching the server, and forwards input messages over the transport. On
+ * each incoming server snapshot, snaps the local player to the server's
+ * authoritative position and replays buffered inputs newer than the last
+ * server-acked tick — classic client-side prediction + reconciliation.
+ *
+ * For remote players, holds a small history of server samples and exposes a
+ * helper that returns positions interpolated ~100 ms behind the latest
+ * snapshot, smoothing over packet jitter.
+ */
+export class MpRunner {
+  private readonly sim: ShatterDriftSimulation;
+  private readonly transport: MeshTransport;
+  private readonly localPlayerIndex: number;
+  private readonly config: MultiplayerConfig;
+  private accumulator = 0;
+  private currentTick: number;
+  private lastServerTick = -1;
+  private inputBuffer = new Map<number, number>();
+  private remoteHistory = new Map<number, RemotePlayerSample[]>();
+  private latestSnapshot: ServerSnapshot | null = null;
+  private running = false;
+
+  constructor(opts: MpRunnerOptions) {
+    const { config, transport } = opts;
+    this.config = config;
+    this.transport = transport;
+    this.localPlayerIndex = config.localPlayerIndex;
+    this.currentTick = config.startTick;
+    this.sim = new ShatterDriftSimulation({
+      seed: config.seed,
+      playerCount: config.players.length,
+      localPlayerIndex: config.localPlayerIndex,
+      playerNames: config.players.map((p) => p.name),
+      playerColors: config.players.map((p) => p.color),
+      fixedDt: CLIENT_TICK_DT,
+    });
+    this.onTickAdvanced = opts.onTickAdvanced;
+    this.onEvent = opts.onEvent;
+    this.onLocalDeath = opts.onLocalDeath;
+  }
+
+  private readonly onTickAdvanced?: MpRunnerOptions["onTickAdvanced"];
+  private readonly onEvent?: MpRunnerOptions["onEvent"];
+  private readonly onLocalDeath?: MpRunnerOptions["onLocalDeath"];
+
+  start(): void {
+    this.running = true;
+  }
+
+  stop(): void {
+    this.running = false;
+    this.inputBuffer.clear();
+    this.remoteHistory.clear();
+  }
+
+  getCurrentTick(): number {
+    return this.currentTick;
+  }
+
+  /** Underlying simulation — exposed so renderers can call `applyAuthoritativeState`, etc. */
+  getSim(): ShatterDriftSimulation {
+    return this.sim;
+  }
+
+  /**
+   * Advance one render frame. Runs as many fixed-DT sim ticks as needed to
+   * keep up with wall clock, sends input to the server, and buffers it for
+   * reconciliation.
+   */
+  tickFrame(realDt: number, action: number): void {
+    if (!this.running) return;
+    this.accumulator += Math.min(realDt, 0.25); // cap so a tab-blur stall doesn't fast-forward minutes
+    while (this.accumulator >= CLIENT_TICK_DT) {
+      if (!this.running) return; // onLocalDeath / external stop dropped us mid-loop
+      this.sim.setAction(action, this.localPlayerIndex);
+      const result = this.sim.tick();
+      this.inputBuffer.set(this.currentTick, action);
+      this.transport.sendInputFrame(this.currentTick, action);
+      this.dispatchEvents(result.events);
+      this.onTickAdvanced?.(this.currentTick, result.state);
+      if (!this.running) return; // onTickAdvanced may have called stop() (e.g. transitionToMatchOver)
+      if (result.events.some((ev) => ev.type === "death")) {
+        const local = this.sim.getAuthoritativeState().players[this.localPlayerIndex];
+        if (local && !local.alive) this.onLocalDeath?.();
+      }
+      this.currentTick += 1;
+      this.accumulator -= CLIENT_TICK_DT;
+    }
+    this.gcInputBuffer();
+  }
+
+  /**
+   * Apply a server snapshot. Snaps local player state to the server's
+   * authoritative values and replays buffered inputs > server-ack tick to
+   * fast-forward back to the client's predicted current tick.
+   */
+  applySnapshot(snapshot: ServerSnapshot): void {
+    this.latestSnapshot = snapshot;
+    const serverTick = snapshot.tick;
+    if (serverTick < this.lastServerTick) return; // out-of-order — drop
+    this.lastServerTick = serverTick;
+
+    // Stash remote-player history for interpolation.
+    for (const player of snapshot.players) {
+      const idx = player.slot;
+      if (idx === this.localPlayerIndex) continue;
+      const history = this.remoteHistory.get(idx) ?? [];
+      history.push({ receivedAtMs: snapshot.receivedAtMs, player });
+      while (history.length > 8) history.shift();
+      this.remoteHistory.set(idx, history);
+    }
+
+    // Snap the local sim's player states to the server snapshot.
+    const simState = this.sim.getAuthoritativeState();
+    for (const serverPlayer of snapshot.players) {
+      const idx = serverPlayer.slot;
+      const localPlayer = (this.sim as unknown as {
+        runtime: {
+          container: {
+            get: (token: unknown) => { state: { players: SimPlayerState[] } };
+          };
+        };
+      })["runtime"]?.container?.get;
+      // Guard: don't reach into runtime internals — instead use the public
+      // sim API. We snap by re-running the sim from scratch ONLY for the
+      // local player, otherwise we just record server values for remote
+      // rendering. The cheap approach: bring local player x and bumpVelX in
+      // line with server values via the runtime reference held on the sim.
+      void localPlayer;
+      void simState;
+      const worldPlayer = this.unsafeGetSimPlayer(idx);
+      if (!worldPlayer) continue;
+      worldPlayer.x = serverPlayer.x;
+      worldPlayer.z = serverPlayer.z;
+      worldPlayer.bumpVelX = serverPlayer.bumpVelX;
+      worldPlayer.alive = serverPlayer.alive;
+      worldPlayer.color = serverPlayer.color;
+      // For remote players, also overwrite name to keep HUD label in sync.
+      if (idx !== this.localPlayerIndex && serverPlayer.name) {
+        worldPlayer.name = serverPlayer.name;
+      }
+    }
+
+    // Replay buffered local inputs strictly newer than the server-ack tick
+    // to fast-forward the local sim to the client's current tick.
+    const localServerPlayer = snapshot.players.find((p) => p.slot === this.localPlayerIndex);
+    const ackTick = localServerPlayer?.lastInputTick ?? serverTick;
+    const replayInputs = Array.from(this.inputBuffer.entries())
+      .filter(([tick]) => tick > ackTick && tick < this.currentTick)
+      .sort((a, b) => a[0] - b[0]);
+    for (const [, replayAction] of replayInputs) {
+      this.sim.setAction(replayAction, this.localPlayerIndex);
+      this.sim.tick();
+    }
+    // Drop inputs the server has already acknowledged.
+    for (const tick of Array.from(this.inputBuffer.keys())) {
+      if (tick <= ackTick) this.inputBuffer.delete(tick);
+    }
+  }
+
+  /**
+   * Latest local-sim view (predicted local player, snapped/replayed remotes).
+   * Caller treats this exactly like the singleplayer `sim.getState()`.
+   */
+  getState(): GameSnapshot {
+    return this.sim.getState();
+  }
+
+  /**
+   * Authoritative-shaped snapshot for renderers that need per-player data.
+   * Local player comes from local prediction; remote players are overwritten
+   * with the latest server snapshot interpolated to the render delay.
+   */
+  getInterpolatedAuthoritativeState(nowMs: number = performance.now()): AuthoritativeStateSnapshot {
+    const base = this.sim.getAuthoritativeState();
+    const renderTime = nowMs - REMOTE_RENDER_DELAY_MS;
+    for (const player of base.players) {
+      if (player.playerIndex === this.localPlayerIndex) continue;
+      const interpolated = this.interpolateRemote(player.playerIndex, renderTime);
+      if (interpolated) {
+        player.x = interpolated.x;
+        player.z = interpolated.z;
+        player.bumpVelX = interpolated.bumpVelX;
+        player.alive = interpolated.alive;
+        player.color = interpolated.color;
+        if (interpolated.name) player.name = interpolated.name;
+      }
+    }
+    return base;
+  }
+
+  getLatestSnapshot(): ServerSnapshot | null {
+    return this.latestSnapshot;
+  }
+
+  getConfig(): MultiplayerConfig {
+    return this.config;
+  }
+
+  // -------------------------------------------------------------------------
+  // Internals
+  // -------------------------------------------------------------------------
+
+  private dispatchEvents(events: ReadonlyArray<{ type: string; [k: string]: unknown }>): void {
+    if (!this.onEvent) return;
+    for (const ev of events) {
+      if (ev.type === "player_bumped") {
+        this.onEvent({
+          type: "player_bumped",
+          playerA: ev.playerA as number,
+          playerB: ev.playerB as number,
+          contactX: ev.contactX as number,
+          contactZ: ev.contactZ as number,
+        });
+      }
+    }
+  }
+
+  private gcInputBuffer(): void {
+    if (this.inputBuffer.size <= INPUT_BUFFER_LIMIT_TICKS) return;
+    const minKeep = this.currentTick - INPUT_BUFFER_LIMIT_TICKS;
+    for (const tick of Array.from(this.inputBuffer.keys())) {
+      if (tick < minKeep) this.inputBuffer.delete(tick);
+    }
+  }
+
+  private interpolateRemote(playerIndex: number, renderTimeMs: number): SnapshotPlayer | null {
+    const history = this.remoteHistory.get(playerIndex);
+    if (!history || history.length === 0) return null;
+    if (history.length === 1) return history[0]!.player;
+
+    // Find the two samples bracketing renderTime.
+    let prev = history[0]!;
+    let next = history[history.length - 1]!;
+    for (let i = 0; i < history.length - 1; i++) {
+      if (history[i]!.receivedAtMs <= renderTimeMs && history[i + 1]!.receivedAtMs >= renderTimeMs) {
+        prev = history[i]!;
+        next = history[i + 1]!;
+        break;
+      }
+    }
+    const span = next.receivedAtMs - prev.receivedAtMs;
+    if (span <= 0) return next.player;
+    const t = Math.max(0, Math.min(1, (renderTimeMs - prev.receivedAtMs) / span));
+    return {
+      ...next.player,
+      x: prev.player.x + (next.player.x - prev.player.x) * t,
+      z: prev.player.z + (next.player.z - prev.player.z) * t,
+      bumpVelX: prev.player.bumpVelX + (next.player.bumpVelX - prev.player.bumpVelX) * t,
+    };
+  }
+
+  /**
+   * Reach into the live sim runtime to mutate a player's authoritative
+   * fields. Used to snap to server values during reconciliation. We can't
+   * achieve this through `setAction` alone — the server's authoritative `x`
+   * and `bumpVelX` would otherwise stay client-predicted forever if RTT > 0.
+   *
+   * The runtime's container exposes the world singleton via `SimulationWorldToken`.
+   * We import the token lazily to avoid a hot path coupling to sim internals.
+   */
+  private unsafeGetSimPlayer(playerIndex: number): SimPlayerState | undefined {
+    const runtime = (this.sim as unknown as { runtime?: { container?: { get: (token: unknown) => unknown } } }).runtime;
+    if (!runtime?.container) return undefined;
+    // The token import is deferred: pulling it from `@sd/sim` at module-load
+    // time would create a circular shape between the runner and the sim's
+    // tokens module on certain bundlers. Resolve via the sim's index re-exports.
+    const tokenMod = MP_SIM_TOKENS;
+    const world = runtime.container.get(tokenMod.SimulationWorldToken) as
+      | { state: { players: SimPlayerState[] } }
+      | undefined;
+    return world?.state.players[playerIndex];
+  }
+}
+
+// Lazy-resolve the world token via sim package to avoid an import-time cycle.
+// `@sd/sim` re-exports `SimulationWorldToken` from `./tokens`.
+import * as MP_SIM_TOKENS from "@sd/sim";

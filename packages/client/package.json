@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@sd/sim": "*",
-    "firebase": "^12.12.1",
+    "colyseus.js": "^0.15.0",
     "three": "^0.183.0"
   },
   "devDependencies": {

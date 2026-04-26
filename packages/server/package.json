@@ -2,15 +2,24 @@
   "name": "@sd/server",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
+  "description": "Shatter Drift server-authoritative match server (Colyseus). Deploys to sd-mp.tommyato.com.",
+  "main": "dist/index.cjs",
   "scripts": {
-    "start": "node --experimental-strip-types src/index.ts",
+    "build": "node build.mjs",
+    "start": "node dist/index.cjs",
+    "dev": "node build.mjs --watch & node --watch dist/index.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@sd/sim": "*"
+    "@colyseus/schema": "^2.0.0",
+    "@sd/sim": "*",
+    "colyseus": "^0.15.0",
+    "express": "^4.19.0"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.25.12",
     "typescript": "^5.7.0"
   }
 }
