@@ -613,8 +613,7 @@
       width: 100%;
       font-family: 'Orbitron', monospace;
       font-size: 18px;
-      letter-spacing: 6px;
-      text-transform: uppercase;
+      letter-spacing: 3px;
       color: #e7fbff;
       background: rgba(0,12,22,0.78);
       border: 1px solid rgba(124,232,255,0.18);
@@ -625,7 +624,8 @@
     }
     #multiplayer-code-input::placeholder {
       color: rgba(143,169,188,0.65);
-      letter-spacing: 4px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
     }
     #multiplayer-current-code {
       font-family: 'Orbitron', monospace;
@@ -985,12 +985,12 @@
     <div id="multiplayer-modal" class="hidden">
       <div id="multiplayer-card">
         <h2>MULTIPLAYER</h2>
-        <div id="multiplayer-status">Create a lobby or join one with a 6-character code.</div>
+        <div id="multiplayer-status">Create a lobby or paste a code to join.</div>
         <div id="multiplayer-actions">
           <button id="multiplayer-create-btn" class="mp-btn secondary" data-ui>CREATE LOBBY</button>
         </div>
         <div id="multiplayer-join-row">
-          <input id="multiplayer-code-input" data-ui type="text" inputmode="text" autocomplete="off" maxlength="6" placeholder="ABC123">
+          <input id="multiplayer-code-input" data-ui type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="12" placeholder="lobby code">
           <button id="multiplayer-join-btn" class="mp-btn" data-ui>JOIN</button>
         </div>
         <div id="multiplayer-current-code"></div>

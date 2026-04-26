@@ -1188,7 +1188,7 @@ export class Game {
     this.multiplayerModal.classList.remove("hidden");
     this.multiplayerCodeInput.value = "";
     if (this.matchState !== "inLobby") {
-      this.setMultiplayerStatus("Create a lobby or join one with a 6-character code.");
+      this.setMultiplayerStatus("Create a lobby or paste a code to join.");
       this.multiplayerCodeEl.textContent = "";
     }
     this.updateMultiplayerLobbyControls();

@@ -33,10 +33,11 @@ declare const __BUILD_HASH__: string;
 const ROOM_NAME = "shatter-drift";
 const MAX_PLAYERS = 4;
 
-// 6-character lobby code alphabet preserved purely for the input box's
-// normalize-as-you-type cosmetics. Colyseus room IDs are 9 chars and
-// lowercase-alphanumeric, so we widen `normalizeCode` to accept those too.
-const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+// Colyseus generates 9-character mixed-case alphanumeric room IDs (e.g.
+// `cfJZQLzs6`). `joinById` is case-sensitive against that exact string, so
+// we keep normalization permissive — strip whitespace + control chars only,
+// preserve case and every alphanumeric. The 12-char cap matches the input's
+// `maxlength` and gives headroom if Colyseus ever lengthens the default.
 
 const PLAYER_COLOR_PALETTE = [0x4be1ff, 0xff5fa2, 0xffd24b, 0x7bff5f] as const;
 
@@ -94,12 +95,7 @@ function normalizeName(name: string): string {
 }
 
 export function normalizeCode(code: string): string {
-  const allowed = new Set(CODE_ALPHABET.split(""));
-  return code
-    .split("")
-    .filter((char) => allowed.has(char))
-    .slice(0, 12)
-    .join("");
+  return code.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 12);
 }
 
 export function pickPlayerColor(playerIndex: number): number {
