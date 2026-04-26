@@ -37,6 +37,7 @@ import { fetchLeaderboard, submitScore, fetchGhosts, submitGhost, fetchGhostUplo
 import { GhostRecorder, GhostManager } from "./ghost";
 import { getLocalUsername, setLocalUsername, migrateLegacyUsername } from "./coolname";
 import { MenuNavigation } from "./menu-navigation";
+import { LobbyClient, MeshTransport, normalizeCode, type LobbyPlayer } from "./multiplayer";
 import {
   createRiftFlipState,
   updateRiftFlip,
@@ -409,6 +410,18 @@ export class Game {
   private hudBossWarning!: HTMLElement;
   private customizePanel!: HTMLElement;
   private customizeOpen = false;
+  private multiplayerModal!: HTMLElement;
+  private multiplayerOpen = false;
+  private multiplayerStatusEl!: HTMLElement;
+  private multiplayerCodeEl!: HTMLElement;
+  private multiplayerPlayerListEl!: HTMLElement;
+  private multiplayerEmptyEl!: HTMLElement;
+  private multiplayerCodeInput!: HTMLInputElement;
+  private multiplayerLeaveBtn!: HTMLButtonElement;
+  private multiplayerBusy = false;
+  private lobbyClient: LobbyClient | null = null;
+  private meshTransport: MeshTransport | null = null;
+  private multiplayerTick = 0;
   private pauseMenu!: HTMLElement;
   private gameOverOverlay!: HTMLElement;
 
@@ -650,6 +663,13 @@ export class Game {
     this.hudPowerUp = document.getElementById("hud-powerup")!;
     this.hudBossWarning = document.getElementById("hud-boss-warning")!;
     this.customizePanel = document.getElementById("customize-panel")!;
+    this.multiplayerModal = document.getElementById("multiplayer-modal")!;
+    this.multiplayerStatusEl = document.getElementById("multiplayer-status")!;
+    this.multiplayerCodeEl = document.getElementById("multiplayer-current-code")!;
+    this.multiplayerPlayerListEl = document.getElementById("multiplayer-player-list")!;
+    this.multiplayerEmptyEl = document.getElementById("multiplayer-empty")!;
+    this.multiplayerCodeInput = document.getElementById("multiplayer-code-input") as HTMLInputElement;
+    this.multiplayerLeaveBtn = document.getElementById("multiplayer-leave-btn") as HTMLButtonElement;
     this.pauseMenu = document.getElementById("pause-menu")!;
     this.gameOverOverlay = document.getElementById("gameover-overlay")!;
 
@@ -687,6 +707,9 @@ export class Game {
 
     // Customize UI
     this.initCustomizePanel();
+
+    // Multiplayer lobby UI
+    this.initMultiplayerUI();
 
     // Daily Challenge button
     this.initDailyButton();
@@ -742,9 +765,11 @@ export class Game {
     const items: HTMLElement[] = [];
     const playBtn = document.getElementById("play-btn");
     const dailyBtn = document.getElementById("daily-btn");
+    const multiplayerBtn = document.getElementById("multiplayer-btn");
     const customizeBtn = document.getElementById("customize-btn");
     if (playBtn) items.push(playBtn);
     if (dailyBtn) items.push(dailyBtn);
+    if (multiplayerBtn) items.push(multiplayerBtn);
     if (customizeBtn) items.push(customizeBtn);
     // Esc / B is a no-op on the title screen — there's nothing to back
     // out to. Pass undefined onCancel so the press is harmlessly ignored.
@@ -766,6 +791,18 @@ export class Game {
     // need raw arrow keys for cursor movement and conflict with menu nav.
     // Mouse-click into the input still works for editing.
     this.menuNav.setScope(items, () => this.closeCustomize());
+  }
+
+  private applyMultiplayerMenuScope() {
+    const items: HTMLElement[] = [];
+    const create = document.getElementById("multiplayer-create-btn");
+    const join = document.getElementById("multiplayer-join-btn");
+    if (create) items.push(create);
+    if (join) items.push(join);
+    items.push(this.multiplayerLeaveBtn);
+    this.menuNav.pushScope(items, () => {
+      void this.leaveOrCloseMultiplayer();
+    });
   }
 
   private applyPauseMenuScope() {
@@ -799,6 +836,14 @@ export class Game {
     this.customizePanel.classList.add("hidden");
     this.titleOverlay.classList.remove("hidden");
     this.applyTitleMenuScope();
+    this.menuNavSuppressFrames = 2;
+  }
+
+  private closeMultiplayerModal() {
+    if (!this.multiplayerOpen) return;
+    this.multiplayerOpen = false;
+    this.multiplayerModal.classList.add("hidden");
+    this.menuNav.popScope();
     this.menuNavSuppressFrames = 2;
   }
 
@@ -998,6 +1043,158 @@ export class Game {
     this.player.applySkin(this.unlocks.getSelectedCrystal());
   }
 
+  private initMultiplayerUI() {
+    this.lobbyClient = new LobbyClient(getLocalUsername());
+    this.meshTransport = new MeshTransport(this.lobbyClient);
+    this.lobbyClient.subscribe({
+      onPlayersChanged: (players) => this.renderLobbyPlayers(players),
+      onError: (message) => this.setMultiplayerStatus(message, true),
+      onLobbyClosed: (message) => {
+        this.setMultiplayerStatus(message, true);
+        void this.leaveOrCloseMultiplayer();
+      },
+    });
+
+    const openBtn = document.getElementById("multiplayer-btn")!;
+    const createBtn = document.getElementById("multiplayer-create-btn") as HTMLButtonElement;
+    const joinBtn = document.getElementById("multiplayer-join-btn") as HTMLButtonElement;
+
+    openBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.openMultiplayerModal();
+    });
+    openBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+
+    this.multiplayerCodeInput.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void this.joinMultiplayerLobby();
+      }
+    });
+    this.multiplayerCodeInput.addEventListener("input", () => {
+      this.multiplayerCodeInput.value = normalizeCode(this.multiplayerCodeInput.value);
+    });
+
+    createBtn.addEventListener("click", () => {
+      void this.createMultiplayerLobby();
+    });
+    joinBtn.addEventListener("click", () => {
+      void this.joinMultiplayerLobby();
+    });
+    this.multiplayerLeaveBtn.addEventListener("click", () => {
+      void this.leaveOrCloseMultiplayer();
+    });
+
+    this.renderLobbyPlayers([]);
+  }
+
+  private openMultiplayerModal() {
+    if (this.multiplayerOpen) return;
+    this.multiplayerOpen = true;
+    this.multiplayerModal.classList.remove("hidden");
+    this.multiplayerCodeInput.value = "";
+    this.setMultiplayerStatus("Create a lobby or join one with a 6-character code.");
+    this.multiplayerCodeEl.textContent = "";
+    this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+    this.applyMultiplayerMenuScope();
+    this.menuNavSuppressFrames = 2;
+  }
+
+  private setMultiplayerStatus(message: string, isError = false) {
+    this.multiplayerStatusEl.textContent = message;
+    this.multiplayerStatusEl.classList.toggle("error", isError);
+  }
+
+  private renderLobbyPlayers(players: LobbyPlayer[]) {
+    if (players.length === 0) {
+      this.multiplayerEmptyEl.classList.remove("hidden");
+      this.multiplayerEmptyEl.textContent = this.lobbyClient?.getLobbyCode()
+        ? "Waiting for players..."
+        : "No active lobby yet.";
+      this.multiplayerPlayerListEl.querySelectorAll(".mp-player-row").forEach((el) => el.remove());
+      this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+      return;
+    }
+
+    this.multiplayerEmptyEl.classList.add("hidden");
+    this.multiplayerPlayerListEl.querySelectorAll(".mp-player-row").forEach((el) => el.remove());
+    for (const player of players) {
+      const row = document.createElement("div");
+      row.className = "mp-player-row";
+      row.innerHTML = `
+        <span class="slot">P${player.playerIndex + 1}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${player.name}</span>
+        <span class="you">${player.isLocal ? "YOU" : "READY"}</span>
+      `;
+      this.multiplayerPlayerListEl.appendChild(row);
+    }
+    this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+  }
+
+  private async syncLobbyNameFromStorage() {
+    if (!this.lobbyClient) return;
+    await this.lobbyClient.setPlayerName(getLocalUsername());
+    this.setMultiplayerStatus(`Using ${getLocalUsername()} for this lobby.`);
+  }
+
+  private async createMultiplayerLobby() {
+    if (!this.lobbyClient || !this.meshTransport || this.multiplayerBusy) return;
+    this.multiplayerBusy = true;
+    try {
+      await this.syncLobbyNameFromStorage();
+      const code = await this.lobbyClient.createLobby();
+      this.meshTransport.start();
+      this.multiplayerTick = 0;
+      this.multiplayerCodeEl.textContent = `LOBBY CODE: ${code}`;
+      this.setMultiplayerStatus(`Lobby ${code} live. Share the code and wait for players.`);
+      this.renderLobbyPlayers(this.lobbyClient.getPlayers());
+    } catch (error) {
+      this.setMultiplayerStatus(error instanceof Error ? error.message : "Failed to create lobby.", true);
+    } finally {
+      this.multiplayerBusy = false;
+    }
+  }
+
+  private async joinMultiplayerLobby() {
+    if (!this.lobbyClient || !this.meshTransport || this.multiplayerBusy) return;
+    this.multiplayerBusy = true;
+    try {
+      await this.syncLobbyNameFromStorage();
+      const players = await this.lobbyClient.joinLobby(this.multiplayerCodeInput.value);
+      this.meshTransport.start();
+      this.multiplayerTick = 0;
+      const code = this.lobbyClient.getLobbyCode();
+      this.multiplayerCodeEl.textContent = code ? `JOINED: ${code}` : "";
+      this.setMultiplayerStatus(`Joined lobby ${code}. WebRTC mesh is connecting.`);
+      this.renderLobbyPlayers(players);
+    } catch (error) {
+      this.setMultiplayerStatus(error instanceof Error ? error.message : "Failed to join lobby.", true);
+    } finally {
+      this.multiplayerBusy = false;
+    }
+  }
+
+  private async leaveOrCloseMultiplayer() {
+    if (!this.lobbyClient || !this.meshTransport || this.multiplayerBusy) return;
+    if (!this.lobbyClient.getLobbyCode()) {
+      this.closeMultiplayerModal();
+      return;
+    }
+    this.multiplayerBusy = true;
+    try {
+      await this.meshTransport.stop();
+      await this.lobbyClient.leaveLobby();
+      this.multiplayerCodeEl.textContent = "";
+      this.multiplayerCodeInput.value = "";
+      this.setMultiplayerStatus("Returned to singleplayer title.");
+      this.renderLobbyPlayers([]);
+      this.closeMultiplayerModal();
+    } finally {
+      this.multiplayerBusy = false;
+    }
+  }
+
   private initDailyButton() {
     const dailyBtn = document.getElementById("daily-btn");
     if (!dailyBtn) return;
@@ -1118,6 +1315,10 @@ export class Game {
       this.handlePauseMenuLeftRight();
     }
 
+    if (this.meshTransport) {
+      this.meshTransport.sendInputFrame(this.multiplayerTick++, this.encodeNetworkAction());
+    }
+
     switch (this.state) {
       case GameState.Title:
         this.updateTitle(dt, menuConsumedActivate);
@@ -1204,6 +1405,7 @@ export class Game {
     if (
       !menuConsumedActivate &&
       !this.customizeOpen &&
+      !this.multiplayerOpen &&
       this.menuNavSuppressFrames === 0 &&
       this.input.justPressed("click")
     ) {
@@ -1224,6 +1426,32 @@ export class Game {
     const next = Math.max(0, Math.min(100, parseInt(slider.value || "0", 10) + dir));
     slider.value = String(next);
     setMasterVolume(next / 100);
+  }
+
+  private encodeNetworkAction(): number {
+    const move = this.input.getMovement().x;
+    const left = move < -0.25;
+    const right = move > 0.25;
+    const shatter = this.input.isDown("space") || this.input.isDown("click");
+    const boost = this.input.isBoostDown();
+    const brake = this.input.isBrakeDown();
+
+    if (!boost && !brake) {
+      if (!left && !right && !shatter) return 0;
+      if (left && !right && !shatter) return 1;
+      if (!left && right && !shatter) return 2;
+      if (!left && !right && shatter) return 3;
+      if (left && !right && shatter) return 4;
+      if (!left && right && shatter) return 5;
+    }
+
+    let action = 0;
+    if (left && !right) action |= 0x01;
+    if (right && !left) action |= 0x02;
+    if (shatter) action |= 0x04;
+    if (boost) action |= 0x08;
+    if (brake) action |= 0x10;
+    return action;
   }
 
   // --- Playing ---

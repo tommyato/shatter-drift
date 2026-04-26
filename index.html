@@ -396,6 +396,31 @@
       animation: fadeInUp 0.8s ease-out 1.2s both;
     }
 
+    /* Multiplayer button */
+    #title-overlay .multiplayer-btn {
+      font-family: 'Orbitron', monospace;
+      font-size: 13px;
+      font-weight: 700;
+      color: #7ce8ff;
+      letter-spacing: 3px;
+      margin-top: 18px;
+      cursor: pointer;
+      border: 1px solid rgba(124,232,255,0.35);
+      border-radius: 4px;
+      padding: 10px 28px;
+      background: rgba(40,120,180,0.08);
+      transition: all 0.2s;
+      animation: fadeInUp 0.8s ease-out 1.3s both;
+      text-shadow: 0 0 12px rgba(124,232,255,0.35);
+      pointer-events: auto;
+    }
+    #title-overlay .multiplayer-btn:hover {
+      color: #b7f7ff;
+      border-color: rgba(124,232,255,0.85);
+      background: rgba(40,120,180,0.14);
+      text-shadow: 0 0 20px rgba(124,232,255,0.55);
+    }
+
     /* Customize button */
     #title-overlay .customize-btn {
       font-family: 'Orbitron', monospace;
@@ -461,6 +486,171 @@
       pointer-events: none;
       z-index: 15;
       white-space: nowrap;
+    }
+
+    /* Multiplayer lobby modal */
+    #multiplayer-modal {
+      position: absolute;
+      inset: 0;
+      z-index: 32;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(2, 6, 14, 0.72);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 16px;
+      pointer-events: auto;
+    }
+    #multiplayer-modal.hidden {
+      display: none !important;
+    }
+    #multiplayer-card {
+      width: min(92vw, 480px);
+      height: min(78vh, 520px);
+      border: 1px solid rgba(0,255,204,0.24);
+      border-radius: 12px;
+      background:
+        linear-gradient(180deg, rgba(8,24,36,0.96), rgba(4,12,22,0.98)),
+        radial-gradient(circle at top, rgba(0,255,204,0.12), transparent 55%);
+      box-shadow: 0 24px 80px rgba(0,0,0,0.45), inset 0 0 32px rgba(0,255,204,0.05);
+      padding: 22px 22px 18px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #multiplayer-card h2 {
+      font-family: 'Orbitron', monospace;
+      font-size: 22px;
+      letter-spacing: 6px;
+      color: #7ce8ff;
+      text-align: center;
+      margin-bottom: 10px;
+      text-shadow: 0 0 24px rgba(124,232,255,0.28);
+    }
+    #multiplayer-status {
+      min-height: 40px;
+      font-family: 'Orbitron', monospace;
+      font-size: 11px;
+      line-height: 1.6;
+      letter-spacing: 1.4px;
+      color: #8fa9bc;
+      text-align: center;
+      margin-bottom: 14px;
+    }
+    #multiplayer-status.error {
+      color: #ff96a8;
+    }
+    #multiplayer-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .mp-btn {
+      font-family: 'Orbitron', monospace;
+      font-size: 12px;
+      letter-spacing: 2px;
+      color: #00ffcc;
+      background: rgba(0,255,204,0.06);
+      border: 1px solid rgba(0,255,204,0.28);
+      border-radius: 6px;
+      padding: 12px 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .mp-btn:hover {
+      border-color: rgba(0,255,204,0.75);
+      background: rgba(0,255,204,0.12);
+      color: #bafff2;
+    }
+    .mp-btn.secondary {
+      color: #7ce8ff;
+      border-color: rgba(124,232,255,0.28);
+      background: rgba(124,232,255,0.06);
+    }
+    .mp-btn.secondary:hover {
+      border-color: rgba(124,232,255,0.75);
+      background: rgba(124,232,255,0.12);
+      color: #d4f9ff;
+    }
+    #multiplayer-join-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    #multiplayer-code-input {
+      width: 100%;
+      font-family: 'Orbitron', monospace;
+      font-size: 18px;
+      letter-spacing: 6px;
+      text-transform: uppercase;
+      color: #e7fbff;
+      background: rgba(0,12,22,0.78);
+      border: 1px solid rgba(124,232,255,0.18);
+      border-radius: 6px;
+      padding: 12px 14px;
+      outline: none;
+      text-align: center;
+    }
+    #multiplayer-code-input::placeholder {
+      color: rgba(143,169,188,0.65);
+      letter-spacing: 4px;
+    }
+    #multiplayer-current-code {
+      font-family: 'Orbitron', monospace;
+      font-size: 13px;
+      letter-spacing: 3px;
+      color: #7ce8ff;
+      text-align: center;
+      margin-bottom: 12px;
+      min-height: 18px;
+    }
+    #multiplayer-player-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      background: rgba(0,10,18,0.72);
+      padding: 12px;
+      margin-bottom: 14px;
+    }
+    .mp-player-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-family: 'Orbitron', monospace;
+      font-size: 12px;
+      letter-spacing: 1.5px;
+      color: #d4edf5;
+      padding: 8px 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .mp-player-row:last-child {
+      border-bottom: none;
+    }
+    .mp-player-row .slot {
+      color: #5a7487;
+      min-width: 42px;
+    }
+    .mp-player-row .you {
+      color: #00ffcc;
+      font-size: 10px;
+    }
+    #multiplayer-empty {
+      font-family: 'Orbitron', monospace;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: #5a7487;
+      text-align: center;
+      padding-top: 48px;
+    }
+    #multiplayer-leave-btn {
+      align-self: center;
+      width: min(240px, 100%);
     }
 
     /* Customize panel */
@@ -747,6 +937,7 @@
         display:none;
       "></div>
       <div class="daily-btn" id="daily-btn" data-ui>DAILY CHALLENGE</div>
+      <div class="multiplayer-btn" id="multiplayer-btn" data-ui>MULTIPLAYER</div>
       <div id="daily-timer" style="
         font-family:'Orbitron',monospace;font-size:10px;
         color:#668899;margin-top:6px;letter-spacing:1px;
@@ -760,6 +951,25 @@
         display:none;
       "></div>
       <div class="customize-btn" id="customize-btn" data-ui>CUSTOMIZE</div>
+    </div>
+
+    <div id="multiplayer-modal" class="hidden">
+      <div id="multiplayer-card">
+        <h2>MULTIPLAYER</h2>
+        <div id="multiplayer-status">Create a lobby or join one with a 6-character code.</div>
+        <div id="multiplayer-actions">
+          <button id="multiplayer-create-btn" class="mp-btn secondary" data-ui>CREATE LOBBY</button>
+        </div>
+        <div id="multiplayer-join-row">
+          <input id="multiplayer-code-input" data-ui type="text" inputmode="text" autocomplete="off" maxlength="6" placeholder="ABC123">
+          <button id="multiplayer-join-btn" class="mp-btn" data-ui>JOIN</button>
+        </div>
+        <div id="multiplayer-current-code"></div>
+        <div id="multiplayer-player-list">
+          <div id="multiplayer-empty">No active lobby yet.</div>
+        </div>
+        <button id="multiplayer-leave-btn" class="mp-btn secondary" data-ui>BACK</button>
+      </div>
     </div>
 
     <!-- Customize panel -->

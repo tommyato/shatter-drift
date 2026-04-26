@@ -10,6 +10,7 @@
     "test:harness": "node tests/harness.spec.mjs"
   },
   "dependencies": {
+    "firebase": "^12.12.1",
     "three": "^0.183.0"
   },
   "devDependencies": {

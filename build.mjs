@@ -1,5 +1,11 @@
+import { execSync } from 'node:child_process'
 import { build as esbuild } from 'esbuild'
 import { build as viteBuild } from 'vite'
+
+const BUILD_HASH = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
+const define = {
+	__BUILD_HASH__: JSON.stringify(BUILD_HASH),
+}
 
 await viteBuild()
 
@@ -11,6 +17,7 @@ await esbuild({
 	target: 'es2022',
 	platform: 'browser',
 	sourcemap: false,
+	define,
 })
 
 await esbuild({
@@ -21,6 +28,7 @@ await esbuild({
 	target: 'node18',
 	platform: 'node',
 	sourcemap: false,
+	define,
 })
 
 // Standalone bundle of the gravity-flip scheduler so verify-patterns.mjs can
@@ -33,6 +41,7 @@ await esbuild({
 	target: 'node18',
 	platform: 'node',
 	sourcemap: false,
+	define,
 })
 
 // Harness bundle — loaded dynamically via ?_harness=1 (browser, ESM).
@@ -45,4 +54,5 @@ await esbuild({
 	target: 'es2022',
 	platform: 'browser',
 	sourcemap: false,
+	define,
 })
