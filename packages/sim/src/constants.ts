@@ -59,6 +59,15 @@ export function getSystemRandom(): () => number {
 	return () => Math.random()
 }
 
+// Player-vs-player sphere collision (Phase 3)
+export const PLAYER_BUMP_RADIUS = 0.5       // sphere radius for player-player overlap test
+export const MAX_BUMP_KICK = 8              // m/s cap on lateral bump velocity
+export const BUMP_RESTITUTION = 0.6         // fraction of closing speed transferred as kick
+export const BUMP_MIN_CONTACT_IMPULSE = 3.0 // m/s minimum lateral kick when in contact
+export const BUMP_MASS_BOOST_FACTOR = 1.6   // effective mass during boost (shoves rammed player harder)
+export const BUMP_RAMMER_WINDOW = 2.0       // seconds lastRammedBy stays set
+export const BUMP_VEL_DECAY = 5.0           // exponential decay rate for bumpVelX (1/s)
+
 // Boost / brake speed-mod tuning
 export const BOOST_MULTIPLIER = 1.4
 export const BOOST_DURATION = 1.2   // seconds active

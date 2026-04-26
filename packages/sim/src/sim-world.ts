@@ -53,6 +53,8 @@ export interface SimulationState {
 	bossCount: number
 	/** Last pattern emitted by the obstacle spawn system — never repeats back-to-back. */
 	lastPatternName: string | null
+	/** Cumulative simulation time in seconds — used by PlayerCollisionSystem for rammer-credit expiry. */
+	simTime: number
 	/** Cosmic Rift gravity-flip scheduler state. */
 	riftFlip: {
 		phase: 'idle' | 'warning' | 'active'
@@ -113,6 +115,9 @@ function createInitialPlayer(
 		phaseMinTimer: 0,
 		score: 0,
 		lastCloseCallZ: -10,
+		bumpVelX: 0,
+		lastRammedBy: null,
+		lastRammedAt: 0,
 	}
 }
 
@@ -140,6 +145,7 @@ function createInitialState(
 		nextBossZ: 500, // matches BOSS_INTERVAL in bosswaves.ts
 		bossCount: 0,
 		lastPatternName: null,
+		simTime: 0,
 		riftFlip: {
 			phase: 'idle',
 			timer: 0,

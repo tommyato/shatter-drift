@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import type { MatchPlayerInfo, MatchStartMessage, MultiplayerConfig, PlayerState } from "./types";
-import { LockstepRunner, type InputFrame } from "./lockstep-runner";
-export { LockstepRunner } from "./lockstep-runner";
+import type { MatchPlayerInfo, MatchStartMessage, MultiplayerConfig, PlayerState } from "@sd/sim";
+import type { InputFrame } from "@sd/sim";
+export { LockstepRunner } from "@sd/sim";
 import { initializeApp, getApp, getApps, type FirebaseApp } from "firebase/app";
 import {
   addDoc,

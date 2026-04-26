@@ -200,6 +200,62 @@ export function updateAmbient(speed: number, isPlaying: boolean) {
   }
 }
 
+/**
+ * Player-vs-player bump — low thud + glass-clink tail.
+ * Distinct from obstacle hit: shorter, more percussive, lighter on reverb.
+ */
+export function playBump() {
+  if (!ctx || !masterGain) return;
+  const t = ctx.currentTime;
+
+  // Sub-bass thud — felt impact
+  const thud = ctx.createOscillator();
+  thud.type = 'sine';
+  thud.frequency.setValueAtTime(90, t);
+  thud.frequency.exponentialRampToValueAtTime(40, t + 0.1);
+  const thudGain = ctx.createGain();
+  thudGain.gain.setValueAtTime(0.22, t);
+  thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  thud.connect(thudGain);
+  thudGain.connect(masterGain!);
+  thud.start(t);
+  thud.stop(t + 0.14);
+
+  // Glass-clink overtone
+  const clink = ctx.createOscillator();
+  clink.type = 'sine';
+  clink.frequency.setValueAtTime(1800, t + 0.01);
+  clink.frequency.exponentialRampToValueAtTime(900, t + 0.08);
+  const clinkGain = ctx.createGain();
+  clinkGain.gain.setValueAtTime(0.07, t + 0.01);
+  clinkGain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+  clink.connect(clinkGain);
+  connectWithSends(clinkGain, { reverb: 0.2 });
+  clink.start(t + 0.01);
+  clink.stop(t + 0.11);
+
+  // Short noise transient
+  const noiseDur = 0.05;
+  const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * noiseDur, ctx.sampleRate);
+  const noiseData = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < noiseData.length; i++) {
+    noiseData[i] = (Math.random() * 2 - 1) * (1 - i / noiseData.length);
+  }
+  const noiseSrc = ctx.createBufferSource();
+  noiseSrc.buffer = noiseBuffer;
+  const noiseFilter = ctx.createBiquadFilter();
+  noiseFilter.type = 'highpass';
+  noiseFilter.frequency.setValueAtTime(1500, t);
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.setValueAtTime(0.1, t);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t + noiseDur);
+  noiseSrc.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(masterGain!);
+  noiseSrc.start(t);
+  noiseSrc.stop(t + noiseDur + 0.01);
+}
+
 /** Shatter sound — noise burst with pitch sweep down */
 export function playShatter() {
   if (!ctx || !masterGain) return;

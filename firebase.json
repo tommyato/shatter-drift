@@ -1,7 +1,7 @@
 {
   "hosting": {
     "site": "shatter-drift",
-    "public": "dist",
+    "public": "packages/client/dist",
     "ignore": [
       "firebase.json",
       "**/.*",

@@ -6,7 +6,7 @@ import {
   PHASE_MIN_THRESHOLD,
   PHASE_POST_COOLDOWN,
   PLAYABLE_HALF_WIDTH,
-} from "./constants";
+} from "@sd/sim";
 
 type OrtTensor = {
   data: ArrayLike<number>;

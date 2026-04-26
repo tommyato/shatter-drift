@@ -3,24 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && node build.mjs",
-    "preview": "vite preview",
-    "test:harness": "node tests/harness.spec.mjs",
-    "determinism": "node tests/harness.spec.mjs",
-    "mp-smoke": "npm run build && node tools/mp-smoke-test.mjs"
-  },
-  "dependencies": {
-    "firebase": "^12.12.1",
-    "three": "^0.183.0"
-  },
-  "devDependencies": {
-    "@types/three": "^0.183.0",
-    "esbuild": "^0.25.12",
-    "puppeteer": "^24.42.0",
-    "typescript": "^5.7.0",
-    "vite": "^6.0.0",
-    "vite-plugin-singlefile": "^2.3.2"
+    "dev": "npm run dev -w @sd/client",
+    "build": "npm run build -w @sd/sim && npm run build -w @sd/client",
+    "build:sim": "npm run build -w @sd/sim",
+    "build:client": "npm run build -w @sd/client",
+    "preview": "npm run preview -w @sd/client",
+    "test:harness": "npm run test:harness -w @sd/client",
+    "determinism": "npm run test:harness -w @sd/client",
+    "validate-sim": "npm run validate -w @sd/sim",
+    "mp-smoke": "npm run mp-smoke -w @sd/client",
+    "typecheck": "npm run typecheck -w @sd/sim && npm run typecheck -w @sd/client"
   }
 }

@@ -8,6 +8,7 @@ import {
 	ObstacleDespawnSystemToken,
 	ObstacleSpawnSystemToken,
 	OrbSystemToken,
+	PlayerCollisionSystemToken,
 	PlayerMovementSystemToken,
 	RandomToken,
 	RiftFlipSystemToken,
@@ -28,6 +29,7 @@ import type {
 } from './types'
 import { createBossAnimationSystem } from './systems/boss-animation-system'
 import { createCollisionSystem } from './systems/collision-system'
+import { createPlayerCollisionSystem } from './systems/player-collision-system'
 import { createObstacleDespawnSystem } from './systems/obstacle-despawn-system'
 import { createObstacleSpawnSystem } from './systems/obstacle-spawn-system'
 import { createOrbSystem } from './systems/orb-system'
@@ -101,6 +103,11 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 		.withDeps(SimulationWorldToken)
 		.asSingleton()
 	container
+		.bind(PlayerCollisionSystemToken)
+		.toFactory(createPlayerCollisionSystem)
+		.withDeps(SimulationWorldToken)
+		.asSingleton()
+	container
 		.bind(CollisionSystemToken)
 		.toFactory(createCollisionSystem)
 		.withDeps(SimulationWorldToken)
@@ -124,6 +131,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 	const world = container.get(SimulationWorldToken)
 	const speedModSystem = container.get(SpeedModSystemToken)
 	const playerMovementSystem = container.get(PlayerMovementSystemToken)
+	const playerCollisionSystem = container.get(PlayerCollisionSystemToken)
 	const worldScrollSystem = container.get(WorldScrollSystemToken)
 	const obstacleSpawnSystem = container.get(ObstacleSpawnSystemToken)
 	const shatterSystem = container.get(ShatterSystemToken)
@@ -139,10 +147,11 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 			world.reset()
 		},
 		update(dt: number) {
-			speedModSystem(dt)      // update speedMod first so worldScrollSystem sees it
+			speedModSystem(dt)        // update speedMod first so worldScrollSystem sees it
 			worldScrollSystem(dt)
 			shatterSystem(dt)
 			playerMovementSystem(dt)
+			playerCollisionSystem(dt) // after movement, before obstacle collision
 			obstacleSpawnSystem(dt)
 			bossAnimationSystem(dt)
 			orbSystem(dt)
