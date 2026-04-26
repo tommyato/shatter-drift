@@ -576,6 +576,23 @@
       gap: 10px;
       margin-bottom: 14px;
     }
+    .mp-or-divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: rgba(143,169,188,0.45);
+      font-family: 'Orbitron', monospace;
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      margin: 2px 0;
+    }
+    .mp-or-divider::before,
+    .mp-or-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(143,169,188,0.18);
+    }
     .mp-btn {
       font-family: 'Orbitron', monospace;
       font-size: 12px;
@@ -1018,8 +1035,10 @@
     <div id="multiplayer-modal" class="hidden">
       <div id="multiplayer-card">
         <h2>MULTIPLAYER</h2>
-        <div id="multiplayer-status">Create a lobby or paste a code to join.</div>
+        <div id="multiplayer-status">Quick-match into any open lobby, or use a code.</div>
         <div id="multiplayer-actions">
+          <button id="multiplayer-quickplay-btn" class="mp-btn" data-ui>QUICKPLAY</button>
+          <div class="mp-or-divider">or enter a code:</div>
           <button id="multiplayer-create-btn" class="mp-btn secondary" data-ui>CREATE LOBBY</button>
         </div>
         <div id="multiplayer-join-row">
