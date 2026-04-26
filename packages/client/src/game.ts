@@ -453,6 +453,12 @@ export class Game {
   private pendingBumpEvents: Array<{ playerA: number; playerB: number; contactX: number; contactZ: number }> = [];
   private multiplayerLastAdvancedTick = -1;
   private multiplayerMatchRequested = false;
+  /** BUG 2: defer transitionToMatchOver after onLocalDeath so the local crash visual + SFX play first. */
+  private mpDeathPending = false;
+  private mpDeathTimer = 0;
+  private mpDeathReason = "";
+  /** BUG 3: ensure score submission only runs once per match-over even if transition reasons stack. */
+  private mpScoreSubmitted = false;
   private remotePlayers = new Map<number, RemotePlayer>();
   private pauseMenu!: HTMLElement;
   private gameOverOverlay!: HTMLElement;
@@ -1288,8 +1294,31 @@ export class Game {
 
   private async leaveOrCloseMultiplayer() {
     if (!this.lobbyClient || !this.meshTransport || this.multiplayerBusy) return;
+    // BUG 10: when the room was already closed (unexpected disconnect mid-match),
+    // getLobbyCode() returns null but matchState may still be "inMatch" / "matchOver"
+    // and the MpRunner is still spinning. Skip the network teardown but still drive
+    // the local cleanup so we don't leave the client stuck in match state.
     if (!this.lobbyClient.getLobbyCode()) {
+      const stuckInMatch = this.matchState !== "idle";
+      this.disposeRemotePlayers();
+      this.mpSnapshotUnsubscribe?.();
+      this.mpSnapshotUnsubscribe = null;
+      this.mpRunner?.stop();
+      this.mpRunner = null;
+      this.multiplayerSim = null;
+      this.multiplayerConfig = null;
+      this.multiplayerAuthoritativeState = null;
+      this.multiplayerLastAdvancedTick = -1;
+      this.pendingBumpEvents.length = 0;
+      this.mpDeathPending = false;
+      this.mpDeathTimer = 0;
+      this.multiplayerCodeEl.textContent = "";
+      this.multiplayerCodeInput.value = "";
+      this.renderLobbyPlayers([]);
       this.closeMultiplayerModal();
+      if (stuckInMatch) {
+        this.transitionToIdle();
+      }
       return;
     }
     this.multiplayerBusy = true;
@@ -1306,6 +1335,9 @@ export class Game {
       this.multiplayerConfig = null;
       this.multiplayerAuthoritativeState = null;
       this.multiplayerLastAdvancedTick = -1;
+      this.pendingBumpEvents.length = 0;
+      this.mpDeathPending = false;
+      this.mpDeathTimer = 0;
       this.multiplayerCodeEl.textContent = "";
       this.multiplayerCodeInput.value = "";
       this.setMultiplayerStatus("Returned to singleplayer title.");
@@ -1554,7 +1586,11 @@ export class Game {
   }
 
   private encodeNetworkAction(): number {
-    const move = this.input.getMovement().x;
+    // Negate to convert screen-space input → world-space (matches solo: line ~2217).
+    // Camera faces +Z, so screen-right = world -X. Sim's player-movement-system applies
+    // input.horizontal directly to player.x: action bit 0x01 (left) → horizontal=-1 → world -X = screen-RIGHT.
+    // Solo negates getMovement().x before feeding the sim; MP must too, or controls invert.
+    const move = -this.input.getMovement().x;
     const left = move < -0.25;
     const right = move > 0.25;
     const shatter = this.input.isDown("space") || this.input.isDown("click");
@@ -1651,11 +1687,22 @@ export class Game {
         }
       },
       onLocalDeath: () => {
-        this.transitionToMatchOver("You shattered.");
+        // BUG 2: trigger crash visual + SFX immediately, defer the match-over UI
+        // by ~1s so the player sees their avatar shatter before "MATCH ENDED" pops.
+        if (this.mpDeathPending || this.matchState !== "inMatch") return;
+        this.mpDeathPending = true;
+        this.mpDeathTimer = 0;
+        this.mpDeathReason = "You shattered.";
+        this.triggerMpDeathVFX();
       },
     });
     this.multiplayerSim = this.mpRunner.getSim();
     this.mpRunner.start();
+    // Reset BUG 2/3 latches for the new match.
+    this.mpDeathPending = false;
+    this.mpDeathTimer = 0;
+    this.mpDeathReason = "";
+    this.mpScoreSubmitted = false;
 
     // Wire server snapshots from the lobby into the runner for reconciliation.
     if (this.lobbyClient) {
@@ -1720,6 +1767,15 @@ export class Game {
     if (this.matchState !== "inMatch") return;
     this.matchState = "matchOver";
     this.multiplayerMatchRequested = false;
+
+    // BUG 3: capture authoritative final stats BEFORE tearing down the runner.
+    // applyMultiplayerAuthoritativeState keeps these mirrored from the server's
+    // last snapshot, so this.score / this.distance reflect what the player
+    // actually achieved per server state, not a stale local prediction.
+    const finalScore = Math.max(0, Math.floor(this.score));
+    const finalDistance = Math.max(0, Math.floor(this.distance));
+    const finalBiome = this.biomes.currentBiome.displayName;
+
     this.mpSnapshotUnsubscribe?.();
     this.mpSnapshotUnsubscribe = null;
     this.mpRunner?.stop();
@@ -1728,10 +1784,68 @@ export class Game {
     this.multiplayerConfig = null;
     this.pendingBumpEvents.length = 0;
     this.disposeRemotePlayers();
+
+    // Mirror solo's persistent high-score tracking so MP runs feed into the
+    // same career stats. (Daily-mode is solo-only — leave that key alone.)
+    if (finalScore > this.highScore) {
+      this.highScore = finalScore;
+      try { localStorage.setItem("shatterDriftHighScore", String(finalScore)); } catch { /* ignore */ }
+    }
+    if (finalDistance > this.bestDistance) {
+      this.bestDistance = finalDistance;
+      try { localStorage.setItem("shatterDriftBestDistance", String(finalDistance)); } catch { /* ignore */ }
+    }
+
+    // BUG 3: render a results screen using the same gameOverOverlay structure
+    // solo uses, so showLeaderboard's DOM hooks (#go-tab-leaderboard,
+    // #go-lb-status, #lb-name-input) work without duplication.
+    this.gameOverOverlay.classList.add("active");
+    this.hudState.style.opacity = "0";
+    this.hudState.style.display = "none";
     this.centerTitle.textContent = "MATCH ENDED";
-    this.centerStats.innerHTML = `<div>${reason}</div><div style="margin-top:8px">DISTANCE: ${Math.floor(this.distance)}m</div>`;
+    this.centerStats.innerHTML = `
+      <div style="font-size:13px;color:#ff88aa;letter-spacing:3px;margin-bottom:10px">${reason.replace(/[<>&]/g, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&amp;").toUpperCase()}</div>
+      <div class="go-tabs">
+        <button class="go-tab active" id="go-tab-btn-stats">STATS</button>
+        <button class="go-tab" id="go-tab-btn-leaderboard">LEADERBOARD</button>
+      </div>
+      <div id="go-tab-stats" class="go-tab-content">
+        <div style="font-size:32px;margin:8px 0"><span class="highlight">${finalScore.toLocaleString()}</span></div>
+        <div style="font-size:13px;color:#8899aa;margin:4px 0">${finalDistance.toLocaleString()}m</div>
+        Zone: ${finalBiome}<br>
+        <div style="font-size:11px;color:#668899;letter-spacing:2px;margin-top:10px">MULTIPLAYER RUN</div>
+      </div>
+      <div id="go-tab-leaderboard" class="go-tab-content hidden">
+        <div id="go-lb-status" style="font-size:11px;color:#445566;text-align:center;margin:8px 0">Saving...</div>
+      </div>
+    `;
     this.centerRetry.textContent = "PRESS SPACE OR CLICK TO RETURN";
+    this.centerRetry.style.cursor = "pointer";
+    this.centerRetry.style.pointerEvents = "auto";
     this.centerMessage.style.opacity = "1";
+
+    // Wire tab switching (mirrors die()'s tab-switch wiring).
+    const tabBtns = document.querySelectorAll<HTMLButtonElement>(".go-tab");
+    tabBtns.forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const tabName = btn.id.replace("go-tab-btn-", "");
+        tabBtns.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById("go-tab-stats")?.classList.toggle("hidden", tabName !== "stats");
+        document.getElementById("go-tab-leaderboard")?.classList.toggle("hidden", tabName !== "leaderboard");
+      });
+      btn.addEventListener("mousedown", (e) => e.stopPropagation());
+      btn.addEventListener("keydown", (e) => e.stopPropagation());
+    });
+
+    // Submit score + render leaderboard. Tagged "MP" in the grade slot so MP
+    // runs are distinguishable from solo on the global leaderboard.
+    if (!this.mpScoreSubmitted) {
+      this.mpScoreSubmitted = true;
+      this.showLeaderboard(finalScore, finalDistance, "MP", finalBiome);
+    }
+
     this.menuNav.detach();
     this.menuNavSuppressFrames = 6;
   }
@@ -1784,6 +1898,45 @@ export class Game {
     this.world.applyAuthoritativeState(state);
     this.applyMultiplayerAuthoritativeState(dt);
     this.updateMultiplayerHud();
+
+    // BUG 2: tick the post-death delay so the local crash visual + SFX
+    // play before the match-over screen appears. ~1.0s feels right (long
+    // enough to see the explosion, short enough to not stall the player).
+    if (this.mpDeathPending) {
+      this.mpDeathTimer += dt;
+      if (this.mpDeathTimer >= 1.0) {
+        const reason = this.mpDeathReason;
+        this.mpDeathPending = false;
+        this.mpDeathTimer = 0;
+        this.transitionToMatchOver(reason);
+      }
+    }
+  }
+
+  /**
+   * BUG 2 — local crash visual + SFX for MP death.
+   *
+   * Subset of solo `die()`'s VFX: the dramatic stuff (explosion, debris,
+   * shockwave, screen flash, shake, death sound, music fade) without the
+   * leaderboard / game-over UI side effects, which transitionToMatchOver owns.
+   * Hides the local player avatar so the explosion reads as their crash.
+   */
+  private triggerMpDeathVFX(): void {
+    const pos = this.player.group.position.clone();
+    this.shake.trigger(1.5);
+    this.explosion.trigger(pos);
+    this.debris.trigger(pos, 0xff4444, 20);
+    this.debris.trigger(pos, 0xff8844, 15);
+    this.shockwave.trigger(pos, 0xff4444, 15, 1.0);
+    this.screenFlash.trigger(0xff2222, 0.3);
+    this.postfx.triggerGlitch(1.0);
+    this.postfx.triggerDistort(2.0);
+    this.bloomPass.strength = 2.0;
+    this.vignette.setIntensity(0.8);
+    this.postfx.setVignette(1.0);
+    playDeath();
+    fadeOutMusic();
+    this.player.group.visible = false;
   }
 
   private applyMultiplayerAuthoritativeState(dt: number) {
@@ -2269,16 +2422,17 @@ export class Game {
       this.phaseMinTimer = Math.max(0, this.phaseMinTimer - dt);
     }
 
-    // Rejection feedback: Space pressed but graze meter too low
+    // Rejection feedback: Space pressed but graze meter too low (only on fresh activation attempts)
     const hasMeterForPhase = this.phaseMeter >= GRAZE_PHASE_COST;
-    if (shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && !hasMeterForPhase && this.rejectionThrottleTimer <= 0) {
+    if (!wasShattered && shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && !hasMeterForPhase && this.rejectionThrottleTimer <= 0) {
       playPhaseRejected();
       this.rejectionThrottleTimer = 0.5;
       this.meterRejectionTimer = 0.3; // red meter flash
     }
 
-    // Phase stays active while min-duration timer is running OR input is held AND meter available
-    const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && hasMeterForPhase;
+    // Phase stays active while min-duration timer is running OR input is held AND (already phasing OR meter available for fresh activation)
+    // Meter only gates ACTIVATION; once phasing, sustain on energy alone until input released or energy depleted.
+    const wantsToPhase = shatterInput && !this.phaseLocked && this.phaseCooldown <= 0 && (wasShattered || hasMeterForPhase);
     const forcedByMinTimer = this.phaseMinTimer > 0 && !this.phaseLocked;
     const isPhasing = (wantsToPhase || forcedByMinTimer) && this.phaseEnergy > 0;
 

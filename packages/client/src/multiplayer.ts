@@ -159,6 +159,13 @@ export class LobbyClient {
   private latestSnapshot: ServerSnapshot | null = null;
   private snapshotListeners = new Set<(snapshot: ServerSnapshot) => void>();
   private startListeners = new Set<(start: StartBroadcast) => void>();
+  /**
+   * BUG 7: when the server broadcasts `host_left`, we want a single, specific
+   * close message — not the generic "Disconnected from match server." that the
+   * subsequent room.onLeave fires. Latch the reason so the room.onLeave path
+   * skips its emit.
+   */
+  private lobbyClosedEmitted = false;
 
   constructor(playerName: string) {
     this.playerName = normalizeName(playerName);
@@ -304,6 +311,7 @@ export class LobbyClient {
   private bindRoom(room: Room, isHost: boolean): void {
     this.room = room;
     this.hostSelf = isHost;
+    this.lobbyClosedEmitted = false;
 
     room.onStateChange((_state) => {
       this.players = buildPlayerListFromRoom(room, room.sessionId, this.buildHash);
@@ -315,12 +323,25 @@ export class LobbyClient {
       for (const listener of this.startListeners) listener(payload);
     });
 
+    // BUG 7: server-broadcast notice that the host left during lobby phase.
+    // Emit the specific reason now so the subsequent room.onLeave (the server
+    // disconnects the room right after broadcasting) doesn't stomp it with
+    // the generic "Disconnected from match server." text.
+    room.onMessage("host_left", (payload: { name?: string; message?: string }) => {
+      const hostName = payload?.name?.trim();
+      const message = payload?.message?.trim()
+        || (hostName
+          ? `Host ${hostName} left — returning to title.`
+          : "Host left the lobby — returning to title.");
+      this.emitLobbyClosed(message);
+    });
+
     room.onLeave((code) => {
       const wasIntentional = code === 1000 || code === 4000; // 4000 = client-initiated leave in colyseus.js
       this.room = null;
       this.players = [];
       this.emitPlayersChanged();
-      if (!wasIntentional) {
+      if (!wasIntentional && !this.lobbyClosedEmitted) {
         this.emitLobbyClosed("Disconnected from match server.");
       }
     });
@@ -338,6 +359,8 @@ export class LobbyClient {
   }
 
   private emitLobbyClosed(message: string): void {
+    if (this.lobbyClosedEmitted) return;
+    this.lobbyClosedEmitted = true;
     for (const callbacks of this.callbacks) {
       callbacks.onLobbyClosed?.(message);
     }

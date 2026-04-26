@@ -212,6 +212,13 @@ export class ShatterDriftRoom extends Room<MatchState> {
 		const sp = this.serverPlayers.get(client.sessionId)
 		if (!sp) return
 
+		// BUG 7: detect lobby-phase leaves before we mutate state. If the leaver
+		// is in slot 0 (the de-facto host — first joiner) AND the match has not
+		// yet been broadcast as started, anyone remaining is stranded in a
+		// leaderless lobby. We notify them so they can return to title cleanly.
+		const wasLobbyPhase = !this.startBroadcastSent
+		const wasHost = sp.slot === 0
+
 		const worldPlayer = this.world.state.players[sp.playerIndex]
 		if (worldPlayer) {
 			worldPlayer.alive = false
@@ -230,6 +237,24 @@ export class ShatterDriftRoom extends Room<MatchState> {
 		this.rebuildSlotsArray()
 
 		console.log(`[sd-mp] ${client.sessionId} left slot ${sp.slot} (now ${this.serverPlayers.size}/${MAX_PLAYERS})`)
+
+		// BUG 7: notify and tear down the lobby on host-disconnect during
+		// pre-match. Resetting startBroadcastSent is defensive — it's already
+		// false on this branch, but explicit makes the invariant clear.
+		if (wasLobbyPhase && wasHost && this.serverPlayers.size > 0) {
+			this.startBroadcastSent = false
+			this.broadcast('host_left', {
+				sessionId: client.sessionId,
+				name: sp.name,
+				message: 'Host left the lobby — returning to title.',
+			})
+			console.log(`[sd-mp] host left during lobby phase — broadcasting host_left to ${this.serverPlayers.size} remaining`)
+			// Close the room so remaining clients all transition cleanly. Their
+			// onLeave handlers will fire emitLobbyClosed via the wasIntentional=false
+			// branch, which the client routes through the existing lobby-closed UX.
+			this.disconnect().catch(() => undefined)
+			return
+		}
 
 		if (this.serverPlayers.size === 0) {
 			this.disconnect().catch(() => undefined)
