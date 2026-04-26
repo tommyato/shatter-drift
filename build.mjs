@@ -31,6 +31,17 @@ await esbuild({
 	define,
 })
 
+await esbuild({
+	entryPoints: ['src/lockstep-runner.ts'],
+	outfile: 'dist/lockstep-runner.mjs',
+	bundle: true,
+	format: 'esm',
+	target: 'node18',
+	platform: 'node',
+	sourcemap: false,
+	define,
+})
+
 // Standalone bundle of the gravity-flip scheduler so verify-patterns.mjs can
 // unit-test the pure logic without needing the whole sim.
 await esbuild({

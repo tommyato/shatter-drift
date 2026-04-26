@@ -176,59 +176,59 @@ function createCanvasElement() {
 }
 var _cache = {};
 var _setConsoleFunction = null;
-function log(...params) {
-  const message = "THREE." + params.shift();
+function log(...params2) {
+  const message = "THREE." + params2.shift();
   if (_setConsoleFunction) {
-    _setConsoleFunction("log", message, ...params);
+    _setConsoleFunction("log", message, ...params2);
   } else {
-    console.log(message, ...params);
+    console.log(message, ...params2);
   }
 }
-function enhanceLogMessage(params) {
-  const message = params[0];
+function enhanceLogMessage(params2) {
+  const message = params2[0];
   if (typeof message === "string" && message.startsWith("TSL:")) {
-    const stackTrace = params[1];
+    const stackTrace = params2[1];
     if (stackTrace && stackTrace.isStackTrace) {
-      params[0] += " " + stackTrace.getLocation();
+      params2[0] += " " + stackTrace.getLocation();
     } else {
-      params[1] = 'Stack trace not available. Enable "THREE.Node.captureStackTrace" to capture stack traces.';
+      params2[1] = 'Stack trace not available. Enable "THREE.Node.captureStackTrace" to capture stack traces.';
     }
   }
-  return params;
+  return params2;
 }
-function warn(...params) {
-  params = enhanceLogMessage(params);
-  const message = "THREE." + params.shift();
+function warn(...params2) {
+  params2 = enhanceLogMessage(params2);
+  const message = "THREE." + params2.shift();
   if (_setConsoleFunction) {
-    _setConsoleFunction("warn", message, ...params);
+    _setConsoleFunction("warn", message, ...params2);
   } else {
-    const stackTrace = params[0];
+    const stackTrace = params2[0];
     if (stackTrace && stackTrace.isStackTrace) {
       console.warn(stackTrace.getError(message));
     } else {
-      console.warn(message, ...params);
+      console.warn(message, ...params2);
     }
   }
 }
-function error(...params) {
-  params = enhanceLogMessage(params);
-  const message = "THREE." + params.shift();
+function error(...params2) {
+  params2 = enhanceLogMessage(params2);
+  const message = "THREE." + params2.shift();
   if (_setConsoleFunction) {
-    _setConsoleFunction("error", message, ...params);
+    _setConsoleFunction("error", message, ...params2);
   } else {
-    const stackTrace = params[0];
+    const stackTrace = params2[0];
     if (stackTrace && stackTrace.isStackTrace) {
       console.error(stackTrace.getError(message));
     } else {
-      console.error(message, ...params);
+      console.error(message, ...params2);
     }
   }
 }
-function warnOnce(...params) {
-  const message = params.join(" ");
+function warnOnce(...params2) {
+  const message = params2.join(" ");
   if (message in _cache) return;
   _cache[message] = true;
-  warn(...params);
+  warn(...params2);
 }
 function probeAsync(gl, sync, interval) {
   return new Promise(function(resolve, reject) {
@@ -19883,7 +19883,7 @@ var PMREMGenerator = class {
   _allocateTargets() {
     const width = 3 * Math.max(this._cubeSize, 16 * 7);
     const height = 4 * this._cubeSize;
-    const params = {
+    const params2 = {
       magFilter: LinearFilter,
       minFilter: LinearFilter,
       generateMipmaps: false,
@@ -19892,12 +19892,12 @@ var PMREMGenerator = class {
       colorSpace: LinearSRGBColorSpace,
       depthBuffer: false
     };
-    const cubeUVRenderTarget = _createRenderTarget(width, height, params);
+    const cubeUVRenderTarget = _createRenderTarget(width, height, params2);
     if (this._pingPongRenderTarget === null || this._pingPongRenderTarget.width !== width || this._pingPongRenderTarget.height !== height) {
       if (this._pingPongRenderTarget !== null) {
         this._dispose();
       }
-      this._pingPongRenderTarget = _createRenderTarget(width, height, params);
+      this._pingPongRenderTarget = _createRenderTarget(width, height, params2);
       const { _lodMax } = this;
       ({ lodMeshes: this._lodMeshes, sizeLods: this._sizeLods, sigmas: this._sigmas } = _createPlanes(_lodMax));
       this._blurMaterial = _getBlurShader(_lodMax, width, height);
@@ -20208,8 +20208,8 @@ function _createPlanes(lodMax) {
   }
   return { lodMeshes, sizeLods, sigmas };
 }
-function _createRenderTarget(width, height, params) {
-  const cubeUVRenderTarget = new WebGLRenderTarget(width, height, params);
+function _createRenderTarget(width, height, params2) {
+  const cubeUVRenderTarget = new WebGLRenderTarget(width, height, params2);
   cubeUVRenderTarget.texture.mapping = CubeUVReflectionMapping;
   cubeUVRenderTarget.texture.name = "PMREM.cubeUv";
   cubeUVRenderTarget.scissorTest = true;
@@ -29693,6 +29693,7 @@ var WALL_DISTANCE = LANE_WIDTH / 2 + 1.5;
 var INITIAL_SPEED = 12;
 var MAX_SPEED = 45;
 var PLAYER_MOVE_SPEED = 8;
+var PLAYER_COLLISION_RADIUS = 0.25;
 var PHASE_DRAIN_RATE = 0.25;
 var PHASE_RECHARGE_RATE = 0.15;
 var PHASE_MIN_THRESHOLD = 0.2;
@@ -29710,6 +29711,22 @@ var INITIAL_ORB_Z = 15;
 var LOOKAHEAD_OBSTACLES = 5;
 var LOOKAHEAD_DISTANCE = 80;
 var DEFAULT_FIXED_DT = 1 / 60;
+function clamp2(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state += 1831565813;
+    let t = state;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function getSystemRandom() {
+  return () => Math.random();
+}
 var BOOST_MULTIPLIER = 1.4;
 var BOOST_DURATION = 1.2;
 var BOOST_COOLDOWN = 5;
@@ -30518,6 +30535,7 @@ var World = class {
   obstacles = [];
   orbs = [];
   portals = [];
+  renderMode = "sp";
   scene;
   biomes;
   /** Seeded PRNG for deterministic world generation. Defaults to Math.random (normal mode). */
@@ -30551,6 +30569,9 @@ var World = class {
    *  Pass Math.random for normal mode, seededRandom(seed) for daily challenge. */
   setRandom(fn) {
     this.random = fn;
+  }
+  setRenderMode(mode) {
+    this.renderMode = mode;
   }
   constructor(scene, biomes) {
     this.scene = scene;
@@ -30681,77 +30702,52 @@ var World = class {
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const obs = this.obstacles[i];
       if (!obs.active) {
-        this.scene.remove(obs.mesh);
-        if (obs.mesh instanceof Mesh) {
-          obs.mesh.geometry.dispose();
-          obs.mesh.material.dispose();
-        } else if (obs.mesh instanceof Group) {
-          obs.mesh.traverse((child) => {
-            if (child instanceof Mesh) {
-              child.geometry.dispose();
-              child.material.dispose();
-            }
-            if (child instanceof LineSegments) {
-              child.geometry.dispose();
-              child.material.dispose();
-            }
-          });
-        }
+        this.disposeObstacle(obs);
         this.obstacles.splice(i, 1);
       }
     }
     for (let i = this.orbs.length - 1; i >= 0; i--) {
       if (!this.orbs[i].active) {
-        const orb = this.orbs[i];
-        this.scene.remove(orb.mesh);
-        orb.mesh.geometry.dispose();
-        orb.mesh.material.dispose();
+        this.disposeOrb(this.orbs[i]);
         this.orbs.splice(i, 1);
       }
     }
     for (let i = this.portals.length - 1; i >= 0; i--) {
       if (!this.portals[i].active) {
-        const portal = this.portals[i];
-        this.scene.remove(portal.group);
-        portal.group.traverse((child) => {
-          if (child instanceof Mesh) {
-            child.geometry.dispose();
-            child.material.dispose();
-          }
-        });
+        this.disposePortal(this.portals[i]);
         this.portals.splice(i, 1);
       }
     }
     for (let i = this.markers.length - 1; i >= 0; i--) {
       if (!this.markers[i].active) {
-        const marker = this.markers[i];
-        this.scene.remove(marker.group);
-        marker.group.traverse((child) => {
-          if (child instanceof Mesh) {
-            child.geometry.dispose();
-            child.material.dispose();
-          }
-        });
+        this.disposeMarker(this.markers[i]);
         this.markers.splice(i, 1);
       }
     }
   }
+  applyAuthoritativeState(state) {
+    if (this.renderMode !== "mp-renderer") return;
+    this.reconcileAuthoritativeObstacles(state.obstacles);
+    this.reconcileAuthoritativeOrbs(state.orbs);
+  }
   update(dt2, playerZ, playerX, speed, isPhasing = false) {
-    while (this.nextObstacleZ < playerZ + SPAWN_DISTANCE) {
-      this.spawnObstacle(this.nextObstacleZ);
-      this.nextObstacleZ += this.getBiomeSpacing();
-    }
-    while (this.nextOrbZ < playerZ + SPAWN_DISTANCE) {
-      this.spawnOrbCluster(this.nextOrbZ);
-      this.nextOrbZ += ORB_SPACING + this.random() * 5;
-    }
-    while (this.nextPortalZ < playerZ + SPAWN_DISTANCE) {
-      this.spawnPortal(this.nextPortalZ);
-      this.nextPortalZ += PORTAL_INTERVAL;
-    }
-    while (this.nextMarkerZ < playerZ + SPAWN_DISTANCE) {
-      this.spawnDistanceMarker(this.nextMarkerZ);
-      this.nextMarkerZ += 100;
+    if (this.renderMode === "sp") {
+      while (this.nextObstacleZ < playerZ + SPAWN_DISTANCE) {
+        this.spawnObstacle(this.nextObstacleZ);
+        this.nextObstacleZ += this.getBiomeSpacing();
+      }
+      while (this.nextOrbZ < playerZ + SPAWN_DISTANCE) {
+        this.spawnOrbCluster(this.nextOrbZ);
+        this.nextOrbZ += ORB_SPACING + this.random() * 5;
+      }
+      while (this.nextPortalZ < playerZ + SPAWN_DISTANCE) {
+        this.spawnPortal(this.nextPortalZ);
+        this.nextPortalZ += PORTAL_INTERVAL;
+      }
+      while (this.nextMarkerZ < playerZ + SPAWN_DISTANCE) {
+        this.spawnDistanceMarker(this.nextMarkerZ);
+        this.nextMarkerZ += 100;
+      }
     }
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
@@ -31531,25 +31527,28 @@ var World = class {
   reset() {
     this.voronoiShatter.reset();
     for (const obs of this.obstacles) {
-      this.scene.remove(obs.mesh);
+      this.disposeObstacle(obs);
     }
     for (const orb of this.orbs) {
-      this.scene.remove(orb.mesh);
+      this.disposeOrb(orb);
     }
     for (const portal of this.portals) {
-      this.scene.remove(portal.group);
+      this.disposePortal(portal);
     }
     this.obstacles.length = 0;
     this.orbs.length = 0;
     this.portals.length = 0;
     for (const marker of this.markers) {
-      this.scene.remove(marker.group);
+      this.disposeMarker(marker);
     }
     this.markers.length = 0;
     this.nextObstacleZ = INITIAL_OBSTACLE_Z;
     this.nextOrbZ = INITIAL_ORB_Z;
     this.nextPortalZ = PORTAL_INTERVAL;
     this.nextMarkerZ = 100;
+    this.cleanupTimer = 0;
+    this.plasmaElapsed = 0;
+    this.renderMode = "sp";
   }
   dispose() {
     this.reset();
@@ -31573,6 +31572,202 @@ var World = class {
       edge.geometry.dispose();
       edge.material.dispose();
     }
+  }
+  disposeObstacle(obs) {
+    this.scene.remove(obs.mesh);
+    if (obs.mesh instanceof Mesh) {
+      obs.mesh.geometry.dispose();
+      obs.mesh.material.dispose();
+      return;
+    }
+    if (obs.mesh instanceof Group) {
+      obs.mesh.traverse((child) => {
+        if (child instanceof Mesh || child instanceof LineSegments) {
+          child.geometry.dispose();
+          child.material.dispose();
+        }
+      });
+    }
+  }
+  disposeOrb(orb) {
+    this.scene.remove(orb.mesh);
+    orb.mesh.geometry.dispose();
+    orb.mesh.material.dispose();
+  }
+  disposePortal(portal) {
+    this.scene.remove(portal.group);
+    portal.group.traverse((child) => {
+      if (child instanceof Mesh) {
+        child.geometry.dispose();
+        child.material.dispose();
+      }
+    });
+  }
+  disposeMarker(marker) {
+    this.scene.remove(marker.group);
+    marker.group.traverse((child) => {
+      if (child instanceof Mesh) {
+        child.geometry.dispose();
+        child.material.dispose();
+      }
+    });
+  }
+  reconcileAuthoritativeObstacles(obstacles) {
+    const reusable = /* @__PURE__ */ new Map();
+    for (const obstacle of this.obstacles) {
+      const key = this.getAuthoritativeObstacleKey(obstacle);
+      const bucket = reusable.get(key) ?? [];
+      bucket.push(obstacle);
+      reusable.set(key, bucket);
+    }
+    const next = [];
+    for (const data of obstacles) {
+      const key = this.getObstacleDataKey(data);
+      const bucket = reusable.get(key);
+      const obstacle = bucket?.shift() ?? this.createAuthoritativeObstacle(data);
+      obstacle.z = data.z;
+      obstacle.x = data.x;
+      obstacle.halfWidth = data.halfWidth;
+      obstacle.halfHeight = data.halfHeight;
+      obstacle.isGate = data.isGate;
+      obstacle.gapX = data.gapX;
+      obstacle.gapHalfWidth = data.gapHalfWidth;
+      obstacle.active = data.active;
+      obstacle.partiallyShattered = false;
+      obstacle.wallSegments = data.wallSegments?.map((segment) => ({ ...segment }));
+      obstacle.mesh.visible = true;
+      if (obstacle.mesh instanceof Group) {
+        obstacle.mesh.position.set(0, 0, data.z);
+      } else {
+        obstacle.mesh.position.set(data.x, data.halfHeight, data.z);
+      }
+      next.push(obstacle);
+    }
+    for (const bucket of reusable.values()) {
+      for (const obstacle of bucket) this.disposeObstacle(obstacle);
+    }
+    this.obstacles = next;
+  }
+  reconcileAuthoritativeOrbs(orbs) {
+    const reusable = /* @__PURE__ */ new Map();
+    for (const orb of this.orbs) {
+      const key = this.getAuthoritativeOrbKey(orb);
+      const bucket = reusable.get(key) ?? [];
+      bucket.push(orb);
+      reusable.set(key, bucket);
+    }
+    const next = [];
+    for (const data of orbs) {
+      const key = this.getOrbDataKey(data);
+      const bucket = reusable.get(key);
+      const orb = bucket?.shift() ?? this.createAuthoritativeOrb(data);
+      orb.x = data.x;
+      orb.z = data.z;
+      orb.active = true;
+      orb.collected = false;
+      orb.mesh.visible = true;
+      orb.mesh.position.x = data.x;
+      orb.mesh.position.z = data.z;
+      next.push(orb);
+    }
+    for (const bucket of reusable.values()) {
+      for (const orb of bucket) this.disposeOrb(orb);
+    }
+    this.orbs = next;
+  }
+  createAuthoritativeObstacle(data) {
+    if (data.isGate) {
+      const group = new Group();
+      group.position.z = data.z;
+      const wallHeight = data.halfHeight * 2;
+      const wallThickness = 0.6;
+      for (const segment of data.wallSegments ?? []) {
+        group.add(this.createObstacleMesh(segment.halfWidth * 2, wallHeight, wallThickness, segment.x, 0));
+      }
+      this.scene.add(group);
+      return {
+        mesh: group,
+        z: data.z,
+        halfWidth: data.halfWidth,
+        halfHeight: data.halfHeight,
+        x: data.x,
+        isGate: true,
+        gapX: data.gapX,
+        gapHalfWidth: data.gapHalfWidth,
+        active: true,
+        partiallyShattered: false,
+        wallSegments: data.wallSegments?.map((segment) => ({ ...segment }))
+      };
+    }
+    const mesh = this.createObstacleMesh(data.halfWidth * 2, data.halfHeight * 2, 0.8, 0, 0);
+    mesh.position.set(data.x, data.halfHeight, data.z);
+    this.scene.add(mesh);
+    return {
+      mesh,
+      z: data.z,
+      halfWidth: data.halfWidth,
+      halfHeight: data.halfHeight,
+      x: data.x,
+      isGate: false,
+      gapX: 0,
+      gapHalfWidth: 0,
+      active: true,
+      partiallyShattered: false
+    };
+  }
+  createAuthoritativeOrb(data) {
+    const c = this.biomes.colors;
+    const geo = new OctahedronGeometry(0.35, 0);
+    const mat = new MeshStandardMaterial({
+      color: c.orbColor,
+      emissive: c.orbColor,
+      emissiveIntensity: 1,
+      metalness: 0.5,
+      roughness: 0.2
+    });
+    const mesh = new Mesh(geo, mat);
+    mesh.position.set(data.x, 0.75, data.z);
+    this.scene.add(mesh);
+    return {
+      mesh,
+      z: data.z,
+      x: data.x,
+      y: mesh.position.y,
+      active: true,
+      collected: false
+    };
+  }
+  getObstacleDataKey(data) {
+    const segments = (data.wallSegments ?? []).map((segment) => `${segment.x.toFixed(3)}:${segment.halfWidth.toFixed(3)}`).join("|");
+    return [
+      data.z.toFixed(3),
+      data.x.toFixed(3),
+      data.halfWidth.toFixed(3),
+      data.halfHeight.toFixed(3),
+      data.isGate ? "1" : "0",
+      data.gapX.toFixed(3),
+      data.gapHalfWidth.toFixed(3),
+      segments
+    ].join(";");
+  }
+  getAuthoritativeObstacleKey(obstacle) {
+    return this.getObstacleDataKey({
+      z: obstacle.z,
+      x: obstacle.x,
+      halfWidth: obstacle.halfWidth,
+      halfHeight: obstacle.halfHeight,
+      isGate: obstacle.isGate,
+      gapX: obstacle.gapX,
+      gapHalfWidth: obstacle.gapHalfWidth,
+      active: obstacle.active,
+      wallSegments: obstacle.wallSegments?.map((segment) => ({ ...segment }))
+    });
+  }
+  getOrbDataKey(data) {
+    return `${data.x.toFixed(3)};${data.z.toFixed(3)}`;
+  }
+  getAuthoritativeOrbKey(orb) {
+    return this.getOrbDataKey({ x: orb.x, z: orb.z });
   }
   /** Scale a hex color's brightness (multiplier > 1 brightens, < 1 darkens) */
   darkenHex(hex, multiplier) {
@@ -34315,7 +34510,7 @@ var OnnxAgent = class {
 };
 
 // src/utils.ts
-function clamp2(value, min, max) {
+function clamp3(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 var ease = {
@@ -38173,6 +38368,119 @@ function findNeighbor(direction, currentEl, visible) {
   );
   return wrapped[0]?.el ?? null;
 }
+
+// src/lockstep-runner.ts
+var LockstepRunner = class {
+  sim;
+  transport;
+  playerIndices;
+  indexToPeerId;
+  localPlayerIndex;
+  dropTimeoutMs;
+  onTickAdvanced;
+  onPeerDropped;
+  pending = /* @__PURE__ */ new Map();
+  droppedPlayers = /* @__PURE__ */ new Set();
+  firstWaitedAt = /* @__PURE__ */ new Map();
+  currentTick;
+  running = false;
+  constructor(config) {
+    this.sim = config.sim;
+    this.transport = config.transport;
+    this.playerIndices = new Map(config.playerIndices);
+    this.indexToPeerId = /* @__PURE__ */ new Map();
+    for (const [peerId, idx] of this.playerIndices) this.indexToPeerId.set(idx, peerId);
+    this.localPlayerIndex = config.localPlayerIndex;
+    this.dropTimeoutMs = config.dropTimeoutMs ?? 2e3;
+    this.onTickAdvanced = config.onTickAdvanced;
+    this.onPeerDropped = config.onPeerDropped;
+    this.currentTick = config.startTick;
+  }
+  start() {
+    this.running = true;
+  }
+  stop() {
+    this.running = false;
+    this.pending.clear();
+    this.firstWaitedAt.clear();
+  }
+  getCurrentTick() {
+    return this.currentTick;
+  }
+  submitLocalInput(tick, action) {
+    if (!this.running) return;
+    if (tick < this.currentTick) return;
+    let bucket = this.pending.get(tick);
+    if (!bucket) {
+      bucket = /* @__PURE__ */ new Map();
+      this.pending.set(tick, bucket);
+    }
+    bucket.set(this.localPlayerIndex, action);
+  }
+  tryAdvance(nowMs = performance.now()) {
+    if (!this.running) return 0;
+    const drained = this.transport.drainQueuedFrames();
+    for (const frame of drained) {
+      if (frame.tick < this.currentTick) continue;
+      let bucket = this.pending.get(frame.tick);
+      if (!bucket) {
+        bucket = /* @__PURE__ */ new Map();
+        this.pending.set(frame.tick, bucket);
+      }
+      bucket.set(frame.playerIndex, frame.action);
+    }
+    let advanced = 0;
+    while (this.canAdvance(nowMs)) {
+      const bucket = this.pending.get(this.currentTick) ?? /* @__PURE__ */ new Map();
+      for (const idx of this.droppedPlayers) {
+        if (!bucket.has(idx)) bucket.set(idx, 0);
+      }
+      for (const [idx, action] of bucket) {
+        this.sim.setAction(action, idx);
+      }
+      const result = this.sim.tick();
+      this.onTickAdvanced?.(this.currentTick, bucket, result);
+      this.pending.delete(this.currentTick);
+      this.firstWaitedAt.delete(this.currentTick);
+      this.currentTick += 1;
+      advanced += 1;
+    }
+    return advanced;
+  }
+  canAdvance(nowMs) {
+    const bucket = this.pending.get(this.currentTick);
+    const needed = this.allPlayerIndices();
+    let allHave = true;
+    let firstMissingIdx = -1;
+    for (const idx of needed) {
+      if (this.droppedPlayers.has(idx)) continue;
+      if (!bucket?.has(idx)) {
+        allHave = false;
+        if (firstMissingIdx < 0) firstMissingIdx = idx;
+      }
+    }
+    if (allHave) return true;
+    if (!this.firstWaitedAt.has(this.currentTick)) {
+      this.firstWaitedAt.set(this.currentTick, nowMs);
+      return false;
+    }
+    const waitedFor = nowMs - this.firstWaitedAt.get(this.currentTick);
+    if (waitedFor >= this.dropTimeoutMs && firstMissingIdx >= 0) {
+      this.markDropped(firstMissingIdx);
+      return this.canAdvance(nowMs);
+    }
+    return false;
+  }
+  allPlayerIndices() {
+    return Array.from(this.indexToPeerId.keys());
+  }
+  markDropped(playerIndex) {
+    if (this.droppedPlayers.has(playerIndex)) return;
+    this.droppedPlayers.add(playerIndex);
+    const peerId = this.indexToPeerId.get(playerIndex);
+    if (peerId) this.onPeerDropped?.(peerId, playerIndex);
+  }
+};
 
 // node_modules/@firebase/util/dist/postinstall.mjs
 var getDefaultsFromPostinstall = () => void 0;
@@ -52506,7 +52814,7 @@ var LobbyClient = class {
   app = createFirebaseApp();
   db = getFirestore(this.app);
   peerId = createPeerId();
-  buildHash = "96e8f44";
+  buildHash = "6b6bd5a";
   playerName;
   lobbyCode = null;
   hostPeerId = null;
@@ -52558,6 +52866,7 @@ var LobbyClient = class {
         name: this.playerName,
         buildHash: this.buildHash,
         joinedAtMs: now,
+        ready: false,
         playerIndex: 0,
         isLocal: true
       }
@@ -52599,6 +52908,7 @@ var LobbyClient = class {
       buildHash: this.buildHash,
       joinedAtMs: now,
       updatedAtMs: now,
+      ready: false,
       joinedAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -52619,6 +52929,7 @@ var LobbyClient = class {
       name: player.name,
       buildHash: player.buildHash,
       joinedAtMs: player.joinedAtMs,
+      ready: Boolean(player.ready),
       playerIndex: index,
       isLocal: player.peerId === this.peerId
     }));
@@ -52667,6 +52978,14 @@ var LobbyClient = class {
         updatedAt: serverTimestamp()
       });
     }
+  }
+  async setReady(ready) {
+    if (!this.lobbyCode) return;
+    await updateDoc(this.getMemberRef(this.lobbyCode, this.peerId), {
+      ready,
+      updatedAtMs: Date.now(),
+      updatedAt: serverTimestamp()
+    });
   }
   async sendSignal(to, kind, payload) {
     if (!this.lobbyCode) return;
@@ -52780,6 +53099,7 @@ var LobbyClient = class {
       name: data.name,
       buildHash: data.buildHash,
       joinedAtMs: data.joinedAtMs ?? 0,
+      ready: Boolean(data.ready),
       playerIndex: -1,
       isLocal: data.peerId === this.peerId
     };
@@ -52800,6 +53120,7 @@ var MeshTransport = class {
   frameAckSentAt = /* @__PURE__ */ new Map();
   unsubscribe = null;
   active = false;
+  matchHandler = null;
   start() {
     if (this.active) return;
     this.active = true;
@@ -52828,6 +53149,7 @@ var MeshTransport = class {
     this.peers.clear();
     this.frameQueue.clear();
     this.frameAckSentAt.clear();
+    this.matchHandler = null;
   }
   sendInputFrame(tick, action) {
     if (!this.active) return;
@@ -52856,6 +53178,33 @@ var MeshTransport = class {
     let total = 0;
     for (const byPlayer of this.frameQueue.values()) total += byPlayer.size;
     return total;
+  }
+  /** Register a callback for incoming match-start handshake messages. */
+  setMatchHandler(handler) {
+    this.matchHandler = handler;
+  }
+  /** Broadcast a match-start handshake message to every connected peer. */
+  broadcastMatchMessage(msg) {
+    if (!this.active) return;
+    for (const state of this.peers.values()) {
+      if (!state.channel || state.channel.readyState !== "open" || !state.helloValidated) continue;
+      this.sendMessage(state.channel, msg);
+    }
+  }
+  /** Send a match-start handshake message to a single peer. */
+  sendMatchMessageTo(peerId, msg) {
+    if (!this.active) return;
+    const state = this.peers.get(peerId);
+    if (!state || !state.channel || state.channel.readyState !== "open" || !state.helloValidated) return;
+    this.sendMessage(state.channel, msg);
+  }
+  /** Snapshot of currently-connected, hello-validated peer IDs. */
+  getConnectedPeerIds() {
+    const out = [];
+    for (const [peerId, state] of this.peers) {
+      if (state.helloValidated && state.channel?.readyState === "open") out.push(peerId);
+    }
+    return out;
   }
   async syncPeers(players) {
     const localPeerId = this.lobby.getLocalPeerId();
@@ -52996,6 +53345,12 @@ var MeshTransport = class {
         this.frameAckSentAt.delete(key);
         console.log(`[sd-mp] frame ${message.tick} ack from ${state.peerId} in ${rttMs.toFixed(1)} ms`);
       }
+      return;
+    }
+    if (message.type === "match_propose" || message.type === "match_ack") {
+      if (!state.helloValidated) return;
+      this.matchHandler?.(message, state.peerId);
+      return;
     }
   }
   queueFrame(frame) {
@@ -53018,6 +53373,1329 @@ var MeshTransport = class {
     channel.send(JSON.stringify(message));
   }
 };
+var MatchStartCoordinator = class {
+  lobby;
+  transport;
+  callbacks;
+  active = false;
+  pendingProposal = null;
+  constructor(lobby, transport, callbacks) {
+    this.lobby = lobby;
+    this.transport = transport;
+    this.callbacks = callbacks;
+  }
+  start() {
+    if (this.active) return;
+    this.active = true;
+    this.transport.setMatchHandler((msg, fromPeerId) => this.handleIncoming(msg, fromPeerId));
+  }
+  stop() {
+    this.active = false;
+    this.transport.setMatchHandler(null);
+    this.pendingProposal = null;
+  }
+  /**
+   * Initiate a match-start handshake from this peer if and only if we are
+   * the lowest-peerId peer in the lobby (deterministic proposer). Returns
+   * true if a propose was actually sent.
+   */
+  requestMatchStart(opts = {}) {
+    if (!this.active) return false;
+    const players = this.lobby.getPlayers();
+    if (players.length < 2) {
+      this.callbacks.onError?.("Need at least 2 players in the lobby to start a match.");
+      return false;
+    }
+    const localPeerId = this.lobby.getLocalPeerId();
+    const lowestPeerId = players.map((p) => p.peerId).reduce((a, b2) => a < b2 ? a : b2);
+    if (lowestPeerId !== localPeerId) {
+      return false;
+    }
+    const seed = this.generateSeed();
+    const startTickOffset = opts.startTickOffset ?? 6;
+    const startTick = startTickOffset;
+    const slots = this.assignPlayerSlots(players);
+    const awaitingAcks = /* @__PURE__ */ new Set();
+    for (const slot of slots) {
+      if (slot.peerId !== localPeerId) awaitingAcks.add(slot.peerId);
+    }
+    this.pendingProposal = { seed, startTick, players: slots, awaitingAcks };
+    const msg = {
+      type: "match_propose",
+      seed,
+      startTick,
+      players: slots,
+      proposerPeerId: localPeerId
+    };
+    this.transport.broadcastMatchMessage(msg);
+    if (awaitingAcks.size === 0) {
+      this.fireMatchStart(seed, startTick, slots);
+    }
+    return true;
+  }
+  handleIncoming(msg, fromPeerId) {
+    if (!this.active) return;
+    if (msg.type === "match_propose") {
+      const players = this.lobby.getPlayers();
+      const lowestPeerId = players.map((p) => p.peerId).reduce((a, b2) => a < b2 ? a : b2, msg.proposerPeerId);
+      if (msg.proposerPeerId !== lowestPeerId) {
+        return;
+      }
+      const ack = {
+        type: "match_ack",
+        proposerPeerId: msg.proposerPeerId,
+        ackerPeerId: this.lobby.getLocalPeerId()
+      };
+      this.transport.sendMatchMessageTo(fromPeerId, ack);
+      this.fireMatchStart(msg.seed, msg.startTick, msg.players);
+      return;
+    }
+    if (msg.type === "match_ack") {
+      if (!this.pendingProposal) return;
+      if (msg.proposerPeerId !== this.lobby.getLocalPeerId()) return;
+      this.pendingProposal.awaitingAcks.delete(msg.ackerPeerId);
+      if (this.pendingProposal.awaitingAcks.size === 0) {
+        const { seed, startTick, players } = this.pendingProposal;
+        this.pendingProposal = null;
+        this.fireMatchStart(seed, startTick, players);
+      }
+    }
+  }
+  fireMatchStart(seed, startTick, players) {
+    const localPeerId = this.lobby.getLocalPeerId();
+    const local = players.find((p) => p.peerId === localPeerId);
+    if (!local) {
+      this.callbacks.onError?.("Match started but local peer is not in the player list.");
+      return;
+    }
+    const config = {
+      seed,
+      startTick,
+      localPlayerIndex: local.playerIndex,
+      players
+    };
+    this.callbacks.onMatchStart(config);
+  }
+  generateSeed() {
+    let s = 0;
+    while (s === 0) s = Math.floor(Math.random() * 4294967295);
+    return s;
+  }
+  assignPlayerSlots(players) {
+    return players.slice().sort((a, b2) => a.playerIndex - b2.playerIndex).map((p) => ({
+      peerId: p.peerId,
+      name: p.name,
+      playerIndex: p.playerIndex,
+      color: pickPlayerColor(p.playerIndex)
+    }));
+  }
+};
+var PLAYER_COLOR_PALETTE = [4973055, 16736162, 16765515, 8126303];
+function pickPlayerColor(playerIndex) {
+  return PLAYER_COLOR_PALETTE[(playerIndex % PLAYER_COLOR_PALETTE.length + PLAYER_COLOR_PALETTE.length) % PLAYER_COLOR_PALETTE.length];
+}
+var REMOTE_PLAYER_RADIUS = 0.6;
+var REMOTE_NAME_SPRITE_SCALE = 0.7;
+function createRemotePlayer(playerIndex, name3, color) {
+  const group = new Group();
+  const geo = new IcosahedronGeometry(REMOTE_PLAYER_RADIUS, 0);
+  const material = new MeshBasicMaterial({
+    color,
+    transparent: false,
+    wireframe: false
+  });
+  const mesh = new Mesh(geo, material);
+  group.add(mesh);
+  const wireMat = new MeshBasicMaterial({
+    color,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.6,
+    depthWrite: false
+  });
+  const wireMesh = new Mesh(geo, wireMat);
+  wireMesh.scale.setScalar(1.05);
+  group.add(wireMesh);
+  const nameTexture = makeRemoteNameTexture(name3, color);
+  const nameMaterial = new SpriteMaterial({
+    map: nameTexture,
+    transparent: true,
+    opacity: 0.9,
+    depthTest: false,
+    depthWrite: false
+  });
+  const nameSprite = new Sprite(nameMaterial);
+  nameSprite.scale.set(REMOTE_NAME_SPRITE_SCALE * 4, REMOTE_NAME_SPRITE_SCALE * 0.5, 1);
+  nameSprite.position.y = 1.4;
+  group.add(nameSprite);
+  return { playerIndex, name: name3, color, group, mesh, material, nameSprite, nameMaterial };
+}
+function updateRemotePlayer(remote, player, dt2) {
+  remote.group.visible = player.alive;
+  if (!player.alive) return;
+  remote.group.position.set(player.x, 0, player.z);
+  remote.mesh.rotation.y += dt2 * 1.2;
+  remote.mesh.rotation.x = Math.sin(performance.now() * 17e-4) * 0.15;
+  const targetOpacity = player.shattered ? 0.35 : 1;
+  remote.material.opacity = MathUtils.lerp(
+    remote.material.opacity || 1,
+    targetOpacity,
+    1 - Math.exp(-8 * dt2)
+  );
+  remote.material.transparent = player.shattered;
+}
+function disposeRemotePlayer(remote) {
+  remote.mesh.geometry.dispose();
+  remote.material.dispose();
+  if (remote.nameMaterial.map) remote.nameMaterial.map.dispose();
+  remote.nameMaterial.dispose();
+}
+function makeRemoteNameTexture(name3, color) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 64;
+  const ctx2 = canvas.getContext("2d");
+  ctx2.clearRect(0, 0, canvas.width, canvas.height);
+  const hex = "#" + color.toString(16).padStart(6, "0");
+  ctx2.font = "bold 36px 'Orbitron', monospace";
+  ctx2.textAlign = "center";
+  ctx2.textBaseline = "middle";
+  ctx2.shadowColor = hex;
+  ctx2.shadowBlur = 12;
+  ctx2.fillStyle = hex;
+  ctx2.fillText(name3.slice(0, 16).toUpperCase(), canvas.width / 2, canvas.height / 2);
+  const tex = new CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// src/config.ts
+var params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+var MULTIPLAYER_ENABLED = params?.get("mp") === "1";
+var MULTIPLAYER_HASH_DEBUG = params?.get("hash") === "1";
+var MULTIPLAYER_INPUT_DELAY_TICKS = 3;
+
+// src/lib/di/injected.ts
+var registry = /* @__PURE__ */ new WeakMap();
+function injected(injectable, ...tokens) {
+  registry.set(injectable, tokens);
+}
+function getInjectedTokens(factory) {
+  return registry.get(factory);
+}
+
+// src/lib/di/container.ts
+var MissingBindingError = class extends Error {
+  constructor(description) {
+    super(`No binding found for token: "${description}"`);
+    this.name = "MissingBindingError";
+  }
+};
+var DuplicateBindingError = class extends Error {
+  constructor(description) {
+    super(`Token "${description}" is already bound. Use a separate token or create a child container.`);
+    this.name = "DuplicateBindingError";
+  }
+};
+var CircularDependencyError = class extends Error {
+  constructor(chain) {
+    super(`Circular dependency detected: ${chain.join(" -> ")}`);
+    this.name = "CircularDependencyError";
+  }
+};
+var containerScopeCache = /* @__PURE__ */ new WeakMap();
+function getContainerCache(container) {
+  let cache = containerScopeCache.get(container);
+  if (cache === void 0) {
+    cache = /* @__PURE__ */ new Map();
+    containerScopeCache.set(container, cache);
+  }
+  return cache;
+}
+var ContainerImpl = class _ContainerImpl {
+  bindings = /* @__PURE__ */ new Map();
+  parent;
+  rootResolvingSet;
+  resolvingChain;
+  destroyed = false;
+  constructor(parent, rootResolvingSet, resolvingChain) {
+    this.parent = parent;
+    this.rootResolvingSet = rootResolvingSet;
+    this.resolvingChain = resolvingChain;
+  }
+  bind(token) {
+    if (this.destroyed) {
+      throw new Error("Container has been destroyed");
+    }
+    const sym = token.__s;
+    if (this.bindings.has(sym)) {
+      throw new DuplicateBindingError(token.__d);
+    }
+    const binding = {
+      token,
+      type: "factory",
+      scope: "transient",
+      hasCachedInstance: false
+    };
+    const makeScopeBuilder = () => ({
+      asSingleton: () => {
+        binding.scope = "singleton";
+      },
+      asTransient: () => {
+        binding.scope = "transient";
+      },
+      asContainerScoped: () => {
+        binding.scope = "container";
+      },
+      inSingletonScope: () => {
+        binding.scope = "singleton";
+      },
+      inTransientScope: () => {
+        binding.scope = "transient";
+      },
+      inContainerScope: () => {
+        binding.scope = "container";
+      }
+    });
+    const makeDepsBuilder = (injectable) => {
+      const scopeBuilder = makeScopeBuilder();
+      const depsBuilder = {
+        withDeps: (...tokens) => {
+          ;
+          injected(
+            injectable,
+            ...tokens
+          );
+          return scopeBuilder;
+        },
+        ...scopeBuilder
+      };
+      return depsBuilder;
+    };
+    return {
+      toValue: (value) => {
+        ;
+        binding.scope = "singleton";
+        binding.type = "value";
+        binding.cachedInstance = value;
+        binding.hasCachedInstance = true;
+        this.bindings.set(sym, binding);
+      },
+      toFactory: (factory) => {
+        ;
+        binding.type = "factory";
+        binding.factory = factory;
+        this.bindings.set(sym, binding);
+        return makeDepsBuilder(factory);
+      },
+      toClass: (ctor) => {
+        ;
+        binding.type = "class";
+        binding.ctor = ctor;
+        this.bindings.set(sym, binding);
+        return makeDepsBuilder(ctor);
+      }
+    };
+  }
+  get(token) {
+    if (this.destroyed) {
+      throw new Error("Container has been destroyed");
+    }
+    if (token.__o) {
+      try {
+        return this.resolve(token.__s, token.__d);
+      } catch (error2) {
+        if (error2 instanceof MissingBindingError) {
+          return void 0;
+        }
+        throw error2;
+      }
+    }
+    return this.resolve(token.__s, token.__d);
+  }
+  createChild() {
+    if (this.destroyed) {
+      throw new Error("Container has been destroyed");
+    }
+    return new _ContainerImpl(this, this.rootResolvingSet, this.resolvingChain);
+  }
+  destroy() {
+    this.destroyed = true;
+    this.bindings.clear();
+    const cache = containerScopeCache.get(this);
+    cache?.clear();
+  }
+  resolve(sym, description) {
+    if (this.rootResolvingSet.has(sym)) {
+      throw new CircularDependencyError([...this.resolvingChain, description]);
+    }
+    const owner = this.findOwner(sym);
+    if (owner === null) {
+      throw new MissingBindingError(description);
+    }
+    const binding = owner.bindings.get(sym);
+    if (binding.type === "value") {
+      return binding.cachedInstance;
+    }
+    if (binding.scope === "singleton") {
+      if (binding.hasCachedInstance) {
+        return binding.cachedInstance;
+      }
+      return this.instantiateCached(binding, owner, sym, description, owner);
+    }
+    if (binding.scope === "container") {
+      const cache = getContainerCache(this);
+      if (cache.has(sym)) {
+        return cache.get(sym);
+      }
+      return this.instantiateCached(binding, this, sym, description, this);
+    }
+    this.rootResolvingSet.add(sym);
+    this.resolvingChain.push(description);
+    try {
+      return binding.type === "class" ? this.callClass(binding.ctor) : this.callFactory(binding.factory);
+    } finally {
+      this.rootResolvingSet.delete(sym);
+      this.resolvingChain.pop();
+    }
+  }
+  instantiateCached(binding, cacheOwner, sym, description, containerForContainerScope) {
+    this.rootResolvingSet.add(sym);
+    this.resolvingChain.push(description);
+    try {
+      const instance = binding.type === "class" ? this.callClass(binding.ctor) : this.callFactory(binding.factory);
+      if (binding.scope === "singleton") {
+        ;
+        binding.cachedInstance = instance;
+        binding.hasCachedInstance = true;
+      } else {
+        getContainerCache(containerForContainerScope).set(sym, instance);
+      }
+      return instance;
+    } finally {
+      this.rootResolvingSet.delete(sym);
+      this.resolvingChain.pop();
+      void cacheOwner;
+    }
+  }
+  callFactory(factory) {
+    const depTokens = getInjectedTokens(factory);
+    if (depTokens === void 0) {
+      if (factory.length > 0) {
+        throw new Error(
+          `Factory "${factory.name || "(anonymous)"}" has ${factory.length} parameter(s) but no deps were registered. Use .withDeps(TokenA, ...) when binding.`
+        );
+      }
+      return factory();
+    }
+    const args = depTokens.map((depToken) => this.get(depToken));
+    return factory(...args);
+  }
+  callClass(ctor) {
+    const depTokens = getInjectedTokens(ctor);
+    if (depTokens === void 0) {
+      if (ctor.length > 0) {
+        throw new Error(
+          `Class "${ctor.name}" has ${ctor.length} constructor parameter(s) but no deps were registered. Use .withDeps(TokenA, ...) when binding.`
+        );
+      }
+      return new ctor();
+    }
+    const args = depTokens.map((depToken) => this.get(depToken));
+    return new ctor(...args);
+  }
+  findOwner(sym) {
+    if (this.bindings.has(sym)) {
+      return this;
+    }
+    return this.parent?.findOwner(sym) ?? null;
+  }
+};
+function createContainer() {
+  return new ContainerImpl(null, /* @__PURE__ */ new Set(), []);
+}
+
+// src/input/agent-input.ts
+var LEGACY = {
+  0: { horizontal: 0, shatter: false, boost: false, brake: false },
+  1: { horizontal: -1, shatter: false, boost: false, brake: false },
+  2: { horizontal: 1, shatter: false, boost: false, brake: false },
+  3: { horizontal: 0, shatter: true, boost: false, brake: false },
+  4: { horizontal: -1, shatter: true, boost: false, brake: false },
+  5: { horizontal: 1, shatter: true, boost: false, brake: false }
+};
+function decodeAction(action) {
+  if (action >= 0 && action <= 5) {
+    return LEGACY[action];
+  }
+  const left = !!(action & 1);
+  const right = !!(action & 2);
+  const boost = !!(action & 8);
+  const brake = !!(action & 16);
+  return {
+    horizontal: left === right ? 0 : left ? -1 : 1,
+    shatter: !!(action & 4),
+    // brake wins if both pressed (defensive default)
+    boost: boost && !brake,
+    brake
+  };
+}
+function createAgentInput() {
+  let currentAction = 0;
+  return {
+    getState() {
+      return decodeAction(currentAction);
+    },
+    setAction(action) {
+      currentAction = Number.isFinite(action) ? Math.trunc(action) : 0;
+    },
+    reset() {
+      currentAction = 0;
+    }
+  };
+}
+
+// src/sim-world.ts
+var DEFAULT_PLAYER_COLORS = [4973055, 16736162, 16765515, 8126303];
+function createInitialPlayer(index, name3, color) {
+  return {
+    playerIndex: index,
+    name: name3,
+    color,
+    x: 0,
+    z: 0,
+    speed: 0,
+    speedMod: 1,
+    boostTimer: 0,
+    boostCooldown: 0,
+    brakeTimer: 0,
+    brakeCooldown: 0,
+    alive: true,
+    shattered: false,
+    phaseEnergy: 1,
+    phaseLocked: false,
+    phaseCooldown: 0,
+    phaseMinTimer: 0,
+    score: 0,
+    lastCloseCallZ: -10
+  };
+}
+function createInitialState(playerCount, playerNames, playerColors) {
+  const players = [];
+  for (let i = 0; i < playerCount; i++) {
+    players.push(
+      createInitialPlayer(
+        i,
+        playerNames[i] ?? `P${i + 1}`,
+        playerColors[i] ?? DEFAULT_PLAYER_COLORS[i % DEFAULT_PLAYER_COLORS.length]
+      )
+    );
+  }
+  return {
+    players,
+    obstacles: [],
+    orbs: [],
+    nextObstacleZ: 30,
+    nextOrbZ: 15,
+    nextBossZ: 500,
+    // matches BOSS_INTERVAL in bosswaves.ts
+    bossCount: 0,
+    lastPatternName: null,
+    riftFlip: {
+      phase: "idle",
+      timer: 0,
+      nextFlipDistance: 1900
+      // first flip ~100m into Cosmic Rift (1800m start)
+    }
+  };
+}
+function createSimulationWorld(inputs, random, config = {}) {
+  const inputArray = Array.isArray(inputs) ? inputs : [inputs];
+  const playerCount = Math.max(1, config.playerCount ?? inputArray.length);
+  const localPlayerIndex = clamp2(config.localPlayerIndex ?? 0, 0, playerCount - 1);
+  const playerNames = config.playerNames ?? [];
+  const playerColors = config.playerColors ?? [];
+  if (inputArray.length < playerCount) {
+    throw new Error(
+      `createSimulationWorld: playerCount=${playerCount} but only ${inputArray.length} input(s) provided`
+    );
+  }
+  let state = createInitialState(playerCount, playerNames, playerColors);
+  const events = [];
+  function anchorZ() {
+    let max = -Infinity;
+    for (const p of state.players) {
+      if (!p.alive) continue;
+      if (p.z > max) max = p.z;
+    }
+    return max === -Infinity ? 0 : max;
+  }
+  function trailingZ() {
+    let min = Infinity;
+    for (const p of state.players) {
+      if (!p.alive) continue;
+      if (p.z < min) min = p.z;
+    }
+    return min === Infinity ? 0 : min;
+  }
+  return {
+    inputs: inputArray,
+    get input() {
+      return inputArray[localPlayerIndex];
+    },
+    random,
+    localPlayerIndex,
+    get state() {
+      return state;
+    },
+    anchorZ,
+    trailingZ,
+    reset() {
+      state = createInitialState(playerCount, playerNames, playerColors);
+      for (const input of inputArray) input.reset();
+      events.length = 0;
+    },
+    pushEvent(event) {
+      events.push(event);
+    },
+    drainEvents() {
+      const drained = events.slice();
+      events.length = 0;
+      return drained;
+    },
+    addScore(points, playerIndex) {
+      const idx = playerIndex ?? localPlayerIndex;
+      const player = state.players[idx];
+      if (player) player.score += points;
+    },
+    getState() {
+      const local = state.players[localPlayerIndex];
+      const cooldown = local.phaseLocked && local.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - local.phaseEnergy) / PHASE_RECHARGE_RATE : 0;
+      return {
+        playerX: local.x,
+        shattered: local.shattered,
+        shatterCooldown: cooldown,
+        speed: local.speed,
+        speedMod: local.speedMod,
+        boostCooldown: local.boostCooldown,
+        brakeCooldown: local.brakeCooldown,
+        distance: local.z,
+        score: Math.round(local.score),
+        alive: local.alive,
+        obstacles: state.obstacles.filter((obstacle) => obstacle.active).map((obstacle) => ({
+          z: obstacle.z,
+          x: obstacle.x,
+          halfWidth: obstacle.halfWidth,
+          halfHeight: obstacle.halfHeight,
+          isGate: obstacle.isGate,
+          gapX: obstacle.gapX,
+          gapHalfWidth: obstacle.gapHalfWidth,
+          active: obstacle.active,
+          wallSegments: obstacle.wallSegments?.map((segment) => ({
+            x: segment.x,
+            halfWidth: segment.halfWidth
+          }))
+        })),
+        orbs: state.orbs.filter((orb) => orb.active).map((orb) => ({
+          x: orb.x,
+          z: orb.z
+        }))
+      };
+    },
+    getAuthoritativeState() {
+      return {
+        players: state.players.map((player) => ({ ...player })),
+        obstacles: state.obstacles.filter((obstacle) => obstacle.active).map((obstacle) => ({
+          z: obstacle.z,
+          x: obstacle.x,
+          halfWidth: obstacle.halfWidth,
+          halfHeight: obstacle.halfHeight,
+          isGate: obstacle.isGate,
+          gapX: obstacle.gapX,
+          gapHalfWidth: obstacle.gapHalfWidth,
+          active: obstacle.active,
+          wallSegments: obstacle.wallSegments?.map((segment) => ({
+            x: segment.x,
+            halfWidth: segment.halfWidth
+          }))
+        })),
+        orbs: state.orbs.filter((orb) => orb.active).map((orb) => ({
+          x: orb.x,
+          z: orb.z
+        }))
+      };
+    },
+    getObservation() {
+      const local = state.players[localPlayerIndex];
+      const observation = new Float64Array(4 + LOOKAHEAD_OBSTACLES * 4);
+      observation[0] = clamp2(local.x / PLAYABLE_HALF_WIDTH, -1, 1);
+      observation[1] = local.shattered ? 1 : 0;
+      observation[2] = clamp2(local.speed / MAX_SPEED, 0, 1);
+      const energyLock = local.phaseLocked && local.phaseEnergy < PHASE_MIN_THRESHOLD ? (PHASE_MIN_THRESHOLD - local.phaseEnergy) / PHASE_MIN_THRESHOLD : 0;
+      const cooldownLock = local.phaseCooldown > 0 ? local.phaseCooldown / PHASE_POST_COOLDOWN : 0;
+      observation[3] = clamp2(Math.max(energyLock, cooldownLock), 0, 1);
+      const upcoming = state.obstacles.filter((obstacle) => obstacle.active && obstacle.z >= local.z).sort((a, b2) => a.z - b2.z).slice(0, LOOKAHEAD_OBSTACLES);
+      upcoming.forEach((obstacle, index) => {
+        const offset = 4 + index * 4;
+        observation[offset] = clamp2((obstacle.z - local.z) / LOOKAHEAD_DISTANCE, 0, 1);
+        observation[offset + 1] = clamp2(
+          (obstacle.isGate ? obstacle.gapX : obstacle.x) / PLAYABLE_HALF_WIDTH,
+          -1,
+          1
+        );
+        observation[offset + 2] = clamp2(
+          (obstacle.isGate ? obstacle.gapHalfWidth * 2 : obstacle.halfWidth * 2) / (PLAYABLE_HALF_WIDTH * 2),
+          0,
+          1
+        );
+        observation[offset + 3] = obstacle.isGate ? 1 : obstacle.halfWidth >= PLAYABLE_HALF_WIDTH * 0.85 ? 0.5 : 0;
+      });
+      return observation;
+    }
+  };
+}
+function markOrbCollected(world, playerIndex) {
+  world.addScore(ORB_SCORE, playerIndex);
+  world.pushEvent({ type: "orb_collected" });
+}
+function markCloseCall(world, playerIndex) {
+  world.addScore(CLOSE_CALL_SCORE, playerIndex);
+  world.pushEvent({ type: "close_call" });
+}
+
+// src/lib/token/token.ts
+function createToken(description) {
+  const sym = Symbol(description);
+  const optional = {
+    __t: null,
+    __s: sym,
+    __d: description,
+    __o: true
+  };
+  return {
+    __t: null,
+    __s: sym,
+    __d: description,
+    __o: false,
+    optional
+  };
+}
+
+// src/tokens.ts
+var RandomToken = createToken("Random");
+var SimulationConfigToken = createToken("SimulationConfig");
+var SimulationInputsToken = createToken("SimulationInputs");
+var SimulationInputToken = createToken("SimulationInput");
+var SimulationWorldToken = createToken("SimulationWorld");
+var SpeedModSystemToken = createToken("SpeedModSystem");
+var PlayerMovementSystemToken = createToken("PlayerMovementSystem");
+var WorldScrollSystemToken = createToken("WorldScrollSystem");
+var ObstacleSpawnSystemToken = createToken("ObstacleSpawnSystem");
+var ObstacleDespawnSystemToken = createToken("ObstacleDespawnSystem");
+var CollisionSystemToken = createToken("CollisionSystem");
+var ShatterSystemToken = createToken("ShatterSystem");
+var OrbSystemToken = createToken("OrbSystem");
+var BossAnimationSystemToken = createToken("BossAnimationSystem");
+var RiftFlipSystemToken = createToken("RiftFlipSystem");
+
+// src/systems/boss-animation-system.ts
+function createBossAnimationSystem(world) {
+  return (dt2) => {
+    for (const obstacle of world.state.obstacles) {
+      if (!obstacle.bossAnimation || !obstacle.active) continue;
+      const anim = obstacle.bossAnimation;
+      anim.timer += dt2;
+      switch (anim.pattern) {
+        case "oscillate":
+          obstacle.x = anim.baseX + Math.sin(anim.timer * anim.speed + anim.phase) * 3;
+          break;
+        case "converge": {
+          const cycle = (Math.sin(anim.timer * anim.speed + anim.phase) + 1) / 2;
+          obstacle.x = anim.baseX * (0.3 + cycle * 0.7);
+          break;
+        }
+        case "static":
+          break;
+      }
+    }
+  };
+}
+
+// src/systems/collision-system.ts
+function findCollisionFor(world, player) {
+  for (const obstacle of world.state.obstacles) {
+    if (!obstacle.active) {
+      continue;
+    }
+    const dz = Math.abs(player.z - obstacle.z);
+    if (dz > 2) {
+      continue;
+    }
+    if (obstacle.isGate && obstacle.wallSegments) {
+      for (const segment of obstacle.wallSegments) {
+        const dx2 = Math.abs(player.x - segment.x);
+        if (dx2 < segment.halfWidth + PLAYER_COLLISION_RADIUS - 0.15) {
+          return obstacle;
+        }
+      }
+      continue;
+    }
+    const dx = Math.abs(player.x - obstacle.x);
+    if (dx < obstacle.halfWidth + PLAYER_COLLISION_RADIUS) {
+      return obstacle;
+    }
+  }
+  return null;
+}
+function createCollisionSystem(world) {
+  return (_dt) => {
+    for (const player of world.state.players) {
+      if (!player.alive || player.shattered) continue;
+      const hit = findCollisionFor(world, player);
+      if (!hit) continue;
+      player.alive = false;
+      world.pushEvent({ type: "death" });
+    }
+  };
+}
+
+// src/systems/obstacle-despawn-system.ts
+function createObstacleDespawnSystem(world) {
+  return (_dt) => {
+    const cutoff = world.trailingZ();
+    for (const obstacle of world.state.obstacles) {
+      if (!obstacle.active) {
+        continue;
+      }
+      if (obstacle.z < cutoff + DESPAWN_DISTANCE) {
+        obstacle.active = false;
+        if (!obstacle.passed) {
+          obstacle.passed = true;
+          world.pushEvent({ type: "obstacle_passed" });
+        }
+      }
+    }
+    for (const orb of world.state.orbs) {
+      if (orb.active && orb.z < cutoff + DESPAWN_DISTANCE) {
+        orb.active = false;
+      }
+    }
+    world.state.obstacles = world.state.obstacles.filter((obstacle) => obstacle.active);
+    world.state.orbs = world.state.orbs.filter((orb) => orb.active);
+  };
+}
+
+// src/systems/obstacle-patterns.ts
+var weave = {
+  name: "weave",
+  length: 48,
+  obstacleCount: 6,
+  emit(rng, _ctx) {
+    const startSide = rng() < 0.5 ? -1 : 1;
+    const specs = [];
+    for (let i = 0; i < 6; i++) {
+      const side = startSide * (i % 2 === 0 ? 1 : -1);
+      const x2 = i === 0 ? side * (0.8 + rng() * 0.4) : side * (2 + rng() * 1.5);
+      specs.push({ kind: "pillar", dz: i * 8, x: x2, width: 1.2 + rng() * 0.8 });
+    }
+    return specs;
+  }
+};
+var wallSandwich = {
+  name: "wall-sandwich",
+  length: 30,
+  obstacleCount: 3,
+  emit(rng, _ctx) {
+    return [
+      { kind: "gate", dz: 0, gapX: (rng() - 0.5) * 5 },
+      { kind: "phase-wall", dz: 12 },
+      { kind: "gate", dz: 24, gapX: (rng() - 0.5) * 5 }
+    ];
+  }
+};
+var shotgun = {
+  name: "shotgun",
+  length: 60,
+  // 25 compression + 35 breather built-in
+  obstacleCount: 5,
+  emit(rng, _ctx) {
+    const specs = [];
+    for (let i = 0; i < 5; i++) {
+      const pick = rng();
+      if (pick < 0.5) {
+        specs.push({ kind: "pillar", dz: i * 5, x: (rng() - 0.5) * 6 });
+      } else if (pick < 0.8) {
+        specs.push({ kind: "gate", dz: i * 5, gapX: (rng() - 0.5) * 5 });
+      } else {
+        specs.push({ kind: "dual-pillar", dz: i * 5 });
+      }
+    }
+    return specs;
+  }
+};
+var crescendo = {
+  name: "crescendo",
+  length: 115,
+  obstacleCount: 8,
+  emit(rng, _ctx) {
+    const specs = [];
+    let dz = 0;
+    for (let i = 0; i < 7; i++) {
+      const spacing = 20 - 12 * i / 6;
+      specs.push({
+        kind: rng() < 0.5 ? "pillar" : "gate",
+        dz,
+        x: (rng() - 0.5) * 6,
+        gapX: (rng() - 0.5) * 4
+      });
+      dz += spacing;
+    }
+    specs.push({ kind: "phase-wall", dz });
+    return specs;
+  }
+};
+var falseSafety = {
+  name: "false-safety",
+  length: 38,
+  obstacleCount: 4,
+  emit(rng, _ctx) {
+    return [
+      { kind: "gate", dz: 0, gapX: (rng() - 0.5) * 5 },
+      { kind: "pillar", dz: 10, x: (rng() - 0.5) * 5 },
+      { kind: "gate", dz: 20, gapX: (rng() - 0.5) * 5 },
+      { kind: "phase-wall", dz: 26 }
+      // surprise, 6 units after the gate — tight
+    ];
+  }
+};
+var twinGates = {
+  name: "twin-gates",
+  length: 16,
+  obstacleCount: 2,
+  emit(rng, _ctx) {
+    const offset = 2 + rng() * 1.5;
+    const side = rng() < 0.5 ? -1 : 1;
+    return [
+      { kind: "gate", dz: 0, gapX: side * offset, gapHalfWidth: 2.25 },
+      { kind: "gate", dz: 8, gapX: -side * offset, gapHalfWidth: 2.25 }
+    ];
+  }
+};
+var PATTERNS = [
+  weave,
+  wallSandwich,
+  shotgun,
+  crescendo,
+  falseSafety,
+  twinGates
+];
+function pickNextPattern(ctx2, rng, lastPatternName) {
+  const t = ctx2.difficultyT;
+  const weights = {
+    weave: 0.15 + t * 0.9,
+    "wall-sandwich": 0.8 - t * 0.3,
+    shotgun: 0.05 + t * 1.2,
+    crescendo: 0.05 + t * 1.2,
+    "false-safety": 0.3 + t * 0.4,
+    "twin-gates": 1 - t * 0.5
+  };
+  if (ctx2.biome === 4) {
+    weights["shotgun"] += 0.2;
+    weights["crescendo"] += 0.2;
+  } else if (ctx2.biome === 0) {
+    weights["twin-gates"] += 0.3;
+    weights["wall-sandwich"] += 0.2;
+  }
+  if (lastPatternName && weights[lastPatternName] !== void 0) {
+    weights[lastPatternName] = 0;
+  }
+  let total = 0;
+  for (const k of Object.keys(weights)) {
+    weights[k] = Math.max(0, weights[k]);
+    total += weights[k];
+  }
+  if (total <= 0) return twinGates;
+  let r = rng() * total;
+  for (const pat of PATTERNS) {
+    const w = weights[pat.name] ?? 0;
+    if (r < w) return pat;
+    r -= w;
+  }
+  return PATTERNS[PATTERNS.length - 1];
+}
+function biomeFromDistance(distance) {
+  if (distance < 300) return 0;
+  if (distance < 700) return 1;
+  if (distance < 1200) return 2;
+  if (distance < 1800) return 3;
+  return 4;
+}
+
+// src/systems/obstacle-spawn-system.ts
+var BOSS_WAVE_INTERVAL = 500;
+function createGate(world, z, gapHalfWidth, gapXOverride) {
+  const gapX = gapXOverride ?? (world.random() - 0.5) * 5;
+  const leftWidth = gapX - gapHalfWidth + PLAYABLE_HALF_WIDTH;
+  const rightStart = gapX + gapHalfWidth;
+  const rightWidth = PLAYABLE_HALF_WIDTH - rightStart;
+  const wallSegments = [];
+  if (leftWidth > 0.5) {
+    wallSegments.push({
+      x: -PLAYABLE_HALF_WIDTH + leftWidth / 2,
+      halfWidth: leftWidth / 2
+    });
+  }
+  if (rightWidth > 0.5) {
+    wallSegments.push({
+      x: rightStart + rightWidth / 2,
+      halfWidth: rightWidth / 2
+    });
+  }
+  world.state.obstacles.push({
+    z,
+    x: 0,
+    halfWidth: PLAYABLE_HALF_WIDTH,
+    halfHeight: 1.5,
+    isGate: true,
+    gapX,
+    gapHalfWidth,
+    active: true,
+    partiallyShattered: false,
+    passed: false,
+    wallSegments
+  });
+}
+function createPillar(world, z, x2, width) {
+  const centerX = x2 ?? (world.random() - 0.5) * 6;
+  const actualWidth = width ?? 1 + world.random() * 1.5;
+  const height = 2 + world.random() * 2;
+  world.state.obstacles.push({
+    z,
+    x: centerX,
+    halfWidth: actualWidth / 2,
+    halfHeight: height / 2,
+    isGate: false,
+    gapX: 0,
+    gapHalfWidth: 0,
+    active: true,
+    partiallyShattered: false,
+    passed: false
+  });
+}
+function createWideBar(world, z, gapXOverride) {
+  const gapSide = world.random() < 0.5 ? -1 : 1;
+  const gapX = gapXOverride ?? gapSide * (2 + world.random() * 2);
+  const gapHalfWidth = 2;
+  const gapLeft = gapX - gapHalfWidth;
+  const gapRight = gapX + gapHalfWidth;
+  const leftWidth = gapLeft + PLAYABLE_HALF_WIDTH;
+  const rightWidth = PLAYABLE_HALF_WIDTH - gapRight;
+  const wallSegments = [];
+  if (leftWidth > 0.5) {
+    wallSegments.push({
+      x: -PLAYABLE_HALF_WIDTH + leftWidth / 2,
+      halfWidth: leftWidth / 2
+    });
+  }
+  if (rightWidth > 0.5) {
+    wallSegments.push({
+      x: gapRight + rightWidth / 2,
+      halfWidth: rightWidth / 2
+    });
+  }
+  world.state.obstacles.push({
+    z,
+    x: 0,
+    halfWidth: PLAYABLE_HALF_WIDTH,
+    halfHeight: 0.75,
+    isGate: true,
+    gapX,
+    gapHalfWidth,
+    active: true,
+    partiallyShattered: false,
+    passed: false,
+    wallSegments
+  });
+}
+function createPhaseWall(world, z) {
+  world.state.obstacles.push({
+    z,
+    x: 0,
+    halfWidth: PLAYABLE_HALF_WIDTH,
+    halfHeight: 1.5,
+    isGate: false,
+    gapX: 0,
+    gapHalfWidth: 0,
+    active: true,
+    partiallyShattered: false,
+    passed: false
+  });
+}
+function materializeSpec(world, z, spec) {
+  switch (spec.kind) {
+    case "gate":
+      createGate(world, z, spec.gapHalfWidth ?? 2.25, spec.gapX);
+      return;
+    case "pillar":
+      createPillar(world, z, spec.x, spec.width);
+      return;
+    case "dual-pillar": {
+      const spread = 2 + world.random() * 2;
+      const offset = (world.random() - 0.5) * 2;
+      createPillar(world, z, offset - spread, 1 + world.random());
+      createPillar(world, z, offset + spread, 1 + world.random());
+      return;
+    }
+    case "wide-bar":
+      createWideBar(world, z, spec.gapX);
+      return;
+    case "phase-wall":
+      createPhaseWall(world, z);
+      return;
+  }
+}
+function getObstacleSpacing(world) {
+  const distance = world.anchorZ();
+  if (distance < 300) {
+    return 18 + world.random() * 6;
+  }
+  if (distance < 700) {
+    return 13 + world.random() * 5;
+  }
+  if (distance < 1200) {
+    return 9 + world.random() * 4;
+  }
+  if (distance < 1800) {
+    return 7 + world.random() * 4;
+  }
+  return 5 + world.random() * 4;
+}
+function spawnBossSpinningGate(world, bossZ) {
+  ;
+  [-6, -2, 2, 6].forEach((zOff, i) => {
+    world.state.obstacles.push({
+      z: bossZ + zOff,
+      x: 0,
+      halfWidth: 3,
+      halfHeight: 1.5,
+      isGate: false,
+      gapX: 0,
+      gapHalfWidth: 0,
+      active: true,
+      partiallyShattered: false,
+      passed: false,
+      bossAnimation: { pattern: "static", baseX: 0, phase: i * Math.PI / 2, speed: 1.5 + i * 0.3, timer: 0 }
+    });
+  });
+}
+function spawnBossConvergingWalls(world, bossZ) {
+  for (let row = 0; row < 3; row++) {
+    for (const side of [-1, 1]) {
+      world.state.obstacles.push({
+        z: bossZ + row * 5 - 5,
+        x: side * 3,
+        halfWidth: 1.5,
+        halfHeight: 2,
+        isGate: false,
+        gapX: 0,
+        gapHalfWidth: 0,
+        active: true,
+        partiallyShattered: false,
+        passed: false,
+        bossAnimation: { pattern: "converge", baseX: side * 3, phase: row * 1.5, speed: 1.2, timer: 0 }
+      });
+    }
+  }
+}
+function spawnBossOrbitalRings(world, bossZ) {
+  ;
+  [-6, -3, 0, 3, 6].forEach((zOff, i) => {
+    const baseX = i % 2 === 0 ? -2 : 2;
+    world.state.obstacles.push({
+      z: bossZ + zOff,
+      x: baseX,
+      halfWidth: 0.75,
+      halfHeight: 1.5,
+      isGate: false,
+      gapX: 0,
+      gapHalfWidth: 0,
+      active: true,
+      partiallyShattered: false,
+      passed: false,
+      bossAnimation: { pattern: "oscillate", baseX, phase: i * 1.2, speed: 2, timer: 0 }
+    });
+  });
+}
+function spawnBossLaserGrid(world, bossZ) {
+  ;
+  [-6, -2, 2, 6].forEach((zOff, i) => {
+    const x2 = (world.random() - 0.5) * 4;
+    world.state.obstacles.push({
+      z: bossZ + zOff,
+      x: x2,
+      halfWidth: PLAYABLE_HALF_WIDTH,
+      halfHeight: 0.4,
+      isGate: false,
+      gapX: 0,
+      gapHalfWidth: 0,
+      active: true,
+      partiallyShattered: false,
+      passed: false,
+      bossAnimation: { pattern: "oscillate", baseX: x2, phase: i * 2, speed: 1.5, timer: 0 }
+    });
+  });
+}
+function spawnBossWave(world, bossZ) {
+  switch (world.state.bossCount % 4) {
+    case 0:
+      spawnBossSpinningGate(world, bossZ);
+      break;
+    case 1:
+      spawnBossConvergingWalls(world, bossZ);
+      break;
+    case 2:
+      spawnBossOrbitalRings(world, bossZ);
+      break;
+    case 3:
+      spawnBossLaserGrid(world, bossZ);
+      break;
+  }
+}
+function spawnOrbCluster(world, z) {
+  const count = 1 + Math.floor(world.random() * 3);
+  const baseX = (world.random() - 0.5) * 6;
+  for (let index = 0; index < count; index += 1) {
+    world.state.orbs.push({
+      x: baseX + (index - (count - 1) / 2) * 1.5,
+      z: z + index * 1.5,
+      active: true
+    });
+  }
+}
+function emitPattern(world) {
+  const startZ = world.state.nextObstacleZ;
+  const ctx2 = {
+    playerZ: world.anchorZ(),
+    biome: biomeFromDistance(startZ),
+    difficultyT: clamp2(startZ / 2e3, 0, 1)
+  };
+  const pattern = pickNextPattern(ctx2, world.random, world.state.lastPatternName);
+  const specs = pattern.emit(world.random, ctx2);
+  for (const spec of specs) {
+    materializeSpec(world, startZ + spec.dz, spec);
+  }
+  world.state.lastPatternName = pattern.name;
+  world.pushEvent({
+    type: "pattern_emitted",
+    pattern: pattern.name,
+    obstacleCount: specs.length,
+    startZ
+  });
+  const breather = getObstacleSpacing(world) * (1 + world.random());
+  return pattern.length + breather;
+}
+function createObstacleSpawnSystem(world) {
+  return (_dt) => {
+    if (world.state.nextObstacleZ === 0) {
+      world.state.nextObstacleZ = INITIAL_OBSTACLE_Z;
+    }
+    if (world.state.nextOrbZ === 0) {
+      world.state.nextOrbZ = INITIAL_ORB_Z;
+    }
+    const anchor = world.anchorZ();
+    while (world.state.nextObstacleZ < anchor + SPAWN_DISTANCE) {
+      const advance = emitPattern(world);
+      world.state.nextObstacleZ += advance;
+    }
+    while (world.state.nextOrbZ < anchor + SPAWN_DISTANCE) {
+      spawnOrbCluster(world, world.state.nextOrbZ);
+      world.state.nextOrbZ += ORB_SPACING + world.random() * 5;
+    }
+    while (world.state.nextBossZ < anchor + SPAWN_DISTANCE) {
+      spawnBossWave(world, world.state.nextBossZ);
+      world.state.nextBossZ += BOSS_WAVE_INTERVAL;
+      world.state.bossCount += 1;
+    }
+  };
+}
+function destroyObstacle(world, obstacle, impactX) {
+  if (!obstacle.active) {
+    return false;
+  }
+  if (!obstacle.isGate) {
+    obstacle.active = false;
+    world.pushEvent({ type: "wall_destroyed" });
+    return true;
+  }
+  if (!obstacle.wallSegments || obstacle.wallSegments.length === 0) {
+    obstacle.active = false;
+    return false;
+  }
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  for (let index = 0; index < obstacle.wallSegments.length; index += 1) {
+    const distance = Math.abs(impactX - obstacle.wallSegments[index].x);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  }
+  obstacle.wallSegments.splice(nearestIndex, 1);
+  obstacle.partiallyShattered = true;
+  world.pushEvent({ type: "wall_destroyed" });
+  if (obstacle.wallSegments.length === 0) {
+    obstacle.active = false;
+    return true;
+  }
+  if (obstacle.wallSegments.length === 1) {
+    const segment = obstacle.wallSegments[0];
+    if (segment.x < 0) {
+      const rightEdge = obstacle.gapX + obstacle.gapHalfWidth;
+      obstacle.gapX = (-PLAYABLE_HALF_WIDTH + rightEdge) / 2;
+      obstacle.gapHalfWidth = (rightEdge + PLAYABLE_HALF_WIDTH) / 2;
+    } else {
+      const leftEdge = obstacle.gapX - obstacle.gapHalfWidth;
+      obstacle.gapX = (leftEdge + PLAYABLE_HALF_WIDTH) / 2;
+      obstacle.gapHalfWidth = (PLAYABLE_HALF_WIDTH - leftEdge) / 2;
+    }
+  }
+  return true;
+}
+
+// src/systems/orb-system.ts
+function createOrbSystem(world) {
+  return (_dt) => {
+    for (const orb of world.state.orbs) {
+      if (!orb.active) continue;
+      for (const player of world.state.players) {
+        if (!player.alive || player.shattered) continue;
+        const dx = player.x - orb.x;
+        const dz = player.z - orb.z;
+        if (Math.sqrt(dx * dx + dz * dz) < 1.1) {
+          orb.active = false;
+          markOrbCollected(world, player.playerIndex);
+          break;
+        }
+      }
+    }
+  };
+}
+
+// src/systems/player-movement-system.ts
+function createPlayerMovementSystem(world) {
+  return (dt2) => {
+    for (const player of world.state.players) {
+      if (!player.alive) continue;
+      const input = world.inputs[player.playerIndex]?.getState();
+      if (!input) continue;
+      player.x = clamp2(
+        player.x + input.horizontal * PLAYER_MOVE_SPEED * dt2,
+        -PLAYABLE_HALF_WIDTH,
+        PLAYABLE_HALF_WIDTH
+      );
+    }
+  };
+}
 
 // src/systems/gravity-flip-scheduler.ts
 var RIFT_FLIP_WARNING_DURATION = 1.5;
@@ -53069,6 +54747,291 @@ function updateRiftFlip(state, dt2, distance, biomeIndex, canTrigger, rng) {
   return events;
 }
 
+// src/systems/rift-flip-system.ts
+function createRiftFlipSystem(world) {
+  return (dt2) => {
+    const anchor = world.anchorZ();
+    const biome = biomeFromDistance(anchor);
+    const anyPhasing = world.state.players.some((p) => p.alive && p.shattered);
+    const canTrigger = !anyPhasing;
+    const events = updateRiftFlip(
+      world.state.riftFlip,
+      dt2,
+      anchor,
+      biome,
+      canTrigger,
+      world.random
+    );
+    for (const event of events) {
+      world.pushEvent({ type: event.type });
+    }
+  };
+}
+
+// src/systems/shatter-system.ts
+function createShatterSystem(world) {
+  return (dt2) => {
+    for (const player of world.state.players) {
+      if (!player.alive) {
+        player.shattered = false;
+        player.phaseMinTimer = 0;
+        continue;
+      }
+      const input = world.inputs[player.playerIndex]?.getState();
+      if (!input) continue;
+      const wasShattered = player.shattered;
+      if (player.phaseCooldown > 0) {
+        player.phaseCooldown = Math.max(0, player.phaseCooldown - dt2);
+      }
+      if (player.phaseMinTimer > 0) {
+        player.phaseMinTimer = Math.max(0, player.phaseMinTimer - dt2);
+      }
+      const wantsToShatter = input.shatter && !player.phaseLocked && player.phaseCooldown <= 0;
+      const forcedByMinTimer = player.phaseMinTimer > 0 && !player.phaseLocked;
+      const isPhasing = (wantsToShatter || forcedByMinTimer) && player.phaseEnergy > 0;
+      if (isPhasing) {
+        player.phaseEnergy = Math.max(0, player.phaseEnergy - PHASE_DRAIN_RATE * dt2);
+      } else {
+        player.phaseEnergy = Math.min(1, player.phaseEnergy + PHASE_RECHARGE_RATE * dt2);
+      }
+      if (player.phaseEnergy <= 0) {
+        player.phaseEnergy = 0;
+        player.phaseLocked = true;
+        player.phaseMinTimer = 0;
+        player.shattered = false;
+      } else if (player.phaseLocked && player.phaseEnergy >= PHASE_MIN_THRESHOLD) {
+        player.phaseLocked = false;
+      }
+      player.shattered = isPhasing && !player.phaseLocked && player.phaseEnergy > 0;
+      if (wasShattered && !player.shattered) {
+        player.phaseCooldown = PHASE_POST_COOLDOWN;
+      }
+      if (player.shattered && !wasShattered) {
+        player.phaseEnergy = Math.max(0, player.phaseEnergy - PHASE_ACTIVATION_COST);
+        player.phaseMinTimer = PHASE_MIN_DURATION;
+        if (player.phaseEnergy <= 0) {
+          player.phaseEnergy = 0;
+          player.phaseLocked = true;
+          player.phaseMinTimer = 0;
+          player.shattered = false;
+        }
+        world.pushEvent({ type: "shatter_activated" });
+      }
+      if (!player.shattered) {
+        continue;
+      }
+      for (const obstacle of world.state.obstacles) {
+        if (!obstacle.active) {
+          continue;
+        }
+        const dz = Math.abs(player.z - obstacle.z);
+        if (dz > 1.5) {
+          continue;
+        }
+        let withinCloseCall = false;
+        if (obstacle.isGate && obstacle.wallSegments) {
+          if (obstacle.partiallyShattered) {
+            continue;
+          }
+          for (const segment of obstacle.wallSegments) {
+            if (Math.abs(player.x - segment.x) < segment.halfWidth + 0.8) {
+              withinCloseCall = true;
+              break;
+            }
+          }
+        } else {
+          withinCloseCall = Math.abs(player.x - obstacle.x) < obstacle.halfWidth + 0.8;
+        }
+        if (!withinCloseCall) {
+          continue;
+        }
+        destroyObstacle(world, obstacle, player.x);
+        if (player.z - player.lastCloseCallZ > 3) {
+          player.lastCloseCallZ = player.z;
+          markCloseCall(world, player.playerIndex);
+        }
+      }
+    }
+  };
+}
+
+// src/systems/speed-mod-system.ts
+function createSpeedModSystem(world) {
+  return (dt2) => {
+    for (const player of world.state.players) {
+      const input = world.inputs[player.playerIndex]?.getState();
+      if (!input) continue;
+      if (player.boostTimer > 0) {
+        player.boostTimer = Math.max(0, player.boostTimer - dt2);
+        if (player.boostTimer === 0) player.boostCooldown = BOOST_COOLDOWN;
+      }
+      if (player.brakeTimer > 0) {
+        player.brakeTimer = Math.max(0, player.brakeTimer - dt2);
+        if (player.brakeTimer === 0) player.brakeCooldown = BRAKE_COOLDOWN;
+      }
+      if (player.boostCooldown > 0) player.boostCooldown = Math.max(0, player.boostCooldown - dt2);
+      if (player.brakeCooldown > 0) player.brakeCooldown = Math.max(0, player.brakeCooldown - dt2);
+      if (input.brake && player.brakeTimer === 0 && player.brakeCooldown === 0) {
+        player.brakeTimer = BRAKE_DURATION;
+        player.boostTimer = 0;
+      } else if (input.boost && player.boostTimer === 0 && player.boostCooldown === 0) {
+        player.boostTimer = BOOST_DURATION;
+        player.brakeTimer = 0;
+      }
+      let target = 1;
+      if (player.brakeTimer > 0) target = BRAKE_MULTIPLIER;
+      else if (player.boostTimer > 0) target = BOOST_MULTIPLIER;
+      const lerpFactor = 1 - Math.exp(-dt2 / SPEED_MOD_LERP_TIME);
+      player.speedMod += (target - player.speedMod) * lerpFactor;
+    }
+  };
+}
+
+// src/systems/world-scroll-system.ts
+function createWorldScrollSystem(world) {
+  return (dt2) => {
+    for (const player of world.state.players) {
+      if (!player.alive) continue;
+      player.speed = computeSpeed(player.z) * player.speedMod;
+      player.z += player.speed * dt2;
+      player.score += Math.floor(player.speed * dt2);
+    }
+  };
+}
+
+// src/runtime.ts
+function createRuntime(config = {}) {
+  const container = createContainer();
+  const playerCount = Math.max(1, config.playerCount ?? 1);
+  const localPlayerIndex = Math.max(0, Math.min(playerCount - 1, config.localPlayerIndex ?? 0));
+  const random = Number.isFinite(config.seed) && config.seed !== void 0 ? mulberry32(Number(config.seed)) : getSystemRandom();
+  const inputs = Array.from({ length: playerCount }, () => createAgentInput());
+  container.bind(RandomToken).toValue(random);
+  container.bind(SimulationConfigToken).toValue(config);
+  container.bind(SimulationInputsToken).toValue(inputs);
+  container.bind(SimulationInputToken).toValue(inputs[localPlayerIndex]);
+  container.bind(SimulationWorldToken).toFactory(createSimulationWorld).withDeps(SimulationInputsToken, RandomToken, SimulationConfigToken).asSingleton();
+  container.bind(SpeedModSystemToken).toFactory(createSpeedModSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(PlayerMovementSystemToken).toFactory(createPlayerMovementSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(WorldScrollSystemToken).toFactory(createWorldScrollSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(ObstacleSpawnSystemToken).toFactory(createObstacleSpawnSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(ObstacleDespawnSystemToken).toFactory(createObstacleDespawnSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(ShatterSystemToken).toFactory(createShatterSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(CollisionSystemToken).toFactory(createCollisionSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(OrbSystemToken).toFactory(createOrbSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(BossAnimationSystemToken).toFactory(createBossAnimationSystem).withDeps(SimulationWorldToken).asSingleton();
+  container.bind(RiftFlipSystemToken).toFactory(createRiftFlipSystem).withDeps(SimulationWorldToken).asSingleton();
+  const world = container.get(SimulationWorldToken);
+  const speedModSystem = container.get(SpeedModSystemToken);
+  const playerMovementSystem = container.get(PlayerMovementSystemToken);
+  const worldScrollSystem = container.get(WorldScrollSystemToken);
+  const obstacleSpawnSystem = container.get(ObstacleSpawnSystemToken);
+  const shatterSystem = container.get(ShatterSystemToken);
+  const collisionSystem = container.get(CollisionSystemToken);
+  const orbSystem = container.get(OrbSystemToken);
+  const obstacleDespawnSystem = container.get(ObstacleDespawnSystemToken);
+  const bossAnimationSystem = container.get(BossAnimationSystemToken);
+  const riftFlipSystem = container.get(RiftFlipSystemToken);
+  return {
+    container,
+    reset() {
+      world.reset();
+    },
+    update(dt2) {
+      speedModSystem(dt2);
+      worldScrollSystem(dt2);
+      shatterSystem(dt2);
+      playerMovementSystem(dt2);
+      obstacleSpawnSystem(dt2);
+      bossAnimationSystem(dt2);
+      orbSystem(dt2);
+      collisionSystem(dt2);
+      obstacleDespawnSystem(dt2);
+      riftFlipSystem(dt2);
+    },
+    setAction(action, playerIndex) {
+      const idx = playerIndex ?? localPlayerIndex;
+      const input = inputs[idx];
+      if (input) input.setAction(action);
+    },
+    getState() {
+      return world.getState();
+    },
+    getAuthoritativeState() {
+      return world.getAuthoritativeState();
+    },
+    getObservation() {
+      return world.getObservation().slice();
+    },
+    drainEvents() {
+      return world.drainEvents();
+    }
+  };
+}
+
+// src/simulation.ts
+var ShatterDriftSimulation = class {
+  config;
+  runtime;
+  constructor(config = {}) {
+    this.config = {
+      fixedDt: Number.isFinite(config.fixedDt) && config.fixedDt !== void 0 ? Number(config.fixedDt) : null
+    };
+    this.runtime = createRuntime(config);
+  }
+  reset() {
+    this.runtime.reset();
+    return {
+      state: this.runtime.getState(),
+      events: []
+    };
+  }
+  /**
+   * Singleplayer-style step: applies `action` to the local player and advances one tick.
+   * For multiplayer, use `setAction(playerIndex, action)` for each peer's frame, then `tick()`.
+   */
+  step(action, dt2) {
+    const stepDt = this.config.fixedDt ?? (Number.isFinite(dt2) ? Number(dt2) : DEFAULT_FIXED_DT);
+    if (!this.runtime.getState().alive || stepDt <= 0) {
+      return {
+        state: this.runtime.getState(),
+        events: []
+      };
+    }
+    this.runtime.setAction(action);
+    this.runtime.update(stepDt);
+    return {
+      state: this.runtime.getState(),
+      events: this.runtime.drainEvents()
+    };
+  }
+  /** Set a player's input. Default targets the local player. */
+  setAction(action, playerIndex) {
+    this.runtime.setAction(action, playerIndex);
+  }
+  /** Advance one tick using whatever inputs were last set per player. Used by the lockstep runner. */
+  tick(dt2) {
+    const stepDt = this.config.fixedDt ?? (Number.isFinite(dt2) ? Number(dt2) : DEFAULT_FIXED_DT);
+    if (stepDt <= 0) {
+      return { state: this.runtime.getState(), events: [] };
+    }
+    this.runtime.update(stepDt);
+    return {
+      state: this.runtime.getState(),
+      events: this.runtime.drainEvents()
+    };
+  }
+  getObservation() {
+    return this.runtime.getObservation();
+  }
+  getState() {
+    return this.runtime.getState();
+  }
+  getAuthoritativeState() {
+    return this.runtime.getAuthoritativeState();
+  }
+};
+
 // src/game.ts
 var SpeedLines = class {
   el;
@@ -53082,7 +55045,7 @@ var SpeedLines = class {
     document.body.appendChild(this.el);
   }
   update(speedNorm, color = 65484) {
-    const t = clamp2((speedNorm - 0.6) / 0.4, 0, 1);
+    const t = clamp3((speedNorm - 0.6) / 0.4, 0, 1);
     const alpha = t * 0.12;
     const r = color >> 16 & 255;
     const g = color >> 8 & 255;
@@ -53107,7 +55070,7 @@ var Vignette = class {
     this.updateBackground();
   }
   setIntensity(v3) {
-    this.intensity = clamp2(v3, 0, 1);
+    this.intensity = clamp3(v3, 0, 1);
     this.el.style.opacity = String(this.intensity);
   }
   setStyle(color, bright, edgeAlpha = 0.8) {
@@ -53382,11 +55345,21 @@ var Game = class {
   multiplayerPlayerListEl;
   multiplayerEmptyEl;
   multiplayerCodeInput;
+  multiplayerReadyBtn;
   multiplayerLeaveBtn;
   multiplayerBusy = false;
   lobbyClient = null;
   meshTransport = null;
-  multiplayerTick = 0;
+  matchCoordinator = null;
+  matchState = "idle";
+  lockstepRunner = null;
+  multiplayerSim = null;
+  multiplayerConfig = null;
+  multiplayerAuthoritativeState = null;
+  multiplayerSubmittedTick = -1;
+  multiplayerLastAdvancedTick = -1;
+  multiplayerMatchRequested = false;
+  remotePlayers = /* @__PURE__ */ new Map();
   pauseMenu;
   gameOverOverlay;
   // Persistent stats
@@ -53578,6 +55551,7 @@ var Game = class {
     this.multiplayerPlayerListEl = document.getElementById("multiplayer-player-list");
     this.multiplayerEmptyEl = document.getElementById("multiplayer-empty");
     this.multiplayerCodeInput = document.getElementById("multiplayer-code-input");
+    this.multiplayerReadyBtn = document.getElementById("multiplayer-ready-btn");
     this.multiplayerLeaveBtn = document.getElementById("multiplayer-leave-btn");
     this.pauseMenu = document.getElementById("pause-menu");
     this.gameOverOverlay = document.getElementById("gameover-overlay");
@@ -53608,6 +55582,10 @@ var Game = class {
     this.initPauseMenu();
     this.initCustomizePanel();
     this.initMultiplayerUI();
+    if (!MULTIPLAYER_ENABLED) {
+      const multiplayerBtn = document.getElementById("multiplayer-btn");
+      if (multiplayerBtn) multiplayerBtn.style.display = "none";
+    }
     this.initDailyButton();
     const summary = this.runHistory.getSummary();
     if (summary.totalRuns > 0 || this.highScore > 0) {
@@ -53650,7 +55628,7 @@ var Game = class {
     const customizeBtn = document.getElementById("customize-btn");
     if (playBtn) items.push(playBtn);
     if (dailyBtn) items.push(dailyBtn);
-    if (multiplayerBtn) items.push(multiplayerBtn);
+    if (MULTIPLAYER_ENABLED && multiplayerBtn) items.push(multiplayerBtn);
     if (customizeBtn) items.push(customizeBtn);
     this.menuNav.setScope(items);
   }
@@ -53668,6 +55646,7 @@ var Game = class {
     const items = [];
     const create = document.getElementById("multiplayer-create-btn");
     const join = document.getElementById("multiplayer-join-btn");
+    if (this.matchState === "inLobby") items.push(this.multiplayerReadyBtn);
     if (create) items.push(create);
     if (join) items.push(join);
     items.push(this.multiplayerLeaveBtn);
@@ -53775,6 +55754,7 @@ var Game = class {
     }
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
+        if (this.matchState !== "idle") return;
         if (this.state === 2 /* Playing */) {
           this.pauseGame();
         } else if (this.state === 3 /* Paused */) {
@@ -53869,10 +55849,18 @@ var Game = class {
     this.player.applySkin(this.unlocks.getSelectedCrystal());
   }
   initMultiplayerUI() {
+    if (!MULTIPLAYER_ENABLED) return;
     this.lobbyClient = new LobbyClient(getLocalUsername());
     this.meshTransport = new MeshTransport(this.lobbyClient);
+    this.matchCoordinator = new MatchStartCoordinator(this.lobbyClient, this.meshTransport, {
+      onMatchStart: (config) => this.beginMultiplayerMatch(config),
+      onError: (message) => this.setMultiplayerStatus(message, true)
+    });
     this.lobbyClient.subscribe({
-      onPlayersChanged: (players) => this.renderLobbyPlayers(players),
+      onPlayersChanged: (players) => {
+        this.renderLobbyPlayers(players);
+        this.maybeStartReadyMatch(players);
+      },
       onError: (message) => this.setMultiplayerStatus(message, true),
       onLobbyClosed: (message) => {
         this.setMultiplayerStatus(message, true);
@@ -53903,19 +55891,25 @@ var Game = class {
     joinBtn.addEventListener("click", () => {
       void this.joinMultiplayerLobby();
     });
+    this.multiplayerReadyBtn.addEventListener("click", () => {
+      void this.readyMultiplayerLobby();
+    });
     this.multiplayerLeaveBtn.addEventListener("click", () => {
       void this.leaveOrCloseMultiplayer();
     });
     this.renderLobbyPlayers([]);
   }
   openMultiplayerModal() {
+    if (!MULTIPLAYER_ENABLED) return;
     if (this.multiplayerOpen) return;
     this.multiplayerOpen = true;
     this.multiplayerModal.classList.remove("hidden");
     this.multiplayerCodeInput.value = "";
-    this.setMultiplayerStatus("Create a lobby or join one with a 6-character code.");
-    this.multiplayerCodeEl.textContent = "";
-    this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+    if (this.matchState !== "inLobby") {
+      this.setMultiplayerStatus("Create a lobby or join one with a 6-character code.");
+      this.multiplayerCodeEl.textContent = "";
+    }
+    this.updateMultiplayerLobbyControls();
     this.applyMultiplayerMenuScope();
     this.menuNavSuppressFrames = 2;
   }
@@ -53928,7 +55922,7 @@ var Game = class {
       this.multiplayerEmptyEl.classList.remove("hidden");
       this.multiplayerEmptyEl.textContent = this.lobbyClient?.getLobbyCode() ? "Waiting for players..." : "No active lobby yet.";
       this.multiplayerPlayerListEl.querySelectorAll(".mp-player-row").forEach((el) => el.remove());
-      this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+      this.updateMultiplayerLobbyControls();
       return;
     }
     this.multiplayerEmptyEl.classList.add("hidden");
@@ -53939,11 +55933,11 @@ var Game = class {
       row.innerHTML = `
         <span class="slot">P${player.playerIndex + 1}</span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${player.name}</span>
-        <span class="you">${player.isLocal ? "YOU" : "READY"}</span>
+        <span class="you">${player.isLocal ? player.ready ? "YOU READY" : "YOU" : player.ready ? "READY" : "WAITING"}</span>
       `;
       this.multiplayerPlayerListEl.appendChild(row);
     }
-    this.multiplayerLeaveBtn.textContent = this.lobbyClient?.getLobbyCode() ? "LEAVE" : "BACK";
+    this.updateMultiplayerLobbyControls();
   }
   async syncLobbyNameFromStorage() {
     if (!this.lobbyClient) return;
@@ -53951,13 +55945,14 @@ var Game = class {
     this.setMultiplayerStatus(`Using ${getLocalUsername()} for this lobby.`);
   }
   async createMultiplayerLobby() {
-    if (!this.lobbyClient || !this.meshTransport || this.multiplayerBusy) return;
+    if (!this.lobbyClient || !this.meshTransport || !this.matchCoordinator || this.multiplayerBusy) return;
     this.multiplayerBusy = true;
     try {
       await this.syncLobbyNameFromStorage();
       const code = await this.lobbyClient.createLobby();
       this.meshTransport.start();
-      this.multiplayerTick = 0;
+      this.matchCoordinator.start();
+      this.transitionToLobby();
       this.multiplayerCodeEl.textContent = `LOBBY CODE: ${code}`;
       this.setMultiplayerStatus(`Lobby ${code} live. Share the code and wait for players.`);
       this.renderLobbyPlayers(this.lobbyClient.getPlayers());
@@ -53968,19 +55963,33 @@ var Game = class {
     }
   }
   async joinMultiplayerLobby() {
-    if (!this.lobbyClient || !this.meshTransport || this.multiplayerBusy) return;
+    if (!this.lobbyClient || !this.meshTransport || !this.matchCoordinator || this.multiplayerBusy) return;
     this.multiplayerBusy = true;
     try {
       await this.syncLobbyNameFromStorage();
       const players = await this.lobbyClient.joinLobby(this.multiplayerCodeInput.value);
       this.meshTransport.start();
-      this.multiplayerTick = 0;
+      this.matchCoordinator.start();
+      this.transitionToLobby();
       const code = this.lobbyClient.getLobbyCode();
       this.multiplayerCodeEl.textContent = code ? `JOINED: ${code}` : "";
       this.setMultiplayerStatus(`Joined lobby ${code}. WebRTC mesh is connecting.`);
       this.renderLobbyPlayers(players);
     } catch (error2) {
       this.setMultiplayerStatus(error2 instanceof Error ? error2.message : "Failed to join lobby.", true);
+    } finally {
+      this.multiplayerBusy = false;
+    }
+  }
+  async readyMultiplayerLobby() {
+    if (!this.lobbyClient || this.multiplayerBusy || this.matchState !== "inLobby") return;
+    this.multiplayerBusy = true;
+    try {
+      await this.lobbyClient.setReady(true);
+      this.setMultiplayerStatus("Ready. Waiting for the rest of the lobby.");
+      this.renderLobbyPlayers(this.lobbyClient.getPlayers());
+    } catch (error2) {
+      this.setMultiplayerStatus(error2 instanceof Error ? error2.message : "Failed to mark ready.", true);
     } finally {
       this.multiplayerBusy = false;
     }
@@ -53993,13 +56002,22 @@ var Game = class {
     }
     this.multiplayerBusy = true;
     try {
+      this.matchCoordinator?.stop();
       await this.meshTransport.stop();
       await this.lobbyClient.leaveLobby();
+      this.disposeRemotePlayers();
+      this.multiplayerSim = null;
+      this.lockstepRunner = null;
+      this.multiplayerConfig = null;
+      this.multiplayerAuthoritativeState = null;
+      this.multiplayerSubmittedTick = -1;
+      this.multiplayerLastAdvancedTick = -1;
       this.multiplayerCodeEl.textContent = "";
       this.multiplayerCodeInput.value = "";
       this.setMultiplayerStatus("Returned to singleplayer title.");
       this.renderLobbyPlayers([]);
       this.closeMultiplayerModal();
+      this.transitionToIdle();
     } finally {
       this.multiplayerBusy = false;
     }
@@ -54072,11 +56090,11 @@ var Game = class {
   }
   loop() {
     let dt2 = Math.min(this.clock.getDelta(), 0.05);
-    if (this.state === 2 /* Playing */) {
+    if (this.state === 2 /* Playing */ && this.matchState === "idle") {
       const puTimeScale = this.powerups.getTimeScale();
       dt2 *= puTimeScale;
     }
-    if (this.deathSlowMo) {
+    if (this.deathSlowMo && this.matchState === "idle") {
       this.deathSlowMoTimer -= dt2;
       const deathProgress = 1 - Math.max(0, this.deathSlowMoTimer / 0.6);
       const deathTimescale = 0.2 * (1 - deathProgress * 0.7);
@@ -54101,9 +56119,6 @@ var Game = class {
     if (this.state === 3 /* Paused */) {
       this.handlePauseMenuLeftRight();
     }
-    if (this.meshTransport) {
-      this.meshTransport.sendInputFrame(this.multiplayerTick++, this.encodeNetworkAction());
-    }
     switch (this.state) {
       case 0 /* Title */:
         this.updateTitle(dt2, menuConsumedActivate);
@@ -54112,7 +56127,13 @@ var Game = class {
         this.updateLaunching(dt2);
         break;
       case 2 /* Playing */:
-        this.updatePlaying(dt2);
+        if (this.matchState === "inMatch") {
+          this.updateMultiplayerPlaying(dt2);
+        } else if (this.matchState === "matchOver") {
+          this.updateMultiplayerMatchOver(dt2, menuConsumedActivate);
+        } else {
+          this.updatePlaying(dt2);
+        }
         break;
       case 3 /* Paused */:
         break;
@@ -54198,6 +56219,269 @@ var Game = class {
     if (boost) action |= 8;
     if (brake) action |= 16;
     return action;
+  }
+  transitionToLobby() {
+    this.matchState = "inLobby";
+    this.multiplayerMatchRequested = false;
+    this.updateMultiplayerLobbyControls();
+  }
+  transitionToIdle() {
+    this.matchState = "idle";
+    this.lockstepRunner?.stop();
+    this.lockstepRunner = null;
+    this.multiplayerSim = null;
+    this.multiplayerConfig = null;
+    this.multiplayerAuthoritativeState = null;
+    this.multiplayerSubmittedTick = -1;
+    this.multiplayerLastAdvancedTick = -1;
+    this.multiplayerMatchRequested = false;
+    this.disposeRemotePlayers();
+    this.world.reset();
+    this.world.setRenderMode("sp");
+    this.biomes.reset();
+    this.applyBiomeColors();
+    this.player.group.visible = this.customizeOpen;
+    this.player.shattered = false;
+    this.player.group.position.set(0, 0, 0);
+    this.hud.classList.add("hidden");
+    this.titleOverlay.classList.remove("hidden");
+    this.centerMessage.style.opacity = "0";
+    this.centerTitle.textContent = "";
+    this.centerStats.innerHTML = "";
+    this.centerRetry.textContent = "";
+    this.pauseMenu.classList.add("hidden");
+    this.multiplayerReadyBtn.disabled = false;
+    this.state = 0 /* Title */;
+    this.applyTitleMenuScope();
+    this.menuNavSuppressFrames = 2;
+  }
+  transitionToMatch(config) {
+    this.matchState = "inMatch";
+    this.multiplayerConfig = config;
+    this.multiplayerMatchRequested = false;
+    this.lockstepRunner?.stop();
+    this.disposeRemotePlayers();
+    const sim = new ShatterDriftSimulation({
+      seed: config.seed,
+      playerCount: config.players.length,
+      localPlayerIndex: config.localPlayerIndex,
+      playerNames: config.players.map((player) => player.name),
+      playerColors: config.players.map((player) => player.color)
+    });
+    this.multiplayerSim = sim;
+    this.multiplayerSubmittedTick = config.startTick - 1;
+    this.multiplayerLastAdvancedTick = config.startTick - 1;
+    const playerIndices = /* @__PURE__ */ new Map();
+    for (const player of config.players) playerIndices.set(player.peerId, player.playerIndex);
+    this.lockstepRunner = new LockstepRunner({
+      sim,
+      transport: this.meshTransport,
+      playerIndices,
+      localPlayerIndex: config.localPlayerIndex,
+      startTick: config.startTick,
+      onTickAdvanced: (tick, _actions, result) => {
+        this.multiplayerLastAdvancedTick = tick;
+        this.multiplayerAuthoritativeState = sim.getAuthoritativeState();
+        if (MULTIPLAYER_HASH_DEBUG && (tick + 1) % 60 === 0) {
+          const hash = this.hashAuthoritativeState(this.multiplayerAuthoritativeState);
+          console.log("[sd-mp-hash]", { tick: tick + 1, hash, state: this.multiplayerAuthoritativeState });
+        }
+        if (result.events.some((event) => event.type === "death")) {
+          const local = this.multiplayerAuthoritativeState.players[config.localPlayerIndex];
+          if (local && !local.alive) {
+            this.transitionToMatchOver("You shattered.");
+          }
+        }
+      },
+      onPeerDropped: (_peerId, playerIndex) => {
+        this.setMultiplayerStatus(`Player ${playerIndex + 1} dropped. Filling idle inputs.`);
+      }
+    });
+    this.lockstepRunner.start();
+    this.matchCoordinator?.stop();
+    this.world.reset();
+    this.world.setRenderMode("mp-renderer");
+    this.biomes.reset();
+    this.powerups.reset();
+    this.bossWaves.reset();
+    this.speedGates.reset();
+    this.worldEvents.reset();
+    this.ghostManager.hideAll();
+    this.gameOverOverlay.classList.remove("active");
+    this.score = 0;
+    this.distance = 0;
+    this.speed = INITIAL_SPEED;
+    this.playerZ = 0;
+    this.phaseEnergy = 1;
+    this.phaseLocked = false;
+    this.phaseMeter = 100;
+    this.boostCooldown = 0;
+    this.brakeCooldown = 0;
+    this.player.applySkin(this.unlocks.getSelectedCrystal());
+    this.player.group.visible = true;
+    this.player.group.position.set(0, 0, 0);
+    this.player.shattered = false;
+    this.riftFlipLerp = 0;
+    this.riftWarningTimer = 0;
+    if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
+    this.titleOverlay.classList.add("hidden");
+    this.customizePanel.classList.add("hidden");
+    this.multiplayerOpen = false;
+    this.multiplayerModal.classList.add("hidden");
+    this.hud.classList.remove("hidden");
+    this.centerMessage.style.opacity = "0";
+    this.menuNav.detach();
+    this.menuNavSuppressFrames = 4;
+    this.state = 2 /* Playing */;
+    for (const player of config.players) {
+      if (player.playerIndex === config.localPlayerIndex) continue;
+      const remote = createRemotePlayer(player.playerIndex, player.name, player.color);
+      this.remotePlayers.set(player.playerIndex, remote);
+      this.scene.add(remote.group);
+    }
+    this.multiplayerAuthoritativeState = sim.getAuthoritativeState();
+    this.world.applyAuthoritativeState(sim.getState());
+    this.applyMultiplayerAuthoritativeState(1 / 60);
+    this.updateMultiplayerHud();
+    this.setMultiplayerStatus("Match live.");
+  }
+  transitionToMatchOver(reason) {
+    if (this.matchState !== "inMatch") return;
+    this.matchState = "matchOver";
+    this.multiplayerMatchRequested = false;
+    this.lockstepRunner?.stop();
+    this.lockstepRunner = null;
+    this.multiplayerSim = null;
+    this.multiplayerConfig = null;
+    this.disposeRemotePlayers();
+    this.centerTitle.textContent = "MATCH ENDED";
+    this.centerStats.innerHTML = `<div>${reason}</div><div style="margin-top:8px">DISTANCE: ${Math.floor(this.distance)}m</div>`;
+    this.centerRetry.textContent = "PRESS SPACE OR CLICK TO RETURN";
+    this.centerMessage.style.opacity = "1";
+    this.menuNav.detach();
+    this.menuNavSuppressFrames = 6;
+  }
+  maybeStartReadyMatch(players) {
+    if (this.matchState !== "inLobby" || !this.matchCoordinator || !this.meshTransport || this.multiplayerBusy) return;
+    if (this.multiplayerMatchRequested) return;
+    if (players.length < 2) return;
+    const local = players.find((player) => player.isLocal);
+    if (!local?.ready) return;
+    if (!players.every((player) => player.ready)) return;
+    if (this.meshTransport.getConnectedPeerIds().length < players.length - 1) {
+      this.setMultiplayerStatus("Everyone is ready. Waiting for peer connections to finish.");
+      return;
+    }
+    const started = this.matchCoordinator.requestMatchStart();
+    this.multiplayerMatchRequested = true;
+    this.setMultiplayerStatus(started ? "All players ready. Starting match..." : "Ready. Waiting for the host to start.");
+  }
+  updateMultiplayerLobbyControls() {
+    const inLobby = this.matchState === "inLobby" && !!this.lobbyClient?.getLobbyCode();
+    const createBtn = document.getElementById("multiplayer-create-btn");
+    const joinBtn = document.getElementById("multiplayer-join-btn");
+    this.multiplayerReadyBtn.style.display = inLobby ? "" : "none";
+    this.multiplayerReadyBtn.disabled = !inLobby || this.lobbyClient?.getPlayers().find((player) => player.isLocal)?.ready === true;
+    this.multiplayerLeaveBtn.textContent = inLobby ? "LEAVE" : "BACK";
+    if (createBtn) createBtn.disabled = inLobby;
+    if (joinBtn) joinBtn.disabled = inLobby;
+    this.multiplayerCodeInput.disabled = inLobby;
+  }
+  disposeRemotePlayers() {
+    for (const remote of this.remotePlayers.values()) {
+      this.scene.remove(remote.group);
+      disposeRemotePlayer(remote);
+    }
+    this.remotePlayers.clear();
+  }
+  updateMultiplayerPlaying(dt2) {
+    if (!this.lockstepRunner || !this.multiplayerSim || !this.multiplayerConfig) return;
+    const targetTick = this.lockstepRunner.getCurrentTick() + MULTIPLAYER_INPUT_DELAY_TICKS;
+    const action = this.encodeNetworkAction();
+    while (this.multiplayerSubmittedTick < targetTick) {
+      this.multiplayerSubmittedTick += 1;
+      this.lockstepRunner.submitLocalInput(this.multiplayerSubmittedTick, action);
+      this.meshTransport?.sendInputFrame(this.multiplayerSubmittedTick, action);
+    }
+    this.lockstepRunner.tryAdvance();
+    if (this.matchState !== "inMatch") return;
+    const state = this.multiplayerSim.getState();
+    this.multiplayerAuthoritativeState = this.multiplayerSim.getAuthoritativeState();
+    this.world.applyAuthoritativeState(state);
+    this.applyMultiplayerAuthoritativeState(dt2);
+    this.updateMultiplayerHud();
+  }
+  applyMultiplayerAuthoritativeState(dt2) {
+    if (!this.multiplayerAuthoritativeState || !this.multiplayerConfig) return;
+    const local = this.multiplayerAuthoritativeState.players[this.multiplayerConfig.localPlayerIndex];
+    if (!local) return;
+    this.playerZ = local.z;
+    this.distance = Math.floor(local.z);
+    this.score = Math.round(local.score);
+    this.speed = local.speed;
+    this.phaseEnergy = local.phaseEnergy;
+    this.phaseLocked = local.phaseLocked;
+    this.phaseMeter = local.phaseEnergy * 100;
+    this.boostCooldown = local.boostCooldown;
+    this.brakeCooldown = local.brakeCooldown;
+    this.player.shattered = local.shattered;
+    this.player.laneX = local.x;
+    this.player.setShieldActive(false);
+    this.player.update(dt2, 0);
+    this.player.group.position.z = local.z;
+    for (const player of this.multiplayerAuthoritativeState.players) {
+      if (player.playerIndex === this.multiplayerConfig.localPlayerIndex) continue;
+      const remote = this.remotePlayers.get(player.playerIndex);
+      if (!remote) continue;
+      updateRemotePlayer(remote, player, dt2);
+    }
+    const biomeChanged = this.biomes.update(this.distance);
+    if (biomeChanged) {
+      this.milestones.showBiomeAnnouncement(this.biomes.currentBiome.displayName);
+      playBiomeTransition();
+    }
+    this.applyBiomeColors();
+    this.world.update(dt2, local.z, local.x, local.speed, local.shattered);
+    this.targetFOV = this.baseFOV + Math.min(local.speed / MAX_SPEED, 1) * 12;
+    this.targetCameraRoll = 0;
+    const targetCam = new Vector3(local.x, this.cameraOffset.y, local.z + this.cameraOffset.z);
+    this.camera.position.lerp(targetCam, 1 - Math.exp(-8 * dt2));
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(local.x, 0.5, local.z + 15);
+    this.rimLight.position.set(local.x, 2, local.z - 3);
+    this.tunnelLight.position.set(local.x, 3, local.z + 15);
+    this.speedLines.update(Math.min(local.speed / MAX_SPEED, 1), 65484);
+    this.vignette.setStyle(0, false, 0.8);
+    this.vignette.setIntensity(Math.min(local.speed / MAX_SPEED, 1) * 0.25);
+  }
+  updateMultiplayerHud() {
+    this.hudScore.textContent = this.score.toLocaleString();
+    this.hudDistance.textContent = `${Math.floor(this.distance)}m`;
+    this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
+    this.hudCombo.textContent = "MULTI";
+    this.hudState.textContent = this.player.shattered ? "PHASE" : "SOLID";
+    this.updatePhaseHud();
+    this.updateGrazeMeterHud();
+    this.updateBoostBrakeHud();
+  }
+  updateMultiplayerMatchOver(dt2, menuConsumedActivate) {
+    this.camera.position.y += dt2 * 0.2;
+    const shouldReturn = !menuConsumedActivate && this.menuNavSuppressFrames === 0 && (this.input.justPressed("space") || this.input.justPressed("click"));
+    if (shouldReturn) {
+      void this.leaveOrCloseMultiplayer();
+    }
+  }
+  beginMultiplayerMatch(config) {
+    this.transitionToMatch(config);
+  }
+  hashAuthoritativeState(state) {
+    const json = JSON.stringify(state);
+    let hash = 2166136261;
+    for (let i = 0; i < json.length; i++) {
+      hash ^= json.charCodeAt(i);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0");
   }
   // --- Playing ---
   startGame(daily = false) {
@@ -55804,13 +58088,13 @@ var Game = class {
     window.location.href = url;
   }
   handlePortalArrival() {
-    const params = new URLSearchParams(window.location.search);
-    const isPortal = params.get("portal") === "true";
-    this.onnxMode = params.get("_ai") === "onnx";
-    this.demoMode = params.get("demo") === "true" || this.onnxMode;
-    const shouldRecord = params.get("record") === "true";
-    const recordDuration = parseInt(params.get("duration") || "15", 10);
-    this.portalRefUrl = params.get("ref") || "";
+    const params2 = new URLSearchParams(window.location.search);
+    const isPortal = params2.get("portal") === "true";
+    this.onnxMode = params2.get("_ai") === "onnx";
+    this.demoMode = params2.get("demo") === "true" || this.onnxMode;
+    const shouldRecord = params2.get("record") === "true";
+    const recordDuration = parseInt(params2.get("duration") || "15", 10);
+    this.portalRefUrl = params2.get("ref") || "";
     if (this.onnxMode) {
       this.autopilot = null;
       this.onnxAgent = new OnnxAgent();
