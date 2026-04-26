@@ -441,6 +441,7 @@ export class Game {
   private multiplayerLeaveBtn!: HTMLButtonElement;
   private multiplayerCopyLinkBtn!: HTMLButtonElement;
   private multiplayerCopyLinkFallbackEl!: HTMLInputElement;
+  private multiplayerQuickplayBtn!: HTMLButtonElement;
   private multiplayerBusy = false;
   private lobbyClient: LobbyClient | null = null;
   private meshTransport: MeshTransport | null = null;
@@ -722,6 +723,7 @@ export class Game {
     this.multiplayerLeaveBtn = document.getElementById("multiplayer-leave-btn") as HTMLButtonElement;
     this.multiplayerCopyLinkBtn = document.getElementById("multiplayer-copy-link-btn") as HTMLButtonElement;
     this.multiplayerCopyLinkFallbackEl = document.getElementById("multiplayer-copy-link-fallback") as HTMLInputElement;
+    this.multiplayerQuickplayBtn = document.getElementById("multiplayer-quickplay-btn") as HTMLButtonElement;
     this.pauseMenu = document.getElementById("pause-menu")!;
     this.gameOverOverlay = document.getElementById("gameover-overlay")!;
 
@@ -862,6 +864,7 @@ export class Game {
     const create = document.getElementById("multiplayer-create-btn");
     const join = document.getElementById("multiplayer-join-btn");
     if (this.matchState === "inLobby") items.push(this.multiplayerReadyBtn);
+    items.push(this.multiplayerQuickplayBtn);
     if (create) items.push(create);
     if (join) items.push(join);
     items.push(this.multiplayerLeaveBtn);
@@ -1157,6 +1160,9 @@ export class Game {
       this.multiplayerCodeInput.value = normalizeCode(this.multiplayerCodeInput.value);
     });
 
+    this.multiplayerQuickplayBtn.addEventListener("click", () => {
+      void this.quickplayMultiplayerLobby();
+    });
     createBtn.addEventListener("click", () => {
       void this.createMultiplayerLobby();
     });
@@ -1228,7 +1234,7 @@ export class Game {
     this.multiplayerModal.classList.remove("hidden");
     this.multiplayerCodeInput.value = "";
     if (this.matchState !== "inLobby") {
-      this.setMultiplayerStatus("Create a lobby or paste a code to join.");
+      this.setMultiplayerStatus("Quick-match into any open lobby, or use a code.");
       this.multiplayerCodeEl.textContent = "";
     }
     this.updateMultiplayerLobbyControls();
@@ -1310,6 +1316,26 @@ export class Game {
     } catch (error) {
       this.setMultiplayerStatus(error instanceof Error ? error.message : "Failed to join lobby.", true);
       this.clearLobbyUrlParam();
+    } finally {
+      this.multiplayerBusy = false;
+    }
+  }
+
+  private async quickplayMultiplayerLobby() {
+    if (!this.lobbyClient || !this.meshTransport || !this.matchCoordinator || this.multiplayerBusy) return;
+    this.multiplayerBusy = true;
+    try {
+      await this.syncLobbyNameFromStorage();
+      this.setMultiplayerStatus("Searching for a match...");
+      const code = await this.lobbyClient.quickMatch();
+      this.meshTransport.start();
+      this.matchCoordinator.start();
+      this.transitionToLobby();
+      this.multiplayerCodeEl.textContent = `LOBBY CODE: ${code}`;
+      this.setMultiplayerStatus(`Joined lobby ${code}. Waiting for players.`);
+      this.renderLobbyPlayers(this.lobbyClient.getPlayers());
+    } catch (error) {
+      this.setMultiplayerStatus(error instanceof Error ? error.message : "Quick-match failed.", true);
     } finally {
       this.multiplayerBusy = false;
     }
@@ -1978,6 +2004,7 @@ export class Game {
     this.multiplayerReadyBtn.style.display = inLobby ? "" : "none";
     this.multiplayerReadyBtn.disabled = !inLobby || this.lobbyClient?.getPlayers().find((player) => player.isLocal)?.ready === true;
     this.multiplayerLeaveBtn.textContent = inLobby ? "LEAVE" : "BACK";
+    this.multiplayerQuickplayBtn.disabled = inLobby;
     if (createBtn) createBtn.disabled = inLobby;
     if (joinBtn) joinBtn.disabled = inLobby;
     this.multiplayerCodeInput.disabled = inLobby;
