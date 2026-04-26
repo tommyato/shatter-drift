@@ -10,7 +10,15 @@ import {
 	PLAYABLE_HALF_WIDTH,
 	clamp,
 } from './constants'
-import type { GameEvent, GameSnapshot, ObstacleData, OrbData, SimulationInput } from './types'
+import type {
+	GameEvent,
+	GameSnapshot,
+	ObstacleData,
+	OrbData,
+	PlayerState,
+	SimulationConfig,
+	SimulationInput,
+} from './types'
 
 export interface SimulationObstacle extends ObstacleData {
 	partiallyShattered: boolean
@@ -29,34 +37,17 @@ export interface SimulationOrb extends OrbData {
 	active: boolean
 }
 
+/**
+ * Sim state. Phase 2 of multiplayer split per-player fields off into
+ * `players[i]: PlayerState`. Obstacles, orbs, and the spawner cursors stay
+ * shared — every peer sees the same world.
+ */
 export interface SimulationState {
-	playerX: number
-	playerZ: number
-	shattered: boolean
-	phaseEnergy: number
-	phaseLocked: boolean
-	/** Post-shatter cooldown timer (seconds remaining). While > 0, phase can't reactivate. */
-	phaseCooldown: number
-	/** Minimum-duration lock timer. While > 0, phase stays active even if input released. */
-	phaseMinTimer: number
-	speed: number
-	/** Lerp-smoothed speed multiplier applied by SpeedModSystem. 1.0 = normal. */
-	speedMod: number
-	/** Seconds remaining in active boost (0 = not active). */
-	boostTimer: number
-	/** Seconds until boost can be triggered again (0 = ready). */
-	boostCooldown: number
-	/** Seconds remaining in active brake (0 = not active). */
-	brakeTimer: number
-	/** Seconds until brake can be triggered again (0 = ready). */
-	brakeCooldown: number
-	score: number
-	alive: boolean
+	players: PlayerState[]
 	obstacles: SimulationObstacle[]
 	orbs: SimulationOrb[]
 	nextObstacleZ: number
 	nextOrbZ: number
-	lastCloseCallZ: number
 	nextBossZ: number
 	bossCount: number
 	/** Last pattern emitted by the obstacle spawn system — never repeats back-to-back. */
@@ -70,39 +61,80 @@ export interface SimulationState {
 }
 
 export interface SimulationWorld {
+	/** Per-player input — index aligns with `state.players[i].playerIndex`. */
+	readonly inputs: readonly SimulationInput[]
+	/** Local player's input — back-compat alias for `inputs[localPlayerIndex]`. */
 	readonly input: SimulationInput
 	readonly random: () => number
 	readonly state: SimulationState
+	readonly localPlayerIndex: number
 	reset(): void
 	pushEvent(event: GameEvent): void
 	drainEvents(): GameEvent[]
-	addScore(points: number): void
+	/** Add score to a specific player (defaults to local player for back-compat). */
+	addScore(points: number, playerIndex?: number): void
 	getState(): GameSnapshot
 	getObservation(): Float64Array
+	/**
+	 * Anchor z used by world-scroll-driven systems (spawn, despawn, rift-flip).
+	 * Returns the fastest live player's z, or 0 if no live players.
+	 */
+	anchorZ(): number
+	/** Slowest live player's z — used by despawn so we don't cull obstacles a trailing player still needs. */
+	trailingZ(): number
 }
 
-function createInitialState(): SimulationState {
+const DEFAULT_PLAYER_COLORS = [0x4be1ff, 0xff5fa2, 0xffd24b, 0x7bff5f] as const
+
+function createInitialPlayer(
+	index: number,
+	name: string,
+	color: number,
+): PlayerState {
 	return {
-		playerX: 0,
-		playerZ: 0,
-		shattered: false,
-		phaseEnergy: 1,
-		phaseLocked: false,
-		phaseCooldown: 0,
-		phaseMinTimer: 0,
+		playerIndex: index,
+		name,
+		color,
+		x: 0,
+		z: 0,
 		speed: 0,
 		speedMod: 1,
 		boostTimer: 0,
 		boostCooldown: 0,
 		brakeTimer: 0,
 		brakeCooldown: 0,
-		score: 0,
 		alive: true,
+		shattered: false,
+		phaseEnergy: 1,
+		phaseLocked: false,
+		phaseCooldown: 0,
+		phaseMinTimer: 0,
+		score: 0,
+		lastCloseCallZ: -10,
+	}
+}
+
+function createInitialState(
+	playerCount: number,
+	playerNames: string[],
+	playerColors: number[],
+): SimulationState {
+	const players: PlayerState[] = []
+	for (let i = 0; i < playerCount; i++) {
+		players.push(
+			createInitialPlayer(
+				i,
+				playerNames[i] ?? `P${i + 1}`,
+				playerColors[i] ?? DEFAULT_PLAYER_COLORS[i % DEFAULT_PLAYER_COLORS.length],
+			),
+		)
+	}
+	return {
+		players,
 		obstacles: [],
 		orbs: [],
 		nextObstacleZ: 30,
 		nextOrbZ: 15,
-		lastCloseCallZ: -10,
 		nextBossZ: 500, // matches BOSS_INTERVAL in bosswaves.ts
 		bossCount: 0,
 		lastPatternName: null,
@@ -115,21 +147,60 @@ function createInitialState(): SimulationState {
 }
 
 export function createSimulationWorld(
-	input: SimulationInput,
+	inputs: SimulationInput | readonly SimulationInput[],
 	random: () => number,
+	config: SimulationConfig = {},
 ): SimulationWorld {
-	let state = createInitialState()
+	const inputArray: readonly SimulationInput[] = Array.isArray(inputs)
+		? (inputs as readonly SimulationInput[])
+		: [inputs as SimulationInput]
+	const playerCount = Math.max(1, config.playerCount ?? inputArray.length)
+	const localPlayerIndex = clamp(config.localPlayerIndex ?? 0, 0, playerCount - 1)
+	const playerNames = config.playerNames ?? []
+	const playerColors = config.playerColors ?? []
+
+	if (inputArray.length < playerCount) {
+		throw new Error(
+			`createSimulationWorld: playerCount=${playerCount} but only ${inputArray.length} input(s) provided`,
+		)
+	}
+
+	let state = createInitialState(playerCount, playerNames, playerColors)
 	const events: GameEvent[] = []
 
+	function anchorZ(): number {
+		let max = -Infinity
+		for (const p of state.players) {
+			if (!p.alive) continue
+			if (p.z > max) max = p.z
+		}
+		return max === -Infinity ? 0 : max
+	}
+
+	function trailingZ(): number {
+		let min = Infinity
+		for (const p of state.players) {
+			if (!p.alive) continue
+			if (p.z < min) min = p.z
+		}
+		return min === Infinity ? 0 : min
+	}
+
 	return {
-		input,
+		inputs: inputArray,
+		get input() {
+			return inputArray[localPlayerIndex]
+		},
 		random,
+		localPlayerIndex,
 		get state() {
 			return state
 		},
+		anchorZ,
+		trailingZ,
 		reset() {
-			state = createInitialState()
-			input.reset()
+			state = createInitialState(playerCount, playerNames, playerColors)
+			for (const input of inputArray) input.reset()
 			events.length = 0
 		},
 		pushEvent(event: GameEvent) {
@@ -140,25 +211,28 @@ export function createSimulationWorld(
 			events.length = 0
 			return drained
 		},
-		addScore(points: number) {
-			state.score += points
+		addScore(points: number, playerIndex?: number) {
+			const idx = playerIndex ?? localPlayerIndex
+			const player = state.players[idx]
+			if (player) player.score += points
 		},
 		getState() {
+			const local = state.players[localPlayerIndex]!
 			const cooldown =
-				state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD
-					? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_RECHARGE_RATE
+				local.phaseLocked && local.phaseEnergy < PHASE_MIN_THRESHOLD
+					? (PHASE_MIN_THRESHOLD - local.phaseEnergy) / PHASE_RECHARGE_RATE
 					: 0
 			return {
-				playerX: state.playerX,
-				shattered: state.shattered,
+				playerX: local.x,
+				shattered: local.shattered,
 				shatterCooldown: cooldown,
-				speed: state.speed,
-				speedMod: state.speedMod,
-				boostCooldown: state.boostCooldown,
-				brakeCooldown: state.brakeCooldown,
-				distance: state.playerZ,
-				score: Math.round(state.score),
-				alive: state.alive,
+				speed: local.speed,
+				speedMod: local.speedMod,
+				boostCooldown: local.boostCooldown,
+				brakeCooldown: local.brakeCooldown,
+				distance: local.z,
+				score: Math.round(local.score),
+				alive: local.alive,
 				obstacles: state.obstacles
 					.filter((obstacle) => obstacle.active)
 					.map((obstacle) => ({
@@ -184,25 +258,26 @@ export function createSimulationWorld(
 			}
 		},
 		getObservation() {
+			const local = state.players[localPlayerIndex]!
 			const observation = new Float64Array(4 + LOOKAHEAD_OBSTACLES * 4)
-			observation[0] = clamp(state.playerX / PLAYABLE_HALF_WIDTH, -1, 1)
-			observation[1] = state.shattered ? 1 : 0
-			observation[2] = clamp(state.speed / MAX_SPEED, 0, 1)
+			observation[0] = clamp(local.x / PLAYABLE_HALF_WIDTH, -1, 1)
+			observation[1] = local.shattered ? 1 : 0
+			observation[2] = clamp(local.speed / MAX_SPEED, 0, 1)
 			const energyLock =
-				state.phaseLocked && state.phaseEnergy < PHASE_MIN_THRESHOLD
-					? (PHASE_MIN_THRESHOLD - state.phaseEnergy) / PHASE_MIN_THRESHOLD
+				local.phaseLocked && local.phaseEnergy < PHASE_MIN_THRESHOLD
+					? (PHASE_MIN_THRESHOLD - local.phaseEnergy) / PHASE_MIN_THRESHOLD
 					: 0
-			const cooldownLock = state.phaseCooldown > 0 ? state.phaseCooldown / PHASE_POST_COOLDOWN : 0
+			const cooldownLock = local.phaseCooldown > 0 ? local.phaseCooldown / PHASE_POST_COOLDOWN : 0
 			observation[3] = clamp(Math.max(energyLock, cooldownLock), 0, 1)
 
 			const upcoming = state.obstacles
-				.filter((obstacle) => obstacle.active && obstacle.z >= state.playerZ)
+				.filter((obstacle) => obstacle.active && obstacle.z >= local.z)
 				.sort((a, b) => a.z - b.z)
 				.slice(0, LOOKAHEAD_OBSTACLES)
 
 			upcoming.forEach((obstacle, index) => {
 				const offset = 4 + index * 4
-				observation[offset] = clamp((obstacle.z - state.playerZ) / LOOKAHEAD_DISTANCE, 0, 1)
+				observation[offset] = clamp((obstacle.z - local.z) / LOOKAHEAD_DISTANCE, 0, 1)
 				observation[offset + 1] = clamp(
 					(obstacle.isGate ? obstacle.gapX : obstacle.x) / PLAYABLE_HALF_WIDTH,
 					-1,
@@ -226,13 +301,12 @@ export function createSimulationWorld(
 	}
 }
 
-export function markOrbCollected(world: SimulationWorld): void {
-	world.addScore(ORB_SCORE)
+export function markOrbCollected(world: SimulationWorld, playerIndex?: number): void {
+	world.addScore(ORB_SCORE, playerIndex)
 	world.pushEvent({ type: 'orb_collected' })
 }
 
-export function markCloseCall(world: SimulationWorld): void {
-	world.addScore(CLOSE_CALL_SCORE)
+export function markCloseCall(world: SimulationWorld, playerIndex?: number): void {
+	world.addScore(CLOSE_CALL_SCORE, playerIndex)
 	world.pushEvent({ type: 'close_call' })
 }
-

@@ -1,8 +1,12 @@
 import { createToken } from './lib/token'
-import type { SimulationInput } from './types'
+import type { SimulationConfig, SimulationInput } from './types'
 import type { SimulationWorld } from './sim-world'
 
 export const RandomToken = createToken<() => number>('Random')
+export const SimulationConfigToken = createToken<SimulationConfig>('SimulationConfig')
+/** Per-player inputs — index aligns with `players[i].playerIndex`. Array of length `playerCount`. */
+export const SimulationInputsToken = createToken<readonly SimulationInput[]>('SimulationInputs')
+/** Local-player input (back-compat alias for `inputs[localPlayerIndex]`). */
 export const SimulationInputToken = createToken<SimulationInput>('SimulationInput')
 export const SimulationWorldToken = createToken<SimulationWorld>('SimulationWorld')
 
@@ -16,4 +20,3 @@ export const ShatterSystemToken = createToken<(dt: number) => void>('ShatterSyst
 export const OrbSystemToken = createToken<(dt: number) => void>('OrbSystem')
 export const BossAnimationSystemToken = createToken<(dt: number) => void>('BossAnimationSystem')
 export const RiftFlipSystemToken = createToken<(dt: number) => void>('RiftFlipSystem')
-
