@@ -129,8 +129,8 @@
       position: absolute;
       bottom: 56px;
       left: 50%;
-      width: 140px;
-      height: 4px;
+      width: 220px;
+      height: 8px;
       transform: translateX(-50%);
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.08);
@@ -141,12 +141,20 @@
     }
 
     #hud-phase-fill {
-      width: 140px;
+      width: 220px;
       height: 100%;
       border-radius: inherit;
       background: #00ffcc;
       box-shadow: 0 0 10px rgba(0, 255, 204, 0.45);
       transition: width 0.08s linear, background-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    /* Screen-edge vignette — driven entirely via box-shadow in JS; none by default */
+    #hud-phase-warn-vignette {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 100;
     }
 
     #hud-graze-meter {
@@ -962,6 +970,8 @@
 
     <!-- HUD -->
     <div id="hud" class="hidden">
+      <!-- Screen-edge phase-warning vignette; box-shadow driven by updatePhaseHud() -->
+      <div id="hud-phase-warn-vignette"></div>
       <div id="hud-score">0</div>
       <div id="hud-distance">0m</div>
       <div id="hud-speed"></div>
