@@ -713,16 +713,17 @@ export class World {
     // Runs AFTER Neon blink — the Neon ghosted-clear above zeroes ghosted for all
     // non-biome-2 obstacles, so we set it fresh here for Crystal slabs.
     //
-    // Each slab oscillates vertically at SLAB_FREQUENCY Hz. Phase is seeded from
-    // spawn z so adjacent slabs aren't in sync. Visual: slab mesh moves along Y
-    // (rises from below the floor, blocks lane at peak, sinks underground at trough).
-    // Collision: ghosted=true (passable) while slab is in lower half of travel.
+    // Half-wave: slab rests at ground (offset=0) for the negative-sin half-cycle,
+    // then rises 0 → SLAB_AMP → 0 during the positive half. Never sinks underground.
+    // SLAB_BASE_Y=0 positions mesh center at floor level (y=0), so the bottom face
+    // touches the visual floor plane (gridFloor at y=-1.5 is half-height below center).
+    // Passable while slabOffset ≤ SLAB_PASS_HEIGHT (at/near rest); mirrors sim exactly.
     // -----------------------------------------------------------------
 
-    const SLAB_FREQ = 0.5       // Hz — slower than Solar (0.6 Hz)
-    const SLAB_AMP  = 3.0       // units of vertical travel
-    const SLAB_CLEAR = 0        // ghosted when offset ≤ 0 (slab sunk below floor)
-    const SLAB_BASE_Y = -SLAB_AMP  // mesh center Y at trough (fully underground)
+    const SLAB_FREQ = 0.5         // Hz — slower than Solar (0.6 Hz)
+    const SLAB_AMP  = 3.0         // units of vertical travel
+    const SLAB_PASS_HEIGHT = 0.5  // mirror sim: passable at/near rest
+    const SLAB_BASE_Y = 0         // mesh center at floor level; bottom face at y=-1.5 (visual floor)
 
     for (const obs of this.obstacles) {
       if (!obs.active) continue
@@ -733,11 +734,12 @@ export class World {
         obs.slabPhase = (obs.z * 2.718281828) % (Math.PI * 2)
       }
 
-      const slabOffset = SLAB_AMP * Math.sin(t * SLAB_FREQ * Math.PI * 2 + obs.slabPhase)
-      // Animate mesh: slab rises from underground (BASE_Y) through floor level to lane centre
+      const rawSin = Math.sin(t * SLAB_FREQ * Math.PI * 2 + obs.slabPhase)
+      const slabOffset = Math.max(0, SLAB_AMP * rawSin)
+      // Animate mesh: slab rests at ground then rises; never sinks underground
       obs.mesh.position.y = slabOffset + SLAB_BASE_Y
-      // Passable while sunk (slab center ≤ floor level)
-      obs.ghosted = slabOffset <= SLAB_CLEAR
+      // Passable while at/near rest; solid when raised above SLAB_PASS_HEIGHT
+      obs.ghosted = slabOffset <= SLAB_PASS_HEIGHT
     }
 
     // -----------------------------------------------------------------

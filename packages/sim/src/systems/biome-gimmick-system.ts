@@ -12,8 +12,8 @@ export const BLINK_CYCLE = 0.45   // total cycle — must equal BLINK_SOLID + BL
 
 // Crystal Caves (biome 1) — rising slabs
 export const SLAB_FREQUENCY = 0.5    // Hz — slower than Solar (0.6 Hz) so rhythms read different
-export const SLAB_AMPLITUDE = 3.0    // units of vertical travel (≈ ±2 player-scale heights)
-export const SLAB_CLEAR_THRESHOLD = 0 // ghosted (passable) when slabOffset ≤ 0 (slab below floor)
+export const SLAB_AMPLITUDE = 3.0    // units of vertical travel
+export const SLAB_PASS_HEIGHT = 0.5  // ghosted (passable) while slabOffset ≤ this (slab at/near rest)
 
 // Solar Storm (biome 3) — lateral drift
 export const DRIFT_AMPLITUDE = 1.5  // m peak-to-peak half amplitude
@@ -54,8 +54,9 @@ export function createBiomeGimmickSystem(world: SimulationWorld) {
 		// -----------------------------------------------------------------------
 		// Biome 1: Crystal Caves — rising slabs
 		// Runs AFTER Neon blink so the Neon ghosted-clear (above) doesn't clobber us.
-		// Full-width slabs oscillate vertically at SLAB_FREQUENCY. Passable while the
-		// slab is in the lower half of its travel (slabOffset ≤ SLAB_CLEAR_THRESHOLD).
+		// Half-wave: slab rests at ground (offset=0) for the negative-sin half-cycle,
+		// then rises 0 → SLAB_AMPLITUDE → 0 during the positive half. Never underground.
+		// Passable while slabOffset ≤ SLAB_PASS_HEIGHT (at/near rest).
 		// Phase is seeded from obs.z so adjacent slabs aren't in sync.
 		// -----------------------------------------------------------------------
 
@@ -69,10 +70,10 @@ export function createBiomeGimmickSystem(world: SimulationWorld) {
 				obs.slabPhase = (obs.z * 2.718281828) % (Math.PI * 2)
 			}
 
-			const slabOffset =
-				SLAB_AMPLITUDE * Math.sin(state.simTime * SLAB_FREQUENCY * Math.PI * 2 + obs.slabPhase)
-			// Passable when slab is sunk (below floor level). Collision active when raised.
-			obs.ghosted = slabOffset <= SLAB_CLEAR_THRESHOLD
+			const rawSin = Math.sin(state.simTime * SLAB_FREQUENCY * Math.PI * 2 + obs.slabPhase)
+			const slabOffset = Math.max(0, SLAB_AMPLITUDE * rawSin)
+			// Passable while slab is at or near rest. Solid when raised above SLAB_PASS_HEIGHT.
+			obs.ghosted = slabOffset <= SLAB_PASS_HEIGHT
 		}
 
 		// -----------------------------------------------------------------------
