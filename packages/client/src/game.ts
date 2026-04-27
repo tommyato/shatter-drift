@@ -1285,12 +1285,11 @@ export class Game {
     this.multiplayerBusy = true;
     try {
       await this.syncLobbyNameFromStorage();
-      const code = await this.lobbyClient.createLobby();
+      await this.lobbyClient.createLobby();
       this.meshTransport.start();
       this.matchCoordinator.start();
       this.transitionToLobby();
-      this.multiplayerCodeEl.textContent = `LOBBY CODE: ${code}`;
-      this.setMultiplayerStatus(`Lobby ${code} live. Share the code and wait for players.`);
+      this.setMultiplayerStatus("Lobby ready — share the link and wait for players.");
       this.renderLobbyPlayers(this.lobbyClient.getPlayers());
     } catch (error) {
       this.setMultiplayerStatus(error instanceof Error ? error.message : "Failed to create lobby.", true);
@@ -1308,9 +1307,7 @@ export class Game {
       this.meshTransport.start();
       this.matchCoordinator.start();
       this.transitionToLobby();
-      const code = this.lobbyClient.getLobbyCode();
-      this.multiplayerCodeEl.textContent = code ? `JOINED: ${code}` : "";
-      this.setMultiplayerStatus(`Joined lobby ${code}. WebRTC mesh is connecting.`);
+      this.setMultiplayerStatus("Joined lobby — waiting for the match to start.");
       this.renderLobbyPlayers(players);
       this.clearLobbyUrlParam();
     } catch (error) {
@@ -1327,12 +1324,11 @@ export class Game {
     try {
       await this.syncLobbyNameFromStorage();
       this.setMultiplayerStatus("Searching for a match...");
-      const code = await this.lobbyClient.quickMatch();
+      await this.lobbyClient.quickMatch();
       this.meshTransport.start();
       this.matchCoordinator.start();
       this.transitionToLobby();
-      this.multiplayerCodeEl.textContent = `LOBBY CODE: ${code}`;
-      this.setMultiplayerStatus(`Joined lobby ${code}. Waiting for players.`);
+      this.setMultiplayerStatus("Matched — waiting for players.");
       this.renderLobbyPlayers(this.lobbyClient.getPlayers());
     } catch (error) {
       this.setMultiplayerStatus(error instanceof Error ? error.message : "Quick-match failed.", true);

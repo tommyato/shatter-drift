@@ -121,19 +121,24 @@ try {
 	log('A: clicking CREATE LOBBY')
 	await tabA.click('#multiplayer-create-btn')
 
-	// Wait for lobby code to appear and COPY LINK button to become visible
-	log('A: waiting for lobby code and COPY LINK button...')
+	// Wait for COPY LINK button to become visible (lobby ready signal — code no longer shown to host)
+	log('A: waiting for COPY LINK button to appear...')
 	await tabA.waitForFunction(
 		() => {
-			const code = document.getElementById('multiplayer-current-code')?.textContent ?? ''
 			const btn = document.getElementById('multiplayer-copy-link-btn')
-			return code.includes('LOBBY CODE:') && btn && btn.style.display !== 'none'
+			return btn && btn.style.display !== 'none'
 		},
 		{ timeout: 15_000 }
 	)
 
+	// Verify lobby code is NOT rendered to host (acceptance criterion)
 	const lobbyCodeText = await tabA.$eval('#multiplayer-current-code', (el) => el.textContent ?? '')
-	log(`A: lobby code display = "${lobbyCodeText}"`)
+	log(`A: lobby code display = "${lobbyCodeText}" (must be empty)`)
+	if (lobbyCodeText.trim()) {
+		fail(`A: lobby code still displayed to host: "${lobbyCodeText}"`)
+	} else {
+		log('A: ✓ lobby code not shown to host')
+	}
 
 	// Click COPY LINK
 	log('A: clicking COPY LINK')
@@ -213,17 +218,16 @@ try {
 		const joinedOk = await tabB.waitForFunction(
 			(expectedCode) => {
 				const codeInput = document.getElementById('multiplayer-code-input')
-				const codeEl = document.getElementById('multiplayer-current-code')?.textContent ?? ''
 				const status = document.getElementById('multiplayer-status')?.textContent ?? ''
 				// Code input is pre-filled by checkDeepLinkLobby and never cleared by join/match
 				const codePreFilled = codeInput instanceof HTMLInputElement && codeInput.value === expectedCode
-				// Status or current-code shows join/match progress
+				// Status shows join/match progress (current-code no longer displays lobby code)
 				const joinVisible = (
-					codeEl.startsWith('JOINED:') ||
 					status.toLowerCase().includes('joined') ||
 					status.toLowerCase().includes('joining') ||
 					status.toLowerCase().includes('match') ||
-					status.toLowerCase().includes('connecting')
+					status.toLowerCase().includes('connecting') ||
+					status.toLowerCase().includes('waiting')
 				)
 				return codePreFilled || joinVisible
 			},
