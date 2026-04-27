@@ -1,9 +1,8 @@
 const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
 
-// MP is on by default for shipped builds (Vibe Jam 2026 differentiator).
-// `?mp=0` kill-switches it (hide button, skip Colyseus init) if the
-// server is degraded or for clean single-player smoke runs.
-export const MULTIPLAYER_ENABLED = params?.get("mp") !== "0";
+// MP is shelved (hidden by default) until post-jam polish cycle.
+// `?mp=1` opt-in flag enables the UI and Colyseus connection for dev testing.
+export const MULTIPLAYER_ENABLED = params?.get("mp") === "1";
 export const MULTIPLAYER_HASH_DEBUG = params?.get("hash") === "1";
 export const MULTIPLAYER_INPUT_DELAY_TICKS = 3;
 /** Dev hook: when `?mp_auto=1`, the client calls LobbyClient.quickMatch on boot. Used by the puppeteer smoke. */
