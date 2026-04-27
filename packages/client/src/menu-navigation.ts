@@ -52,6 +52,12 @@ export class MenuNavigation {
     if (items.length === 0) return;
     this.stack.push({ items, index: 0, onCancel });
     this.focusFirstVisible();
+    // Same first-frame suppression pushScope uses — defends against
+    // gamepad button 0 (A) being held at page-load, which would
+    // otherwise read as justPressed("space") on frame 1 and auto-
+    // activate the focused PLAY button before the user has any chance
+    // to look at the title screen. Vendored from CC menu-navigation.
+    this.suppressActivateFrames = 1;
   }
 
   /**
