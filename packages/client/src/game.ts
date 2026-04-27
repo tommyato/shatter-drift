@@ -3392,11 +3392,21 @@ export class Game {
   }
 
   private updatePhaseHud() {
+    // — warning-state tunables ——————————————————————————————————————————
+    const PHASE_WARN_THRESHOLD = 0.35;  // energy below this → warning ramp
+    const PHASE_WARN_FREQ_MIN  = 0.012; // rad/ms — slow pulse near threshold
+    const PHASE_WARN_FREQ_MAX  = 0.040; // rad/ms — urgent pulse near 0
+    // two-stop colour ramp: magenta (t=0) → orange (t=0.5) → red (t=1)
+    const PHASE_WARN_MID_G = 110; // rgb(255,110,0) orange at t=0.5
+    const PHASE_WARN_END_G =  22; // rgb(255, 22,0) danger-red at t=1
+    // ———————————————————————————————————————————————————————————————————
+
     const fillWidth = this.phaseEnergy * 140;
     const isFull = this.phaseEnergy >= 0.999 && !this.player.shattered && !this.phaseLocked;
 
     this.hudPhaseFill.style.width = `${fillWidth}px`;
 
+    // 1. phaseLocked — red flash, highest priority
     if (this.phaseLocked) {
       const flash = 0.55 + Math.sin(performance.now() * 0.025) * 0.25;
       this.hudPhaseFill.style.background = "#ff4444";
@@ -3405,16 +3415,43 @@ export class Game {
       return;
     }
 
+    // 2. actively phasing
     if (this.player.shattered) {
-      this.hudPhaseFill.style.background = "#ff44ff";
-      this.hudPhaseFill.style.boxShadow = "0 0 12px rgba(255,68,255,0.7)";
-      this.hudPhaseMeter.style.opacity = "1";
+      if (this.phaseEnergy < PHASE_WARN_THRESHOLD) {
+        // 2a. low-energy warning: colour ramps magenta→orange→red, pulse accelerates
+        const t = 1 - this.phaseEnergy / PHASE_WARN_THRESHOLD; // 0 at threshold, 1 at 0
+        const freq = THREE.MathUtils.lerp(PHASE_WARN_FREQ_MIN, PHASE_WARN_FREQ_MAX, t);
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() * freq); // 0..1
+
+        // Two-segment RGB lerp through orange midpoint
+        const g = t < 0.5
+          ? Math.round(THREE.MathUtils.lerp(68, PHASE_WARN_MID_G, t * 2))
+          : Math.round(THREE.MathUtils.lerp(PHASE_WARN_MID_G, PHASE_WARN_END_G, (t - 0.5) * 2));
+        const b = t < 0.5
+          ? Math.round(THREE.MathUtils.lerp(255, 0, t * 2))
+          : 0;
+
+        const blurPx = Math.round(8 + pulse * 10); // 8..18 px, glows brighter on pulse
+        const glowA  = (0.5 + pulse * 0.4).toFixed(2);
+
+        // Fill pulses width + opacity for peripheral-vision catch
+        this.hudPhaseFill.style.width      = `${(fillWidth * (0.95 + pulse * 0.05)).toFixed(1)}px`;
+        this.hudPhaseFill.style.background = `rgb(255,${g},${b})`;
+        this.hudPhaseFill.style.boxShadow  = `0 0 ${blurPx}px rgba(255,${g},${b},${glowA})`;
+        this.hudPhaseMeter.style.opacity   = (0.75 + pulse * 0.2).toFixed(3);
+      } else {
+        // 2b. healthy shattered — flat magenta (unchanged)
+        this.hudPhaseFill.style.background = "#ff44ff";
+        this.hudPhaseFill.style.boxShadow  = "0 0 12px rgba(255,68,255,0.7)";
+        this.hudPhaseMeter.style.opacity   = "1";
+      }
       return;
     }
 
+    // 3. recharging / idle
     this.hudPhaseFill.style.background = "#00ffcc";
-    this.hudPhaseFill.style.boxShadow = "0 0 10px rgba(0,255,204,0.45)";
-    this.hudPhaseMeter.style.opacity = isFull ? "0.16" : "0.45";
+    this.hudPhaseFill.style.boxShadow  = "0 0 10px rgba(0,255,204,0.45)";
+    this.hudPhaseMeter.style.opacity   = isFull ? "0.16" : "0.45";
   }
 
   /** Compute closest-edge distance from player to any nearby non-colliding obstacle.
