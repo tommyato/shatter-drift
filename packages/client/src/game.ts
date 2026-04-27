@@ -420,6 +420,7 @@ export class Game {
   private hud!: HTMLElement;
   private hudPhaseMeter!: HTMLElement;
   private hudPhaseFill!: HTMLElement;
+  private hudPhaseWarnVignette!: HTMLElement;
   private hudGrazeMeter!: HTMLElement;
   private hudGrazeFill!: HTMLElement;
   private titleOverlay!: HTMLElement;
@@ -683,6 +684,7 @@ export class Game {
     this.hud = document.getElementById("hud")!;
     this.hudPhaseMeter = document.getElementById("hud-phase-meter")!;
     this.hudPhaseFill = document.getElementById("hud-phase-fill")!;
+    this.hudPhaseWarnVignette = document.getElementById("hud-phase-warn-vignette")!;
     this.hudGrazeMeter = document.getElementById("hud-graze-meter")!;
     this.hudGrazeFill = document.getElementById("hud-graze-fill")!;
     this.hudBoostFillEl = document.getElementById("hud-boost-fill") as SVGElement | null;
@@ -3393,15 +3395,21 @@ export class Game {
 
   private updatePhaseHud() {
     // — warning-state tunables ——————————————————————————————————————————
-    const PHASE_WARN_THRESHOLD = 0.35;  // energy below this → warning ramp
-    const PHASE_WARN_FREQ_MIN  = 0.012; // rad/ms — slow pulse near threshold
-    const PHASE_WARN_FREQ_MAX  = 0.040; // rad/ms — urgent pulse near 0
+    const PHASE_WARN_THRESHOLD       = 0.35;  // energy below this → warning ramp
+    const PHASE_WARN_FREQ_MIN        = 0.012; // rad/ms — slow pulse near threshold
+    const PHASE_WARN_FREQ_MAX        = 0.040; // rad/ms — urgent pulse near 0
+    const PHASE_WARN_VIGNETTE_MIN_A  = 0.15;  // screen-edge alpha at threshold
+    const PHASE_WARN_VIGNETTE_MAX_A  = 0.55;  // screen-edge alpha at zero energy
+    const PHASE_WARN_BAR_WIDTH_PULSE = 0.10;  // ± fraction of fill width that pulses
+    const PHASE_WARN_GLOW_MIN_PX     = 12;    // bar glow blur at pulse trough
+    const PHASE_WARN_GLOW_MAX_PX     = 32;    // bar glow blur at pulse peak
     // two-stop colour ramp: magenta (t=0) → orange (t=0.5) → red (t=1)
-    const PHASE_WARN_MID_G = 110; // rgb(255,110,0) orange at t=0.5
-    const PHASE_WARN_END_G =  22; // rgb(255, 22,0) danger-red at t=1
+    const PHASE_WARN_MID_G           = 110;   // rgb(255,110,0) orange at t=0.5
+    const PHASE_WARN_END_G           =  22;   // rgb(255, 22,0) danger-red at t=1
+    const PHASE_BAR_WIDTH            = 220;   // px — ~1.57× original 140 px
     // ———————————————————————————————————————————————————————————————————
 
-    const fillWidth = this.phaseEnergy * 140;
+    const fillWidth = this.phaseEnergy * PHASE_BAR_WIDTH;
     const isFull = this.phaseEnergy >= 0.999 && !this.player.shattered && !this.phaseLocked;
 
     this.hudPhaseFill.style.width = `${fillWidth}px`;
@@ -3412,6 +3420,7 @@ export class Game {
       this.hudPhaseFill.style.background = "#ff4444";
       this.hudPhaseFill.style.boxShadow = `0 0 10px rgba(255,68,68,${0.45 + flash * 0.35})`;
       this.hudPhaseMeter.style.opacity = String(0.65 + flash * 0.25);
+      this.hudPhaseWarnVignette.style.boxShadow = "none";
       return;
     }
 
@@ -3431,19 +3440,25 @@ export class Game {
           ? Math.round(THREE.MathUtils.lerp(255, 0, t * 2))
           : 0;
 
-        const blurPx = Math.round(8 + pulse * 10); // 8..18 px, glows brighter on pulse
+        const blurPx = Math.round(PHASE_WARN_GLOW_MIN_PX + pulse * (PHASE_WARN_GLOW_MAX_PX - PHASE_WARN_GLOW_MIN_PX));
         const glowA  = (0.5 + pulse * 0.4).toFixed(2);
 
-        // Fill pulses width + opacity for peripheral-vision catch
-        this.hudPhaseFill.style.width      = `${(fillWidth * (0.95 + pulse * 0.05)).toFixed(1)}px`;
+        // Fill pulses ±PHASE_WARN_BAR_WIDTH_PULSE around current fill width
+        this.hudPhaseFill.style.width      = `${(fillWidth * (1 - PHASE_WARN_BAR_WIDTH_PULSE + pulse * PHASE_WARN_BAR_WIDTH_PULSE * 2)).toFixed(1)}px`;
         this.hudPhaseFill.style.background = `rgb(255,${g},${b})`;
         this.hudPhaseFill.style.boxShadow  = `0 0 ${blurPx}px rgba(255,${g},${b},${glowA})`;
         this.hudPhaseMeter.style.opacity   = (0.75 + pulse * 0.2).toFixed(3);
+
+        // Screen-edge vignette: base alpha ramps with energy depletion, modulated by pulse
+        const vignetteBase = THREE.MathUtils.lerp(PHASE_WARN_VIGNETTE_MIN_A, PHASE_WARN_VIGNETTE_MAX_A, t);
+        const vignetteA    = (vignetteBase * (0.65 + 0.35 * pulse)).toFixed(3);
+        this.hudPhaseWarnVignette.style.boxShadow = `inset 0 0 80px 40px rgba(255,${g},${b},${vignetteA})`;
       } else {
         // 2b. healthy shattered — flat magenta (unchanged)
         this.hudPhaseFill.style.background = "#ff44ff";
         this.hudPhaseFill.style.boxShadow  = "0 0 12px rgba(255,68,255,0.7)";
         this.hudPhaseMeter.style.opacity   = "1";
+        this.hudPhaseWarnVignette.style.boxShadow = "none";
       }
       return;
     }
@@ -3452,6 +3467,7 @@ export class Game {
     this.hudPhaseFill.style.background = "#00ffcc";
     this.hudPhaseFill.style.boxShadow  = "0 0 10px rgba(0,255,204,0.45)";
     this.hudPhaseMeter.style.opacity   = isFull ? "0.16" : "0.45";
+    this.hudPhaseWarnVignette.style.boxShadow = "none";
   }
 
   /** Compute closest-edge distance from player to any nearby non-colliding obstacle.
