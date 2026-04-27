@@ -1995,15 +1995,17 @@ export class Game {
   private updateMultiplayerLobbyControls() {
     const inLobby = this.matchState === "inLobby" && !!this.lobbyClient?.getLobbyCode();
     const isHost = inLobby && (this.lobbyClient?.isHost() ?? false);
-    const createBtn = document.getElementById("multiplayer-create-btn") as HTMLButtonElement | null;
-    const joinBtn = document.getElementById("multiplayer-join-btn") as HTMLButtonElement | null;
+    const multiplayerActionsEl = document.getElementById("multiplayer-actions");
+    const multiplayerJoinRowEl = document.getElementById("multiplayer-join-row");
+    
+    // Hide matchmaking row entirely when in lobby; show when not in lobby
+    if (multiplayerActionsEl) multiplayerActionsEl.style.display = inLobby ? "none" : "";
+    if (multiplayerJoinRowEl) multiplayerJoinRowEl.style.display = inLobby ? "none" : "";
+    
     this.multiplayerReadyBtn.style.display = inLobby ? "" : "none";
     this.multiplayerReadyBtn.disabled = !inLobby || this.lobbyClient?.getPlayers().find((player) => player.isLocal)?.ready === true;
     this.multiplayerLeaveBtn.textContent = inLobby ? "LEAVE" : "BACK";
-    this.multiplayerQuickplayBtn.disabled = inLobby;
-    if (createBtn) createBtn.disabled = inLobby;
-    if (joinBtn) joinBtn.disabled = inLobby;
-    this.multiplayerCodeInput.disabled = inLobby;
+    
     // COPY LINK visible only when we're the host with an active lobby code.
     this.multiplayerCopyLinkBtn.style.display = isHost ? "" : "none";
     if (!isHost) this.multiplayerCopyLinkFallbackEl.style.display = "none";
