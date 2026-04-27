@@ -375,6 +375,8 @@ export class Game {
   private speedMod = 1;
   private hudBoostFillEl: SVGElement | null = null;
   private hudBrakeFillEl: SVGElement | null = null;
+  private prevBoostCooldown = 0;
+  private prevBrakeCooldown = 0;
 
   // Cosmic Rift gravity flip
   private riftFlip: RiftFlipState = createRiftFlipState();
@@ -1847,6 +1849,8 @@ export class Game {
     this.phaseMeter = 100;
     this.boostCooldown = 0;
     this.brakeCooldown = 0;
+    this.prevBoostCooldown = 0;
+    this.prevBrakeCooldown = 0;
     this.player.applySkin(this.unlocks.getSelectedCrystal());
     // BUG A: in MP, override the local avatar's body/emissive/glow color with
     // the server-assigned slot color so each player is visually distinct.
@@ -1885,7 +1889,7 @@ export class Game {
     this.multiplayerAuthoritativeState = this.mpRunner.getInterpolatedAuthoritativeState();
     this.world.applyAuthoritativeState(this.mpRunner.getState());
     this.applyMultiplayerAuthoritativeState(1 / 60);
-    this.updateMultiplayerHud();
+    this.updateMultiplayerHud(0);
     this.setMultiplayerStatus("Match live.");
   }
 
@@ -2030,7 +2034,7 @@ export class Game {
     this.multiplayerAuthoritativeState = this.mpRunner.getInterpolatedAuthoritativeState();
     this.world.applyAuthoritativeState(state);
     this.applyMultiplayerAuthoritativeState(dt);
-    this.updateMultiplayerHud();
+    this.updateMultiplayerHud(dt);
 
     // BUG 2: tick the post-death delay so the local crash visual + SFX
     // play before the match-over screen appears. ~1.0s feels right (long
@@ -2140,7 +2144,7 @@ export class Game {
     }
   }
 
-  private updateMultiplayerHud() {
+  private updateMultiplayerHud(dt: number) {
     this.hudScore.textContent = this.score.toLocaleString();
     this.hudDistance.textContent = `${Math.floor(this.distance)}m`;
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
@@ -2148,7 +2152,7 @@ export class Game {
     this.hudState.textContent = this.player.shattered ? "PHASE" : "SOLID";
     this.updatePhaseHud();
     this.updateGrazeMeterHud();
-    this.updateBoostBrakeHud();
+    this.updateBoostBrakeHud(dt);
   }
 
   private updateMultiplayerMatchOver(dt: number, menuConsumedActivate: boolean) {
@@ -2258,6 +2262,8 @@ export class Game {
     this.boostCooldown = 0;
     this.brakeTimer = 0;
     this.brakeCooldown = 0;
+    this.prevBoostCooldown = 0;
+    this.prevBrakeCooldown = 0;
     this.speedMod = 1;
     if (this.riftWarningEl) this.riftWarningEl.style.opacity = "0";
     this.player.laneX = 0;
@@ -3206,7 +3212,7 @@ export class Game {
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
     this.updatePhaseHud();
     this.updateGrazeMeterHud();
-    this.updateBoostBrakeHud();
+    this.updateBoostBrakeHud(dt);
 
     if (this.combo > 1) {
       const comboVal = Math.min(this.combo, COMBO_MAX);
@@ -3524,9 +3530,12 @@ export class Game {
   }
 
   /** Update boost/brake cooldown ring HUD elements. */
-  private updateBoostBrakeHud() {
+  private updateBoostBrakeHud(dt: number) {
     if (!this.hudBoostFillEl || !this.hudBrakeFillEl) return;
     const circ = 2 * Math.PI * 11; // circumference of r=11 SVG rings
+
+    const boostJustReady = this.prevBoostCooldown > 0 && this.boostCooldown <= 0;
+    const brakeJustReady = this.prevBrakeCooldown > 0 && this.brakeCooldown <= 0;
 
     // Boost ring (gold)
     const boostFill = this.boostCooldown <= 0
@@ -3534,11 +3543,12 @@ export class Game {
       : 1 - this.boostCooldown / BOOST_COOLDOWN;
     this.hudBoostFillEl.style.strokeDasharray =
       `${(boostFill * circ).toFixed(2)} ${circ.toFixed(2)}`;
-    if (this.boostCooldown <= 0) {
-      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
-      this.hudBoostFillEl.style.opacity = String(0.7 + pulse * 0.3);
+    if (boostJustReady) {
+      this.hudBoostFillEl.style.filter = "brightness(1.3)";
+    } else if (this.boostCooldown <= 0) {
+      this.hudBoostFillEl.style.filter = "none";
     } else {
-      this.hudBoostFillEl.style.opacity = "0.85";
+      this.hudBoostFillEl.style.filter = "brightness(0.95)";
     }
 
     // Brake ring (cyan)
@@ -3547,12 +3557,17 @@ export class Game {
       : 1 - this.brakeCooldown / BRAKE_COOLDOWN;
     this.hudBrakeFillEl.style.strokeDasharray =
       `${(brakeFill * circ).toFixed(2)} ${circ.toFixed(2)}`;
-    if (this.brakeCooldown <= 0) {
-      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
-      this.hudBrakeFillEl.style.opacity = String(0.7 + pulse * 0.3);
+    if (brakeJustReady) {
+      this.hudBrakeFillEl.style.filter = "brightness(1.3)";
+    } else if (this.brakeCooldown <= 0) {
+      this.hudBrakeFillEl.style.filter = "none";
     } else {
-      this.hudBrakeFillEl.style.opacity = "0.85";
+      this.hudBrakeFillEl.style.filter = "brightness(0.95)";
     }
+
+    // Store current cooldowns for next frame's transition detection
+    this.prevBoostCooldown = this.boostCooldown;
+    this.prevBrakeCooldown = this.brakeCooldown;
   }
 
   private applyBiomeColors() {
