@@ -14,7 +14,8 @@ export type ObstacleKind =
 	| 'pillar'
 	| 'dual-pillar'
 	| 'wide-bar'
-	| 'phase-wall' // full-width pillar — shatter-only (composes existing pillar vocabulary at width=20)
+	| 'phase-wall'    // full-width pillar — shatter-only (composes existing pillar vocabulary at width=20)
+	| 'rising-slab'   // Crystal Caves: full-width slab that oscillates vertically; cleared by boost/brake timing
 
 export interface ObstacleSpec {
 	kind: ObstacleKind
