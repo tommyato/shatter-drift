@@ -16,6 +16,7 @@ const targets = [
 	{ entry: 'src/simulation.ts',                    out: 'dist/simulation.mjs' },
 	{ entry: 'src/lockstep-runner.ts',               out: 'dist/lockstep-runner.mjs' },
 	{ entry: 'src/systems/gravity-flip-scheduler.ts', out: 'dist/rift-flip-scheduler.mjs' },
+	{ entry: 'src/spatial-hash.ts',                  out: 'dist/spatial-hash.mjs' },
 ]
 
 for (const { entry, out } of targets) {
