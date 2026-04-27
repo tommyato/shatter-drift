@@ -37,17 +37,17 @@ export interface Obstacle {
   /** Actual wall collision segments — AABB boxes in X (center + half-width). Only for gates. */
   wallSegments?: Array<{ x: number; halfWidth: number }>;
   // Biome gimmick state
-  /** Crystal Caves: seconds remaining while frozen (>0 = frozen) */
-  frozenTimer?: number;
-  /** Crystal Caves: post-thaw cooldown before re-freeze is eligible */
-  freezeCooldown?: number;
+  /** Crystal Caves: true for rising-slab obstacles (full-width, vertically animated) */
+  isRisingSlab?: boolean;
+  /** Crystal Caves: per-slab sine phase in radians (seeded from spawn z) */
+  slabPhase?: number;
   /** Neon District: per-obstacle blink phase offset (seeded from spawn z) */
   blinkOffset?: number;
-  /** Neon District: true during the non-colliding blink window */
+  /** Neon District / Crystal slab: true during non-colliding window */
   ghosted?: boolean;
   /** Solar Storm: per-obstacle sine phase in radians (seeded from spawn z) */
   driftPhase?: number;
-  /** Solar Storm/Freeze: original x (or gapX for gates) before drift is applied */
+  /** Solar Storm: original x (or gapX for gates) before drift is applied */
   baseX?: number;
   /** Solar Storm: original x positions of gate wall segments before drift */
   baseWallSegmentX?: number[];
@@ -661,63 +661,11 @@ export class World {
 
   private updateBiomeGimmicks(dt: number, playerZ: number, speed: number): void {
     const t = this.plasmaElapsed
-    const playerBiome = biomeFromZ(playerZ)
-
-    // -----------------------------------------------------------------
-    // Crystal Caves freeze (biome 1)
-    // Tick existing freeze/cooldown timers; push frozen obstacles forward.
-    // Trigger new freezes when player is in biome 1.
-    // -----------------------------------------------------------------
-
-    let frozenCount = 0
-
-    for (const obs of this.obstacles) {
-      if (!obs.active) continue
-      if ((obs.frozenTimer ?? 0) > 0) {
-        obs.frozenTimer = Math.max(0, obs.frozenTimer! - dt)
-        // Keep obstacle at same relative distance by advancing it with the player
-        obs.z += speed * dt
-        obs.mesh.position.z = obs.z
-        frozenCount++
-        if ((obs.frozenTimer ?? 0) <= 0) {
-          obs.freezeCooldown = 0.6
-        }
-      } else if ((obs.freezeCooldown ?? 0) > 0) {
-        obs.freezeCooldown = Math.max(0, obs.freezeCooldown! - dt)
-      }
-    }
-
-    if (playerBiome === 1 && frozenCount < 2) {
-      const candidates: { obs: Obstacle; dist: number }[] = []
-      for (const obs of this.obstacles) {
-        if (!obs.active) continue
-        if (biomeFromZ(obs.z) !== 1) continue
-        if ((obs.frozenTimer ?? 0) > 0 || (obs.freezeCooldown ?? 0) > 0) continue
-        const dist = obs.z - playerZ
-        if (dist > 0 && dist <= 6) candidates.push({ obs, dist })
-      }
-      candidates.sort((a, b) => a.dist - b.dist)
-      for (const { obs } of candidates.slice(0, 2 - frozenCount)) {
-        obs.frozenTimer = 0.4
-      }
-    }
-
-    // Frost visual: cyan/white emissive boost on frozen obstacles (overrides biome tint)
-    const frostEdge = new THREE.Color(0x88ddff)
-    const frostAccent = new THREE.Color(0xffffff)
-    for (const obs of this.obstacles) {
-      if (!obs.active) continue
-      if ((obs.frozenTimer ?? 0) <= 0) continue
-      const intensity = 1.0 + Math.sin(t * 18) * 0.3  // shimmer
-      const edge = frostEdge.clone().multiplyScalar(intensity)
-      forEachObstacleMat(obs, (mat) => {
-        mat.uniforms.uEdgeColor!.value.copy(edge)
-        mat.uniforms.uAccentColor!.value.copy(frostAccent)
-      })
-    }
 
     // -----------------------------------------------------------------
     // Neon District blink (biome 2)
+    // Runs first so its ghosted-clear for non-biome-2 obstacles doesn't
+    // overwrite the Crystal slab ghosted state set in the next section.
     // Obstacles cycle solid 250ms / ghosted 200ms with per-obstacle phase offset.
     // Ghosted = opacity 0.15, accent near-zero.
     // -----------------------------------------------------------------
@@ -751,13 +699,45 @@ export class World {
             mat.uniforms.uAccentColor!.value.multiplyScalar(0.1)
           })
         } else {
-          // Restore to biome colors — let updateBiomeVisuals handle the actual colors on next frame,
+          // Restore to biome colors — let updateBiomeVisuals handle actual colors,
           // but restore opacity now so the obstacle snaps back visually.
           forEachObstacleMat(obs, (mat) => {
             mat.uniforms.uOpacity!.value = 1.0
           })
         }
       }
+    }
+
+    // -----------------------------------------------------------------
+    // Crystal Caves rising slabs (biome 1)
+    // Runs AFTER Neon blink — the Neon ghosted-clear above zeroes ghosted for all
+    // non-biome-2 obstacles, so we set it fresh here for Crystal slabs.
+    //
+    // Each slab oscillates vertically at SLAB_FREQUENCY Hz. Phase is seeded from
+    // spawn z so adjacent slabs aren't in sync. Visual: slab mesh moves along Y
+    // (rises from below the floor, blocks lane at peak, sinks underground at trough).
+    // Collision: ghosted=true (passable) while slab is in lower half of travel.
+    // -----------------------------------------------------------------
+
+    const SLAB_FREQ = 0.5       // Hz — slower than Solar (0.6 Hz)
+    const SLAB_AMP  = 3.0       // units of vertical travel
+    const SLAB_CLEAR = 0        // ghosted when offset ≤ 0 (slab sunk below floor)
+    const SLAB_BASE_Y = -SLAB_AMP  // mesh center Y at trough (fully underground)
+
+    for (const obs of this.obstacles) {
+      if (!obs.active) continue
+      if (!obs.isRisingSlab) continue
+
+      // Init per-slab phase once using spawn z as deterministic seed
+      if (obs.slabPhase === undefined) {
+        obs.slabPhase = (obs.z * 2.718281828) % (Math.PI * 2)
+      }
+
+      const slabOffset = SLAB_AMP * Math.sin(t * SLAB_FREQ * Math.PI * 2 + obs.slabPhase)
+      // Animate mesh: slab rises from underground (BASE_Y) through floor level to lane centre
+      obs.mesh.position.y = slabOffset + SLAB_BASE_Y
+      // Passable while sunk (slab center ≤ floor level)
+      obs.ghosted = slabOffset <= SLAB_CLEAR
     }
 
     // -----------------------------------------------------------------
@@ -888,12 +868,14 @@ export class World {
     }
 
     if (biome === 1) {
-      // CRYSTAL CAVES: introduces double pillars and wide bars
-      if (type < 0.30) {
+      // CRYSTAL CAVES: rising slabs at ~1-in-4; rest are static obstacles (3:1 ratio)
+      if (type < 0.25) {
+        this.spawnRisingSlab(z);
+      } else if (type < 0.48) {
         this.spawnGate(z);
-      } else if (type < 0.50) {
+      } else if (type < 0.63) {
         this.spawnPillar(z);
-      } else if (type < 0.72) {
+      } else if (type < 0.81) {
         this.spawnDoublePillar(z);
       } else {
         this.spawnWideBar(z);
@@ -1120,6 +1102,38 @@ export class World {
       active: true,
       partiallyShattered: false,
       wallSegments: segments,
+    });
+  }
+
+  /**
+   * Crystal Caves rising slab — full-lane-width obstacle that oscillates vertically.
+   * Visual: chunky crystal column emerging from the cave floor.
+   * Collision: ghosted (passable) while sunk; solid while raised.
+   * BiomeGimmickSystem animates mesh.position.y and ghosted each frame.
+   */
+  private spawnRisingSlab(z: number) {
+    const slabWidth = PLAYABLE_HALF_WIDTH * 2;
+    const slabHeight = 3.0;
+    const slabDepth  = 1.2;
+
+    const mesh = this.createObstacleMesh(slabWidth, slabHeight, slabDepth, 0, 0);
+    // Start the mesh center at floor level; gimmick system will animate y each frame
+    mesh.position.set(0, 0, z);
+    this.scene.add(mesh);
+
+    this.obstacles.push({
+      mesh,
+      z,
+      halfWidth: PLAYABLE_HALF_WIDTH,
+      halfHeight: slabHeight / 2,
+      x: 0,
+      isGate: false,
+      gapX: 0,
+      gapHalfWidth: 0,
+      active: true,
+      partiallyShattered: false,
+      isRisingSlab: true,
+      // slabPhase initialised lazily by updateBiomeGimmicks on first tick
     });
   }
 
@@ -1400,7 +1414,7 @@ export class World {
   checkObstacleCollision(playerX: number, playerZ: number, playerRadius: number): Obstacle | null {
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
-      if (obs.ghosted) continue; // Neon District: in non-colliding blink window
+      if (obs.ghosted) continue; // non-colliding window (Neon blink or Crystal slab trough)
 
       const dz = Math.abs(playerZ - obs.z);
       if (dz > 2) continue; // Too far in Z
@@ -1604,7 +1618,7 @@ export class World {
   checkCloseCall(playerX: number, playerZ: number): Obstacle | null {
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
-      if (obs.ghosted) continue; // Neon District: no close-call credit during blink window
+      if (obs.ghosted) continue; // no close-call during non-colliding window (Neon blink or Crystal slab trough)
       const dz = Math.abs(playerZ - obs.z);
       if (dz > 1.5) continue;
 

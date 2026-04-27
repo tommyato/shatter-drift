@@ -125,6 +125,25 @@ function createPhaseWall(world: SimulationWorld, z: number): void {
 	})
 }
 
+/** Crystal Caves rising slab: full-width obstacle that oscillates vertically.
+ *  Passable only via boost/brake timing — lateral dodge cannot clear it.
+ *  BiomeGimmickSystem drives ghosted state each tick based on simTime + slabPhase. */
+function createRisingSlab(world: SimulationWorld, z: number): void {
+	world.state.obstacles.push({
+		z,
+		x: 0,
+		halfWidth: PLAYABLE_HALF_WIDTH,
+		halfHeight: 1.5,
+		isGate: false,
+		gapX: 0,
+		gapHalfWidth: 0,
+		active: true,
+		partiallyShattered: false,
+		passed: false,
+		isRisingSlab: true,
+	})
+}
+
 function materializeSpec(world: SimulationWorld, z: number, spec: ObstacleSpec): void {
 	switch (spec.kind) {
 		case 'gate':
@@ -145,6 +164,9 @@ function materializeSpec(world: SimulationWorld, z: number, spec: ObstacleSpec):
 			return
 		case 'phase-wall':
 			createPhaseWall(world, z)
+			return
+		case 'rising-slab':
+			createRisingSlab(world, z)
 			return
 	}
 }
@@ -288,7 +310,16 @@ function emitPattern(world: SimulationWorld): number {
 		difficultyT: clamp(startZ / 2000, 0, 1),
 	}
 	const pattern = pickNextPattern(ctx, world.random, world.state.lastPatternName)
-	const specs = pattern.emit(world.random, ctx)
+	let specs = pattern.emit(world.random, ctx)
+
+	// Crystal Caves (biome 1): replace ~1-in-4 obstacles with rising slabs.
+	// Rising slabs are full-width and cleared only by boost/brake timing.
+	// Replace 1:1 so obstacle count and density are unchanged.
+	if (ctx.biome === 1) {
+		specs = specs.map((spec) =>
+			world.random() < 0.25 ? { kind: 'rising-slab' as const, dz: spec.dz } : spec,
+		)
+	}
 
 	for (const spec of specs) {
 		materializeSpec(world, startZ + spec.dz, spec)
