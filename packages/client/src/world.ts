@@ -36,6 +36,21 @@ export interface Obstacle {
   partiallyShattered: boolean;
   /** Actual wall collision segments — AABB boxes in X (center + half-width). Only for gates. */
   wallSegments?: Array<{ x: number; halfWidth: number }>;
+  // Biome gimmick state
+  /** Crystal Caves: seconds remaining while frozen (>0 = frozen) */
+  frozenTimer?: number;
+  /** Crystal Caves: post-thaw cooldown before re-freeze is eligible */
+  freezeCooldown?: number;
+  /** Neon District: per-obstacle blink phase offset (seeded from spawn z) */
+  blinkOffset?: number;
+  /** Neon District: true during the non-colliding blink window */
+  ghosted?: boolean;
+  /** Solar Storm: per-obstacle sine phase in radians (seeded from spawn z) */
+  driftPhase?: number;
+  /** Solar Storm/Freeze: original x (or gapX for gates) before drift is applied */
+  baseX?: number;
+  /** Solar Storm: original x positions of gate wall segments before drift */
+  baseWallSegmentX?: number[];
 }
 
 export interface EnergyOrb {
@@ -255,6 +270,33 @@ void main() {
   gl_FragColor = vec4(color, alpha);
 }
 `;
+
+// ---------------------------------------------------------------------------
+// Biome gimmick helpers
+// ---------------------------------------------------------------------------
+
+/** Biome index from world z — mirrors biomeFromDistance in obstacle-patterns.ts */
+function biomeFromZ(z: number): number {
+  if (z < 300) return 0
+  if (z < 700) return 1
+  if (z < 1200) return 2
+  if (z < 1800) return 3
+  return 4
+}
+
+/** Apply fn to every ShaderMaterial on an obstacle mesh (handles Mesh and Group). */
+function forEachObstacleMat(obs: Obstacle, fn: (mat: THREE.ShaderMaterial) => void): void {
+  if (obs.mesh instanceof THREE.Mesh && obs.mesh.material instanceof THREE.ShaderMaterial) {
+    fn(obs.mesh.material)
+  }
+  if (obs.mesh instanceof THREE.Group) {
+    obs.mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
+        fn(child.material)
+      }
+    })
+  }
+}
 
 export class World {
   obstacles: Obstacle[] = [];
@@ -612,6 +654,149 @@ export class World {
 
     // Update voronoi shard physics
     this.voronoiShatter.update(dt);
+
+    // Apply biome gimmick logic and visuals (runs after updateBiomeVisuals so frost overrides biome tint)
+    this.updateBiomeGimmicks(dt, playerZ, speed);
+  }
+
+  private updateBiomeGimmicks(dt: number, playerZ: number, speed: number): void {
+    const t = this.plasmaElapsed
+    const playerBiome = biomeFromZ(playerZ)
+
+    // -----------------------------------------------------------------
+    // Crystal Caves freeze (biome 1)
+    // Tick existing freeze/cooldown timers; push frozen obstacles forward.
+    // Trigger new freezes when player is in biome 1.
+    // -----------------------------------------------------------------
+
+    let frozenCount = 0
+
+    for (const obs of this.obstacles) {
+      if (!obs.active) continue
+      if ((obs.frozenTimer ?? 0) > 0) {
+        obs.frozenTimer = Math.max(0, obs.frozenTimer! - dt)
+        // Keep obstacle at same relative distance by advancing it with the player
+        obs.z += speed * dt
+        obs.mesh.position.z = obs.z
+        frozenCount++
+        if ((obs.frozenTimer ?? 0) <= 0) {
+          obs.freezeCooldown = 0.6
+        }
+      } else if ((obs.freezeCooldown ?? 0) > 0) {
+        obs.freezeCooldown = Math.max(0, obs.freezeCooldown! - dt)
+      }
+    }
+
+    if (playerBiome === 1 && frozenCount < 2) {
+      const candidates: { obs: Obstacle; dist: number }[] = []
+      for (const obs of this.obstacles) {
+        if (!obs.active) continue
+        if (biomeFromZ(obs.z) !== 1) continue
+        if ((obs.frozenTimer ?? 0) > 0 || (obs.freezeCooldown ?? 0) > 0) continue
+        const dist = obs.z - playerZ
+        if (dist > 0 && dist <= 6) candidates.push({ obs, dist })
+      }
+      candidates.sort((a, b) => a.dist - b.dist)
+      for (const { obs } of candidates.slice(0, 2 - frozenCount)) {
+        obs.frozenTimer = 0.4
+      }
+    }
+
+    // Frost visual: cyan/white emissive boost on frozen obstacles (overrides biome tint)
+    const frostEdge = new THREE.Color(0x88ddff)
+    const frostAccent = new THREE.Color(0xffffff)
+    for (const obs of this.obstacles) {
+      if (!obs.active) continue
+      if ((obs.frozenTimer ?? 0) <= 0) continue
+      const intensity = 1.0 + Math.sin(t * 18) * 0.3  // shimmer
+      const edge = frostEdge.clone().multiplyScalar(intensity)
+      forEachObstacleMat(obs, (mat) => {
+        mat.uniforms.uEdgeColor!.value.copy(edge)
+        mat.uniforms.uAccentColor!.value.copy(frostAccent)
+      })
+    }
+
+    // -----------------------------------------------------------------
+    // Neon District blink (biome 2)
+    // Obstacles cycle solid 250ms / ghosted 200ms with per-obstacle phase offset.
+    // Ghosted = opacity 0.15, accent near-zero.
+    // -----------------------------------------------------------------
+
+    for (const obs of this.obstacles) {
+      if (!obs.active && !obs.ghosted) continue
+
+      if (biomeFromZ(obs.z) !== 2) {
+        if (obs.ghosted) {
+          obs.ghosted = false
+          if (obs.active) {
+            forEachObstacleMat(obs, (mat) => { mat.uniforms.uOpacity!.value = 1.0 })
+          }
+        }
+        continue
+      }
+
+      // Init per-obstacle blink offset once (seeded from spawn z)
+      if (obs.blinkOffset === undefined) {
+        obs.blinkOffset = (obs.z * 1.6180339887) % 0.45
+      }
+
+      const phase = (t + obs.blinkOffset) % 0.45
+      const nowGhosted = phase >= 0.25
+
+      if (nowGhosted !== obs.ghosted) {
+        obs.ghosted = nowGhosted
+        if (nowGhosted) {
+          forEachObstacleMat(obs, (mat) => {
+            mat.uniforms.uOpacity!.value = 0.15
+            mat.uniforms.uAccentColor!.value.multiplyScalar(0.1)
+          })
+        } else {
+          // Restore to biome colors — let updateBiomeVisuals handle the actual colors on next frame,
+          // but restore opacity now so the obstacle snaps back visually.
+          forEachObstacleMat(obs, (mat) => {
+            mat.uniforms.uOpacity!.value = 1.0
+          })
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // Solar Storm lateral drift (biome 3)
+    // Obstacles sine-drift in X. Per-obstacle phase from spawn z for variety.
+    // Gates shift gapX + wall segments so collision matches visuals.
+    // -----------------------------------------------------------------
+
+    for (const obs of this.obstacles) {
+      if (!obs.active) continue
+      if (biomeFromZ(obs.z) !== 3) continue
+
+      // Init drift state once
+      if (obs.driftPhase === undefined) {
+        obs.driftPhase = (obs.z * 2.718281828) % (Math.PI * 2)
+        obs.baseX = obs.isGate ? obs.gapX : obs.x
+        if (obs.wallSegments) {
+          obs.baseWallSegmentX = obs.wallSegments.map((s) => s.x)
+        }
+      }
+
+      const driftOffset = 1.5 * Math.sin(t * 0.6 * Math.PI * 2 + obs.driftPhase)
+
+      if (obs.isGate) {
+        obs.gapX = (obs.baseX ?? 0) + driftOffset
+        if (obs.wallSegments && obs.baseWallSegmentX) {
+          for (let i = 0; i < obs.wallSegments.length; i++) {
+            obs.wallSegments[i]!.x = (obs.baseWallSegmentX[i] ?? 0) + driftOffset
+          }
+        }
+        // Shift the entire gate group so the visual matches collision geometry
+        if (obs.mesh instanceof THREE.Group) {
+          obs.mesh.position.x = driftOffset
+        }
+      } else {
+        obs.x = (obs.baseX ?? 0) + driftOffset
+        obs.mesh.position.x = obs.x
+      }
+    }
   }
 
   private updateBiomeVisuals() {
@@ -1215,6 +1400,7 @@ export class World {
   checkObstacleCollision(playerX: number, playerZ: number, playerRadius: number): Obstacle | null {
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
+      if (obs.ghosted) continue; // Neon District: in non-colliding blink window
 
       const dz = Math.abs(playerZ - obs.z);
       if (dz > 2) continue; // Too far in Z
@@ -1418,6 +1604,7 @@ export class World {
   checkCloseCall(playerX: number, playerZ: number): Obstacle | null {
     for (const obs of this.obstacles) {
       if (!obs.active) continue;
+      if (obs.ghosted) continue; // Neon District: no close-call credit during blink window
       const dz = Math.abs(playerZ - obs.z);
       if (dz > 1.5) continue;
 

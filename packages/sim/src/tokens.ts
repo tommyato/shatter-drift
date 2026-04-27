@@ -21,3 +21,4 @@ export const ShatterSystemToken = createToken<(dt: number) => void>('ShatterSyst
 export const OrbSystemToken = createToken<(dt: number) => void>('OrbSystem')
 export const BossAnimationSystemToken = createToken<(dt: number) => void>('BossAnimationSystem')
 export const RiftFlipSystemToken = createToken<(dt: number) => void>('RiftFlipSystem')
+export const BiomeGimmickSystemToken = createToken<(dt: number) => void>('BiomeGimmickSystem')

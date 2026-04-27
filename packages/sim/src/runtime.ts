@@ -3,6 +3,7 @@ import { getSystemRandom, mulberry32 } from './constants'
 import { createAgentInput } from './input/agent-input'
 import { createSimulationWorld } from './sim-world'
 import {
+	BiomeGimmickSystemToken,
 	BossAnimationSystemToken,
 	CollisionSystemToken,
 	ObstacleDespawnSystemToken,
@@ -27,6 +28,7 @@ import type {
 	SimulationConfig,
 	SimulationInput,
 } from './types'
+import { createBiomeGimmickSystem } from './systems/biome-gimmick-system'
 import { createBossAnimationSystem } from './systems/boss-animation-system'
 import { createCollisionSystem } from './systems/collision-system'
 import { createPlayerCollisionSystem } from './systems/player-collision-system'
@@ -127,6 +129,11 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 		.toFactory(createRiftFlipSystem)
 		.withDeps(SimulationWorldToken)
 		.asSingleton()
+	container
+		.bind(BiomeGimmickSystemToken)
+		.toFactory(createBiomeGimmickSystem)
+		.withDeps(SimulationWorldToken)
+		.asSingleton()
 
 	const world = container.get(SimulationWorldToken)
 	const speedModSystem = container.get(SpeedModSystemToken)
@@ -140,6 +147,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 	const obstacleDespawnSystem = container.get(ObstacleDespawnSystemToken)
 	const bossAnimationSystem = container.get(BossAnimationSystemToken)
 	const riftFlipSystem = container.get(RiftFlipSystemToken)
+	const biomeGimmickSystem = container.get(BiomeGimmickSystemToken)
 
 	return {
 		container,
@@ -154,6 +162,7 @@ export function createRuntime(config: SimulationConfig = {}): SimulationRuntime 
 			playerCollisionSystem(dt) // after movement, before obstacle collision
 			obstacleSpawnSystem(dt)
 			bossAnimationSystem(dt)
+			biomeGimmickSystem(dt)    // biome gimmicks after boss animation, before collision
 			orbSystem(dt)
 			collisionSystem(dt)
 			obstacleDespawnSystem(dt)

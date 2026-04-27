@@ -7,6 +7,7 @@ function findCollisionFor(world: SimulationWorld, player: PlayerState): Simulati
 		if (!obstacle.active) {
 			continue
 		}
+		if (obstacle.ghosted) continue // Neon District blink — non-colliding window
 		const dz = Math.abs(player.z - obstacle.z)
 		if (dz > 2) {
 			continue

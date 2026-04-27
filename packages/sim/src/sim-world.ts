@@ -32,6 +32,21 @@ export interface SimulationObstacle extends ObstacleData {
 		speed: number
 		timer: number
 	}
+	// Biome gimmick state (managed by BiomeGimmickSystem)
+	/** Crystal Caves: seconds remaining while frozen (>0 = frozen) */
+	frozenTimer?: number
+	/** Crystal Caves: post-thaw cooldown before re-freeze is eligible */
+	freezeCooldown?: number
+	/** Neon District: per-obstacle blink phase offset (seeded from spawn z) */
+	blinkOffset?: number
+	/** Neon District: true during the non-colliding blink window */
+	ghosted?: boolean
+	/** Solar Storm: per-obstacle sine phase in radians (seeded from spawn z) */
+	driftPhase?: number
+	/** Solar Storm/Freeze: original x (or gapX for gates) before drift is applied */
+	baseX?: number
+	/** Solar Storm: original x positions of gate wall segments before drift */
+	baseWallSegmentX?: number[]
 }
 
 export interface SimulationOrb extends OrbData {
