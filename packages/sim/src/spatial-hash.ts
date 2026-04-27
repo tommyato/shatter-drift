@@ -8,6 +8,11 @@
  * Typical SD obstacle halfWidth is 1-3 units; player collision radius is 0.4.
  * Default cell size of 6 units provides good balance between false positives
  * and spatial resolution.
+ *
+ * Hot-path allocation policy: zero per-call allocations after warmup.
+ * - Cell keys are bit-packed integers (no string allocation).
+ * - querySeen dedup set is instance-scoped and .clear()ed per query.
+ * - Cell loop is inlined into insert/remove (no helper array).
  */
 
 export interface SpatialHashEntry {
@@ -19,9 +24,10 @@ export interface SpatialHashEntry {
 
 export class SpatialHash {
 	private cellSize: number
-	private cells: Map<string, number[]>
+	private cells: Map<number, number[]>
 	private entries: Map<number, SpatialHashEntry>
 	private queryResult: number[]
+	private querySeen: Set<number>
 
 	/**
 	 * @param cellSize Grid cell dimension. Default 6.0 is tuned for SD obstacle scale.
@@ -32,32 +38,17 @@ export class SpatialHash {
 		this.cells = new Map()
 		this.entries = new Map()
 		this.queryResult = []
+		this.querySeen = new Set()
 	}
 
-	private getCellKey(x: number, z: number): string {
-		const cx = Math.floor(x / this.cellSize)
-		const cz = Math.floor(z / this.cellSize)
-		return `${cx},${cz}`
-	}
-
-	private getCellsForEntry(entry: SpatialHashEntry): string[] {
-		const minX = entry.x - entry.radius
-		const maxX = entry.x + entry.radius
-		const minZ = entry.z - entry.radius
-		const maxZ = entry.z + entry.radius
-
-		const minCellX = Math.floor(minX / this.cellSize)
-		const maxCellX = Math.floor(maxX / this.cellSize)
-		const minCellZ = Math.floor(minZ / this.cellSize)
-		const maxCellZ = Math.floor(maxZ / this.cellSize)
-
-		const keys: string[] = []
-		for (let cx = minCellX; cx <= maxCellX; cx++) {
-			for (let cz = minCellZ; cz <= maxCellZ; cz++) {
-				keys.push(`${cx},${cz}`)
-			}
-		}
-		return keys
+	/**
+	 * Pack cell coordinates into a single integer key.
+	 * Bias +32768 maps the ±32k cell range into unsigned 16-bit halves.
+	 * SD world fits comfortably within ±32k cells at the default cell size.
+	 * Result is a signed Int32 (bitwise ops in JS use Int32); valid as a Map key.
+	 */
+	private getCellKey(cx: number, cz: number): number {
+		return ((cx + 32768) << 16) | ((cz + 32768) & 0xffff)
 	}
 
 	/**
@@ -69,14 +60,21 @@ export class SpatialHash {
 		const entry: SpatialHashEntry = { id, x, z, radius }
 		this.entries.set(id, entry)
 
-		const cellKeys = this.getCellsForEntry(entry)
-		for (const key of cellKeys) {
-			let cell = this.cells.get(key)
-			if (!cell) {
-				cell = []
-				this.cells.set(key, cell)
+		const minCellX = Math.floor((x - radius) / this.cellSize)
+		const maxCellX = Math.floor((x + radius) / this.cellSize)
+		const minCellZ = Math.floor((z - radius) / this.cellSize)
+		const maxCellZ = Math.floor((z + radius) / this.cellSize)
+
+		for (let cx = minCellX; cx <= maxCellX; cx++) {
+			for (let cz = minCellZ; cz <= maxCellZ; cz++) {
+				const key = this.getCellKey(cx, cz)
+				let cell = this.cells.get(key)
+				if (!cell) {
+					cell = []
+					this.cells.set(key, cell)
+				}
+				cell.push(id)
 			}
-			cell.push(id)
 		}
 	}
 
@@ -87,16 +85,23 @@ export class SpatialHash {
 		const entry = this.entries.get(id)
 		if (!entry) return
 
-		const cellKeys = this.getCellsForEntry(entry)
-		for (const key of cellKeys) {
-			const cell = this.cells.get(key)
-			if (cell) {
-				const index = cell.indexOf(id)
-				if (index !== -1) {
-					cell.splice(index, 1)
-				}
-				if (cell.length === 0) {
-					this.cells.delete(key)
+		const minCellX = Math.floor((entry.x - entry.radius) / this.cellSize)
+		const maxCellX = Math.floor((entry.x + entry.radius) / this.cellSize)
+		const minCellZ = Math.floor((entry.z - entry.radius) / this.cellSize)
+		const maxCellZ = Math.floor((entry.z + entry.radius) / this.cellSize)
+
+		for (let cx = minCellX; cx <= maxCellX; cx++) {
+			for (let cz = minCellZ; cz <= maxCellZ; cz++) {
+				const key = this.getCellKey(cx, cz)
+				const cell = this.cells.get(key)
+				if (cell) {
+					const index = cell.indexOf(id)
+					if (index !== -1) {
+						cell.splice(index, 1)
+					}
+					if (cell.length === 0) {
+						this.cells.delete(key)
+					}
 				}
 			}
 		}
@@ -111,28 +116,22 @@ export class SpatialHash {
 	 */
 	queryCircle(x: number, z: number, radius: number): readonly number[] {
 		this.queryResult.length = 0
+		this.querySeen.clear()
 
-		const minX = x - radius
-		const maxX = x + radius
-		const minZ = z - radius
-		const maxZ = z + radius
-
-		const minCellX = Math.floor(minX / this.cellSize)
-		const maxCellX = Math.floor(maxX / this.cellSize)
-		const minCellZ = Math.floor(minZ / this.cellSize)
-		const maxCellZ = Math.floor(maxZ / this.cellSize)
-
-		const seen = new Set<number>()
+		const minCellX = Math.floor((x - radius) / this.cellSize)
+		const maxCellX = Math.floor((x + radius) / this.cellSize)
+		const minCellZ = Math.floor((z - radius) / this.cellSize)
+		const maxCellZ = Math.floor((z + radius) / this.cellSize)
 
 		for (let cx = minCellX; cx <= maxCellX; cx++) {
 			for (let cz = minCellZ; cz <= maxCellZ; cz++) {
-				const key = `${cx},${cz}`
+				const key = this.getCellKey(cx, cz)
 				const cell = this.cells.get(key)
 				if (!cell) continue
 
 				for (const id of cell) {
-					if (seen.has(id)) continue
-					seen.add(id)
+					if (this.querySeen.has(id)) continue
+					this.querySeen.add(id)
 
 					const entry = this.entries.get(id)
 					if (!entry) continue
@@ -162,23 +161,22 @@ export class SpatialHash {
 	 */
 	queryAABB(minX: number, minZ: number, maxX: number, maxZ: number): readonly number[] {
 		this.queryResult.length = 0
+		this.querySeen.clear()
 
 		const minCellX = Math.floor(minX / this.cellSize)
 		const maxCellX = Math.floor(maxX / this.cellSize)
 		const minCellZ = Math.floor(minZ / this.cellSize)
 		const maxCellZ = Math.floor(maxZ / this.cellSize)
 
-		const seen = new Set<number>()
-
 		for (let cx = minCellX; cx <= maxCellX; cx++) {
 			for (let cz = minCellZ; cz <= maxCellZ; cz++) {
-				const key = `${cx},${cz}`
+				const key = this.getCellKey(cx, cz)
 				const cell = this.cells.get(key)
 				if (!cell) continue
 
 				for (const id of cell) {
-					if (seen.has(id)) continue
-					seen.add(id)
+					if (this.querySeen.has(id)) continue
+					this.querySeen.add(id)
 
 					const entry = this.entries.get(id)
 					if (!entry) continue
