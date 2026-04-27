@@ -102,6 +102,12 @@ interface Ghost {
   fadeTimer: number;
   /** Cached current frame index (linear search hint). */
   lastFrameIdx: number;
+  /** World position where this ghost spawned. */
+  spawnPosition: THREE.Vector3;
+  /** Time in seconds since run start when name-tag should be visible. */
+  nameVisibleTime: number;
+  /** True once name-tag fade-in has completed. */
+  nameFullyVisible: boolean;
 }
 
 /** Particle burst that plays when a ghost fades out. */
@@ -199,6 +205,9 @@ export class GhostManager {
 
     group.visible = this.enabled;
 
+    // Start with name-tag hidden — will fade in once ghost has spread out.
+    nameMaterial.opacity = 0;
+
     return {
       record,
       group,
@@ -211,6 +220,9 @@ export class GhostManager {
       outlasted: false,
       fadeTimer: 0,
       lastFrameIdx: 0,
+      spawnPosition: new THREE.Vector3(0, 0, 0),
+      nameVisibleTime: -1,
+      nameFullyVisible: false,
     };
   }
 
@@ -224,8 +236,15 @@ export class GhostManager {
       g.fadeTimer = 0;
       g.lastFrameIdx = 0;
       g.material.opacity = GHOST_OPACITY;
-      g.nameMaterial.opacity = 0.7;
+      g.nameMaterial.opacity = 0; // Start hidden — fade in once spread out
       g.group.visible = this.enabled;
+      g.nameVisibleTime = -1;
+      g.nameFullyVisible = false;
+      // Record spawn position from first frame.
+      if (g.record.frames.length > 0) {
+        const first = g.record.frames[0];
+        g.spawnPosition.set(first.x, 0, first.z);
+      }
     }
   }
 
@@ -251,7 +270,9 @@ export class GhostManager {
         g.fadeTimer -= dt;
         const fade = Math.max(0, g.fadeTimer / 0.6);
         g.material.opacity = GHOST_OPACITY * fade;
-        g.nameMaterial.opacity = 0.7 * fade;
+        // If name never faded in (very short ghost run), fade from current opacity.
+        const currentNameOpacity = g.nameMaterial.opacity;
+        g.nameMaterial.opacity = Math.max(currentNameOpacity, 0.7) * fade;
         if (g.fadeTimer <= 0) {
           g.finished = true;
           g.group.visible = false;
@@ -281,6 +302,23 @@ export class GhostManager {
       const shattered = a.shattered === 1;
       const targetOpacity = shattered ? GHOST_OPACITY * 0.4 : GHOST_OPACITY;
       g.material.opacity = THREE.MathUtils.lerp(g.material.opacity, targetOpacity, 1 - Math.exp(-8 * dt));
+
+      // Name-tag fade-in: delay until ghost has been alive >300ms OR moved >0.5 units.
+      if (!g.nameFullyVisible) {
+        const distFromSpawn = g.spawnPosition.distanceTo(g.group.position);
+        const aliveEnough = this.runTime >= 0.3;
+        const movedEnough = distFromSpawn >= 0.5;
+        if (aliveEnough || movedEnough) {
+          if (g.nameVisibleTime < 0) {
+            g.nameVisibleTime = this.runTime;
+          }
+          const fadeElapsed = this.runTime - g.nameVisibleTime;
+          const fadeDuration = 0.2;
+          const fade = Math.min(1, fadeElapsed / fadeDuration);
+          g.nameMaterial.opacity = 0.7 * fade;
+          if (fade >= 1) g.nameFullyVisible = true;
+        }
+      }
     }
 
     // Advance bursts.
