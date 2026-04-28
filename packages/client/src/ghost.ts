@@ -84,15 +84,18 @@ const GHOST_COLORS = [
   { hex: 0xcccccc, label: "silver" },
 ];
 
-const GHOST_OPACITY = 0.45;
+const GHOST_OPACITY = 0.7;
+const GHOST_FILL_OPACITY = 0.22;
 const NAME_SPRITE_SCALE = 1.4;
 /** Vertical lift so the ghost crystal floats clearly above the player's lane.
  *  Without this it spawns at y=0 — same plane as the player — and the
  *  semi-transparent wireframe is invisible behind the cyan player crystal. */
-const GHOST_Y_LIFT = 1.4;
+const GHOST_Y_LIFT = 1.8;
 /** Lateral offset per ghost, alternating sides, so multiple ghosts spread
- *  out instead of stacking on the player's path. Index 0 → +1.6, 1 → -1.6, etc. */
-const GHOST_LANE_SPREAD = 1.6;
+ *  out instead of stacking on the player's path. Index 0 → +2.4, 1 → -2.4, etc.
+ *  Big enough that a 1-ghost race is unmistakably visible to the side of
+ *  the player, not partially occluded by the cyan crystal. */
+const GHOST_LANE_SPREAD = 2.4;
 
 /** One running ghost. */
 interface Ghost {
@@ -100,6 +103,9 @@ interface Ghost {
   group: THREE.Group;
   mesh: THREE.Mesh;
   material: THREE.MeshBasicMaterial;
+  /** Solid soft-fill shell behind the wireframe — keeps the ghost readable
+   *  even when the wireframe lines pixel-thin out at distance. */
+  fillMaterial: THREE.MeshBasicMaterial;
   nameSprite: THREE.Sprite;
   nameMaterial: THREE.SpriteMaterial;
   color: number;
@@ -196,7 +202,20 @@ export class GhostManager {
   private createGhost(record: GhostRecord, color: number, laneOffsetX: number): Ghost {
     const group = new THREE.Group();
 
-    // Wireframe icosahedron — same geo as player crystal, but hollow-looking.
+    // Solid fill icosahedron — gives the ghost visual presence so it reads as
+    // an object, not just a few floating wireframe lines. Soft, low-opacity
+    // tinted shell that the wireframe rides on top of.
+    const fillGeo = new THREE.IcosahedronGeometry(0.58, 0);
+    const fillMaterial = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: GHOST_FILL_OPACITY,
+      depthWrite: false,
+    });
+    const fillMesh = new THREE.Mesh(fillGeo, fillMaterial);
+    group.add(fillMesh);
+
+    // Wireframe icosahedron — same geo as player crystal, hollow-looking.
     const geo = new THREE.IcosahedronGeometry(0.6, 0);
     const material = new THREE.MeshBasicMaterial({
       color,
@@ -232,6 +251,7 @@ export class GhostManager {
       group,
       mesh,
       material,
+      fillMaterial,
       nameSprite,
       nameMaterial,
       color,
@@ -256,6 +276,7 @@ export class GhostManager {
       g.fadeTimer = 0;
       g.lastFrameIdx = 0;
       g.material.opacity = GHOST_OPACITY;
+      g.fillMaterial.opacity = GHOST_FILL_OPACITY;
       g.nameMaterial.opacity = 0; // Start hidden — fade in once spread out
       g.group.visible = this.enabled;
       g.nameVisibleTime = -1;
@@ -291,6 +312,7 @@ export class GhostManager {
         g.fadeTimer -= dt;
         const fade = Math.max(0, g.fadeTimer / 0.6);
         g.material.opacity = GHOST_OPACITY * fade;
+        g.fillMaterial.opacity = GHOST_FILL_OPACITY * fade;
         // If name never faded in (very short ghost run), fade from current opacity.
         const currentNameOpacity = g.nameMaterial.opacity;
         g.nameMaterial.opacity = Math.max(currentNameOpacity, 0.7) * fade;
@@ -326,6 +348,8 @@ export class GhostManager {
       const shattered = a.shattered === 1;
       const targetOpacity = shattered ? GHOST_OPACITY * 0.4 : GHOST_OPACITY;
       g.material.opacity = THREE.MathUtils.lerp(g.material.opacity, targetOpacity, 1 - Math.exp(-8 * dt));
+      const targetFillOpacity = shattered ? GHOST_FILL_OPACITY * 0.4 : GHOST_FILL_OPACITY;
+      g.fillMaterial.opacity = THREE.MathUtils.lerp(g.fillMaterial.opacity, targetFillOpacity, 1 - Math.exp(-8 * dt));
 
       // Name-tag fade-in: delay until ghost has been alive >300ms OR moved >0.5 units.
       if (!g.nameFullyVisible) {

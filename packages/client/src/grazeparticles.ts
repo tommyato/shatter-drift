@@ -125,8 +125,8 @@ export class GrazeParticleStream {
     const toY = targetRect.top + targetRect.height / 2 - parentRect.top;
 
     const clamped = Math.max(0, Math.min(1, intensity));
-    const count = Math.round(4 + clamped * 12); // 4 → 16
-    const baseSize = 3 + clamped * 3;            // 3 → 6 px
+    const count = Math.round(8 + clamped * 16); // 8 → 24 — louder so the trail reads at a glance
+    const baseSize = 4 + clamped * 4;            // 4 → 8 px
     const dur = PARTICLE_DURATION + Math.random() * 0.08;
 
     let spawned = 0;
@@ -176,8 +176,11 @@ export class GrazeParticleStream {
       if (this.targetPulseEl) {
         const k = this.pulseTimer / 0.3; // 0..1ish
         const k01 = Math.max(0, Math.min(1, k));
-        this.targetPulseEl.style.filter = `brightness(${1 + k01 * 0.8}) saturate(${1 + k01 * 0.5})`;
-        this.targetPulseEl.style.transform = `scale(${1 + k01 * 0.15})`;
+        // Louder arrival: bigger brightness lift + scale-Y pop so the bar
+        // visibly thickens when graze particles land. Score target keeps a
+        // gentler lift since it's a chunky number, not a thin pill.
+        this.targetPulseEl.style.filter = `brightness(${1 + k01 * 1.4}) saturate(${1 + k01 * 0.6})`;
+        this.targetPulseEl.style.transform = `scale(${1 + k01 * 0.25})`;
       }
     } else if (this.targetPulseEl && this.targetPulseEl.style.filter) {
       this.targetPulseEl.style.filter = "";

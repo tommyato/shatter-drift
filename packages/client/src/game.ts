@@ -714,9 +714,9 @@ export class Game {
     // too subtle once the bar moved from left-edge (vertical) to bottom
     // (small + horizontal, easy to miss).
     this.grazeStream = new GrazeParticleStream(document.body, {
-      color: "#9bf7ff",
+      color: "#aef9ff",
       glowColor: "#00ccff",
-      glowSize: "10px",
+      glowSize: "14px",
       zIndex: "25",
     });
     this.grazeStream.setBarTarget(this.hudPhaseMeter, this.hudPhaseFill);
