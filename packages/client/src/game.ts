@@ -423,8 +423,6 @@ export class Game {
   private hudPhaseMeter!: HTMLElement;
   private hudPhaseFill!: HTMLElement;
   private hudPhaseWarnVignette!: HTMLElement;
-  private hudGrazeMeter!: HTMLElement;
-  private hudGrazeFill!: HTMLElement;
   private titleOverlay!: HTMLElement;
   private titleLeaderboardEl: HTMLElement | null = null;
   private titleLeaderboardToggleEl: HTMLButtonElement | null = null;
@@ -697,11 +695,9 @@ export class Game {
     this.hudPhaseMeter = document.getElementById("hud-phase-meter")!;
     this.hudPhaseFill = document.getElementById("hud-phase-fill")!;
     this.hudPhaseWarnVignette = document.getElementById("hud-phase-warn-vignette")!;
-    this.hudGrazeMeter = document.getElementById("hud-graze-meter")!;
-    this.hudGrazeFill = document.getElementById("hud-graze-fill")!;
-    // Particle stream from player → graze bar on near-miss; intensity scales count.
+    // Particle stream from player → phase bar on near-miss; intensity scales count.
     this.grazeStream = new GrazeParticleStream(document.body);
-    this.grazeStream.setBarTarget(this.hudGrazeMeter, this.hudGrazeFill);
+    this.grazeStream.setBarTarget(this.hudPhaseMeter, this.hudPhaseFill);
     this.hudBoostFillEl = document.getElementById("hud-boost-fill") as SVGElement | null;
     this.hudBrakeFillEl = document.getElementById("hud-brake-fill") as SVGElement | null;
 
@@ -2283,7 +2279,7 @@ export class Game {
     this.hudCombo.textContent = "MULTI";
     this.hudState.textContent = this.player.shattered ? "PHASE" : "SOLID";
     this.updatePhaseHud();
-    this.updateGrazeMeterHud();
+    this.updateNearMissHint();
     this.updateBoostBrakeHud(dt);
   }
 
@@ -2440,7 +2436,7 @@ export class Game {
     this.player.applySkin(this.unlocks.getSelectedCrystal());
     this.player.group.visible = true;
     this.updatePhaseHud();
-    this.updateGrazeMeterHud();
+    this.updateNearMissHint();
     this.onnxAgent?.reset();
 
     // Hide title + customize immediately; HUD revealed when launch completes
@@ -3372,7 +3368,7 @@ export class Game {
     this.hudDistance.textContent = `${this.distance}m`;
     this.hudSpeed.textContent = `${Math.floor(this.speed)} m/s`;
     this.updatePhaseHud();
-    this.updateGrazeMeterHud();
+    this.updateNearMissHint();
     this.updateBoostBrakeHud(dt);
 
     if (this.combo > 1) {
@@ -3682,45 +3678,8 @@ export class Game {
     return minDist;
   }
 
-  private updateGrazeMeterHud() {
-    const fillPct = this.phaseMeter; // 0..100
-    const ready = this.phaseMeter >= GRAZE_PHASE_COST;
-    const isGrazing = !this.player.shattered && this.grazeThrottleTimer > 0;
 
-    this.hudGrazeFill.style.height = `${fillPct}%`;
-
-    // Rejection flash overrides all other colour states (red pulse)
-    if (this.meterRejectionTimer > 0) {
-      const t = this.meterRejectionTimer / 0.3;
-      const pulse = Math.sin(t * Math.PI); // 0 → peak → 0
-      this.hudGrazeFill.style.background = "#ff3030";
-      this.hudGrazeFill.style.boxShadow = `0 0 ${4 + pulse * 10}px rgba(255,48,48,${0.3 + pulse * 0.5})`;
-      this.hudGrazeMeter.style.opacity = String(0.6 + pulse * 0.4);
-    } else if (ready) {
-      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
-      this.hudGrazeFill.style.background = "#00ccff";
-      this.hudGrazeFill.style.boxShadow = `0 0 ${6 + pulse * 4}px rgba(0,204,255,${0.5 + pulse * 0.3})`;
-      this.hudGrazeMeter.style.opacity = String(0.7 + pulse * 0.25);
-    } else if (isGrazing) {
-      this.hudGrazeFill.style.background = "#00eeff";
-      this.hudGrazeFill.style.boxShadow = "0 0 8px rgba(0,238,255,0.6)";
-      this.hudGrazeMeter.style.opacity = "0.85";
-    } else {
-      this.hudGrazeFill.style.background = "#0099cc";
-      this.hudGrazeFill.style.boxShadow = "0 0 4px rgba(0,153,204,0.3)";
-      this.hudGrazeMeter.style.opacity = fillPct > 5 ? "0.5" : "0.25";
-    }
-
-    // Graze flash: brief scale bounce on the meter container (1.0 → 1.1 → 1.0 over 150ms)
-    if (this.meterFlashTimer > 0) {
-      const t = this.meterFlashTimer / 0.15; // 1 → 0
-      const scaleY = 1 + 0.1 * Math.sin(t * Math.PI);
-      this.hudGrazeMeter.style.transform = `scaleY(${scaleY.toFixed(3)})`;
-      this.hudGrazeMeter.style.transformOrigin = "bottom center";
-    } else {
-      this.hudGrazeMeter.style.transform = "";
-    }
-
+  private updateNearMissHint() {
     // "NEAR MISS TO CHARGE" hint: pulsing, shown when meter < 30% and obstacle recently in range
     if (this.nearMissHintEl) {
       const showHint = this.phaseMeter < 30 && this.nearMissHintObstacleTimer > 0;
