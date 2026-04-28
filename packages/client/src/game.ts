@@ -327,6 +327,7 @@ export class Game {
   private popups!: ScorePopups;
   private shockwave!: ShockwaveEffect;
   private grazeStream!: GrazeParticleStream;
+  private scoreStream!: GrazeParticleStream; // gem→score particles
   private envParticles!: EnvironmentParticles;
   private skybox!: SkyboxManager;
   private tutorial!: Tutorial;
@@ -697,6 +698,14 @@ export class Game {
     // Particle stream from player → phase bar on near-miss; intensity scales count.
     this.grazeStream = new GrazeParticleStream(document.body);
     this.grazeStream.setBarTarget(this.hudPhaseMeter, this.hudPhaseFill);
+    // Particle stream from gems → score HUD; yellow/orange to match gem color.
+    this.scoreStream = new GrazeParticleStream(document.body, {
+      color: "#ffcc00",
+      glowColor: "#ffaa00",
+      glowSize: "8px",
+      zIndex: "26", // above graze particles
+    });
+    this.scoreStream.setTarget(this.hudScore, this.hudScore);
     this.hudBoostFillEl = document.getElementById("hud-boost-fill") as SVGElement | null;
     this.hudBrakeFillEl = document.getElementById("hud-brake-fill") as SVGElement | null;
 
@@ -1719,6 +1728,7 @@ export class Game {
     this.popups.update(dt);
     this.shockwave.update(dt);
     this.grazeStream.update(dt);
+    this.scoreStream.update(dt);
     this.envParticles.update(dt, this.playerZ);
     this.skybox.update(
       this.biomes.biomeIndex,
@@ -3154,10 +3164,19 @@ export class Game {
           new THREE.Vector3(orb.x, orb.y, orb.z)
         );
 
+        // Emit gem→score particle trail (yellow/orange)
+        const orbWorldPos = new THREE.Vector3(orb.x, orb.y, orb.z);
+        orbWorldPos.project(this.camera);
+        const bodyRect = document.body.getBoundingClientRect();
+        const orbScreenX = (orbWorldPos.x * 0.5 + 0.5) * bodyRect.width;
+        const orbScreenY = (-orbWorldPos.y * 0.5 + 0.5) * bodyRect.height;
+        // Scale intensity with combo (0 at combo 1, 1 at combo 10) → particle count 4..8
+        const comboIntensity = Math.min(1, (this.combo - 1) / 9);
+        this.scoreStream.emit(orbScreenX, orbScreenY, comboIntensity);
+
         // Score flash effect on big combos (no per-crystal popup — too noisy)
+        // Note: score element pulse is handled by scoreStream arrival pulse; no manual scale needed.
         if (this.combo >= 5) {
-          this.hudScore.style.transform = "scale(1.2)";
-          setTimeout(() => { this.hudScore.style.transform = "scale(1)"; }, 100);
           // PostFX distort on high combos
           this.postfx.triggerDistort(0.2 + Math.min(this.combo, COMBO_MAX) * 0.03);
         }
@@ -4342,6 +4361,7 @@ export class Game {
 
     // Drop any in-flight near-miss particles so they don't linger on title.
     this.grazeStream.clearAll();
+    this.scoreStream.clearAll();
 
     // Restore HUD state indicator for the next run.
     this.hudState.style.display = "";

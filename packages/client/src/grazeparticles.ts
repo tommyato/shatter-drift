@@ -9,6 +9,8 @@
  * Implementation: 64 absolute-positioned divs pre-created inside a container.
  * Each particle stores its from/to/start time/duration; update() advances
  * position via lerp + slight upward arc and fades alpha out near the end.
+ *
+ * Also used for gem→score trail with different colors.
  */
 
 const POOL_SIZE = 64;
@@ -28,16 +30,32 @@ interface Particle {
   jitterX: number; // small random offset along travel
 }
 
+interface ParticleStreamConfig {
+  color: string;         // particle base color
+  glowColor: string;     // glow/shadow color
+  glowSize: string;      // e.g. "6px" for inner, "12px" for outer
+  zIndex: string;        // CSS z-index for container
+}
+
 export class GrazeParticleStream {
   private container: HTMLDivElement;
   private particles: Particle[] = [];
-  private barEl: HTMLElement | null = null;
-  private barFillEl: HTMLElement | null = null;
+  private targetEl: HTMLElement | null = null;
+  private targetPulseEl: HTMLElement | null = null;
   private pulseTimer = 0;
+  private config: ParticleStreamConfig;
 
-  constructor(parent: HTMLElement) {
+  constructor(parent: HTMLElement, config?: Partial<ParticleStreamConfig>) {
+    // Default: cyan graze particles
+    this.config = {
+      color: config?.color ?? "#66f5ff",
+      glowColor: config?.glowColor ?? "#00ccff",
+      glowSize: config?.glowSize ?? "6px",
+      zIndex: config?.zIndex ?? "25",
+    };
+
     this.container = document.createElement("div");
-    this.container.id = "graze-particle-stream";
+    this.container.className = "particle-stream";
     this.container.style.cssText = [
       "position: absolute",
       "top: 0",
@@ -45,18 +63,20 @@ export class GrazeParticleStream {
       "width: 100%",
       "height: 100%",
       "pointer-events: none",
-      "z-index: 25", // above HUD bits, below center messages
+      `z-index: ${this.config.zIndex}`, // above HUD bits, below center messages
       "overflow: hidden",
     ].join(";");
     parent.appendChild(this.container);
 
     for (let i = 0; i < POOL_SIZE; i++) {
       const el = document.createElement("div");
+      const shadowSize = parseInt(this.config.glowSize, 10) || 6;
+      const outerSize = shadowSize * 2;
       el.style.cssText = [
         "position: absolute",
         "border-radius: 50%",
-        "background: #66f5ff",
-        "box-shadow: 0 0 6px #00ccff, 0 0 12px rgba(0,204,255,0.6)",
+        `background: ${this.config.color}`,
+        `box-shadow: 0 0 ${shadowSize}px ${this.config.glowColor}, 0 0 ${outerSize}px rgba(${this.hexToRgb(this.config.glowColor)},0.6)`,
         "opacity: 0",
         "will-change: transform, opacity",
         "pointer-events: none",
@@ -70,26 +90,39 @@ export class GrazeParticleStream {
     }
   }
 
-  /** Cache the phase-bar elements once they're in the DOM. */
+  private hexToRgb(hex: string): string {
+    const cleaned = hex.replace("#", "");
+    const r = parseInt(cleaned.substring(0, 2), 16);
+    const g = parseInt(cleaned.substring(2, 4), 16);
+    const b = parseInt(cleaned.substring(4, 6), 16);
+    return `${r},${g},${b}`;
+  }
+
+  /** Cache the target HUD element and optional pulse element. */
+  setTarget(targetEl: HTMLElement, pulseEl?: HTMLElement) {
+    this.targetEl = targetEl;
+    this.targetPulseEl = pulseEl ?? null;
+  }
+
+  /** Backwards-compat alias for graze stream. */
   setBarTarget(barEl: HTMLElement, fillEl: HTMLElement | null) {
-    this.barEl = barEl;
-    this.barFillEl = fillEl;
+    this.setTarget(barEl, fillEl ?? undefined);
   }
 
   /**
    * Emit a burst of particles from a screen-space (px) position toward the
-   * cached phase bar. Intensity scales count and size.
+   * cached target element. Intensity scales count and size.
    * @param fromX  body-relative x in px
    * @param fromY  body-relative y in px
-   * @param intensity 0..1 — proximity ratio (1 = razor-thin miss)
+   * @param intensity 0..1 — proximity ratio (1 = razor-thin miss) or combo scale
    */
   emit(fromX: number, fromY: number, intensity: number) {
-    if (!this.barEl) return;
+    if (!this.targetEl) return;
     const parentRect = this.container.getBoundingClientRect();
-    const barRect = this.barEl.getBoundingClientRect();
-    // Aim near the right edge of the meter so particles "pour into" the fill.
-    const toX = barRect.right - parentRect.left - 8;
-    const toY = barRect.top + barRect.height / 2 - parentRect.top;
+    const targetRect = this.targetEl.getBoundingClientRect();
+    // Aim near center or right edge depending on target shape
+    const toX = targetRect.left + targetRect.width * 0.8 - parentRect.left;
+    const toY = targetRect.top + targetRect.height / 2 - parentRect.top;
 
     const clamped = Math.max(0, Math.min(1, intensity));
     const count = Math.round(4 + clamped * 12); // 4 → 16
@@ -137,16 +170,18 @@ export class GrazeParticleStream {
         p.el.style.opacity = "0";
       }
     }
-    // Bar fill pulse: brighten + tiny scale on the fill element while pulseTimer > 0
+    // Target pulse: brighten + tiny scale on the pulse element while pulseTimer > 0
     if (this.pulseTimer > 0) {
       this.pulseTimer = Math.max(0, this.pulseTimer - dt);
-      if (this.barFillEl) {
+      if (this.targetPulseEl) {
         const k = this.pulseTimer / 0.3; // 0..1ish
         const k01 = Math.max(0, Math.min(1, k));
-        this.barFillEl.style.filter = `brightness(${1 + k01 * 0.8}) saturate(${1 + k01 * 0.5})`;
+        this.targetPulseEl.style.filter = `brightness(${1 + k01 * 0.8}) saturate(${1 + k01 * 0.5})`;
+        this.targetPulseEl.style.transform = `scale(${1 + k01 * 0.15})`;
       }
-    } else if (this.barFillEl && this.barFillEl.style.filter) {
-      this.barFillEl.style.filter = "";
+    } else if (this.targetPulseEl && this.targetPulseEl.style.filter) {
+      this.targetPulseEl.style.filter = "";
+      this.targetPulseEl.style.transform = "";
     }
   }
 
@@ -156,6 +191,9 @@ export class GrazeParticleStream {
       p.el.style.opacity = "0";
     }
     this.pulseTimer = 0;
-    if (this.barFillEl) this.barFillEl.style.filter = "";
+    if (this.targetPulseEl) {
+      this.targetPulseEl.style.filter = "";
+      this.targetPulseEl.style.transform = "";
+    }
   }
 }
