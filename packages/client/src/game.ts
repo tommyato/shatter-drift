@@ -2248,7 +2248,7 @@ export class Game {
     this.phaseLocked = false;
     this.phaseCooldown = 0;
     this.phaseMinTimer = 0;
-    this.phaseMeter = 50;
+    this.phaseMeter = 100;
     this.grazeThrottleTimer = 0;
     this.rejectionThrottleTimer = 0;
     this.meterFlashTimer = 0;
