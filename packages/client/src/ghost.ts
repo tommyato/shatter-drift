@@ -158,10 +158,14 @@ export class GhostManager {
     return this.ghosts.map(g => g.record);
   }
 
-  /** Populate ghosts from fetched records. Call before gameplay starts. */
+  /** Populate ghosts from fetched records. Call before gameplay starts.
+   *  The legacy "top 3 ghosts as ambient racers" cap was removed: the game
+   *  now passes either zero (normal run) or one (Race This Ghost) record
+   *  per the single-ghost race model — ambient ghosts ran on the wrong
+   *  seed and produced unrelated obstacle layouts, so they weren't a race. */
   loadGhosts(records: GhostRecord[]) {
     this.clear();
-    for (let i = 0; i < Math.min(records.length, 3); i++) {
+    for (let i = 0; i < records.length; i++) {
       const record = records[i];
       if (!record.frames || record.frames.length < 2) continue;
       const colorSpec = GHOST_COLORS[i % GHOST_COLORS.length];

@@ -253,7 +253,9 @@
       opacity: 1;
     }
 
-    /* Center message */
+    /* Center message — default centered (used for transient overlays). When
+       in game-over mode the layout switches to a flex column that fills the
+       viewport: stats scroll inside, action buttons stay pinned visible. */
     #center-message {
       position: absolute;
       top: 50%;
@@ -270,6 +272,107 @@
     }
 
     #center-message::-webkit-scrollbar { display: none; }
+    #center-message #center-stats::-webkit-scrollbar { display: none; }
+
+    /* Game-over layout: flex column anchored top→bottom inside the body.
+       title: fixed at top; stats: scrolls inside; retry+actions: pinned at bottom. */
+    #center-message.is-gameover {
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      width: 90%;
+      max-width: 600px;
+      height: 100%;
+      max-height: 100%;
+      padding: 12px 0 16px;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    #center-message.is-gameover h2 {
+      flex: 0 0 auto;
+      margin-bottom: 6px;
+      font-size: clamp(28px, 5vw, 48px);
+    }
+    #center-message.is-gameover #center-stats {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      scrollbar-width: none;
+      pointer-events: auto;
+      padding: 0 4px;
+    }
+    #center-message.is-gameover .retry {
+      flex: 0 0 auto;
+      margin-top: 12px;
+      pointer-events: auto;
+    }
+    #center-message.is-gameover #center-actions {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      pointer-events: auto;
+    }
+    #center-back-to-title {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 10px 28px;
+      font-family: 'Orbitron', monospace;
+      font-size: 12px;
+      font-weight: 400;
+      letter-spacing: 3px;
+      color: #668899;
+      background: rgba(0,20,30,0.5);
+      border: 1px solid #334455;
+      border-radius: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      pointer-events: auto;
+    }
+    #center-back-to-title:hover {
+      color: #00ffcc;
+      border-color: #00ffcc;
+      background: rgba(0,255,204,0.05);
+      text-shadow: 0 0 10px rgba(0,255,204,0.3);
+    }
+
+    /* Tighten game-over text so it fits under retry+back buttons on
+       short viewports (e.g. 1280×720 frame, mobile narrow). */
+    #center-message.is-gameover .stats { line-height: 1.6; }
+    @media (max-height: 760px), (max-width: 719px) {
+      #center-message.is-gameover .retry { margin-top: 8px; font-size: 14px; }
+      #center-message.is-gameover h2 { font-size: clamp(26px, 6vw, 38px); margin-bottom: 4px; }
+      #center-message.is-gameover { padding: 8px 0 12px; }
+    }
+
+    /* Hide all in-game HUD bits while game-over is showing. Center message,
+       blur overlay, and game-over content stay visible. */
+    #hud.is-gameover #hud-score,
+    #hud.is-gameover #hud-distance,
+    #hud.is-gameover #hud-speed,
+    #hud.is-gameover #hud-combo,
+    #hud.is-gameover #hud-powerup,
+    #hud.is-gameover #hud-boss-warning,
+    #hud.is-gameover #hud-phase-meter,
+    #hud.is-gameover #hud-graze-meter,
+    #hud.is-gameover #hud-graze-label,
+    #hud.is-gameover #hud-boost-ring,
+    #hud.is-gameover #hud-brake-ring,
+    #hud.is-gameover #daily-banner,
+    #hud.is-gameover #hud-state-indicator,
+    #hud.is-gameover #hud-phase-warn-vignette,
+    #hud.is-gameover ~ #near-miss-hint,
+    body.is-gameover #near-miss-hint,
+    body.is-gameover #graze-particle-stream {
+      opacity: 0 !important;
+      visibility: hidden !important;
+    }
 
     #center-message h2 {
       font-size: clamp(32px, 6vw, 56px);
@@ -1362,6 +1465,9 @@
         <h2 id="center-title"></h2>
         <div class="stats" id="center-stats"></div>
         <div class="retry" id="center-retry"></div>
+        <div id="center-actions">
+          <button id="center-back-to-title" type="button" data-ui>BACK TO TITLE</button>
+        </div>
       </div>
     </div>
 

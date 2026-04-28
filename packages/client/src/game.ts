@@ -17,6 +17,7 @@ import { MilestoneTracker } from "./milestones";
 import { BossWaveManager } from "./bosswaves";
 import { ScorePopups } from "./popups";
 import { ShockwaveEffect } from "./shockwave";
+import { GrazeParticleStream } from "./grazeparticles";
 import { EnvironmentParticles } from "./environment";
 import { SkyboxManager } from "./skybox";
 import { Tutorial } from "./tutorial";
@@ -325,6 +326,7 @@ export class Game {
   private bossWaves!: BossWaveManager;
   private popups!: ScorePopups;
   private shockwave!: ShockwaveEffect;
+  private grazeStream!: GrazeParticleStream;
   private envParticles!: EnvironmentParticles;
   private skybox!: SkyboxManager;
   private tutorial!: Tutorial;
@@ -495,9 +497,16 @@ export class Game {
   private runSeed = 0;
   /** Ghost records from the last successful fetchGhosts() — source of truth for race selection. */
   private cachedGhosts: GhostRecord[] = [];
-  /** Set before startGame() to race a specific ghost on its own seed. Cleared in startGame(). */
+  /** One-shot transitional state set when the user clicks RACE — copied into
+   *  currentRaceGhostId/Seed at the next startGame() and then cleared. Kept
+   *  separate from the persistent fields so the legacy entry points (which
+   *  set "pending" right before calling startGame) keep working unchanged. */
   private pendingRaceSeed: number | null = null;
   private pendingRaceGhostId: string | null = null;
+  /** Persistent ghost-race selection: survives RETRY, cleared by BACK TO TITLE
+   *  or by starting a fresh non-race run from the title (PLAY / DAILY). */
+  private currentRaceGhostId: string | null = null;
+  private currentRaceSeed: number | null = null;
   /** Name of the ghost being raced this run — shown in the race chip HUD element. */
   private racingGhostName: string | null = null;
   /** HUD chip that shows "RACING: NAME" when chasing a specific ghost. */
@@ -690,11 +699,15 @@ export class Game {
     this.hudPhaseWarnVignette = document.getElementById("hud-phase-warn-vignette")!;
     this.hudGrazeMeter = document.getElementById("hud-graze-meter")!;
     this.hudGrazeFill = document.getElementById("hud-graze-fill")!;
+    // Particle stream from player → graze bar on near-miss; intensity scales count.
+    this.grazeStream = new GrazeParticleStream(document.body);
+    this.grazeStream.setBarTarget(this.hudGrazeMeter, this.hudGrazeFill);
     this.hudBoostFillEl = document.getElementById("hud-boost-fill") as SVGElement | null;
     this.hudBrakeFillEl = document.getElementById("hud-brake-fill") as SVGElement | null;
 
     // "NEAR MISS TO CHARGE" pulsing hint — appears near the meter when meter is low and an obstacle is approaching
     this.nearMissHintEl = document.createElement("div");
+    this.nearMissHintEl.id = "near-miss-hint";
     this.nearMissHintEl.textContent = "NEAR MISS TO CHARGE";
     this.nearMissHintEl.style.cssText = [
       "position: fixed",
@@ -818,6 +831,9 @@ export class Game {
     if (playBtn) {
       playBtn.addEventListener("click", (e) => {
         e.stopPropagation();
+        // PLAY = fresh normal run; abandon any persistent ghost-race lock.
+        this.currentRaceGhostId = null;
+        this.currentRaceSeed = null;
         this.startGame(false);
       });
       playBtn.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -901,13 +917,15 @@ export class Game {
   private applyGameOverMenuScope() {
     // Retry first so mash-Enter / gamepad-A defaults to "retry" — matches
     // the "PRESS SPACE OR CLICK TO RETRY" prompt the player sees. Arrows
-    // navigate to STATS / LEADERBOARD tabs and the SHARE button.
+    // navigate to STATS / LEADERBOARD tabs, SHARE, then BACK TO TITLE.
     const items: HTMLElement[] = [];
     if (this.centerRetry) items.push(this.centerRetry);
     const tabs = document.querySelectorAll<HTMLElement>(".go-tab");
     tabs.forEach((el) => items.push(el));
     const share = document.getElementById("share-x-btn");
     if (share) items.push(share);
+    const back = document.getElementById("center-back-to-title");
+    if (back) items.push(back);
     this.menuNav.setScope(items);
   }
 
@@ -951,16 +969,17 @@ export class Game {
     this.titleLeaderboardToggleEl.textContent = expanded ? "TOP RUNS ▲" : "TOP RUNS ▼";
   }
 
-  /** Fetch ghost recordings + upload threshold in parallel. Fire-and-forget. */
+  /** Fetch ghost recordings + upload threshold in parallel. Fire-and-forget.
+   *  We cache the records but don't pre-load them into ghostManager — the
+   *  single-ghost race model loads exactly one record at startGame() time. */
   private async loadGhostsAsync() {
     try {
       const [ghosts, threshold] = await Promise.all([
-        fetchGhosts(10), // fetch top 10 — ghostManager caps active racers at 3; extras power the title leaderboard
+        fetchGhosts(10), // top 10 — powers the title leaderboard's RACE list
         fetchGhostUploadThreshold(),
       ]);
       this.ghostUploadThreshold = threshold;
-      this.cachedGhosts = ghosts; // keep for race selection and pool restoration between runs
-      this.ghostManager.loadGhosts(ghosts);
+      this.cachedGhosts = ghosts; // source of truth for race selection
       this.updateTitleGhostLine();
       this.populateTitleLeaderboard(ghosts);
     } catch {
@@ -979,17 +998,12 @@ export class Game {
     }
   }
 
-  /** Update the "Racing against N ghosts" line on the title screen. */
+  /** Legacy "Racing against N ghosts" line — dead under the single-ghost
+   *  race model. Kept as a no-op to retain the call sites' invariants
+   *  (always hide the line) without restoring the multi-ghost affordance. */
   private updateTitleGhostLine() {
     const el = document.getElementById("title-ghost-line");
-    if (!el) return;
-    const n = this.ghostManager?.ghostCount ?? 0;
-    if (n > 0 && this.ghostToggle) {
-      el.textContent = `👻 Racing against ${n} ghost${n === 1 ? "" : "s"}`;
-      el.style.display = "";
-    } else {
-      el.style.display = "none";
-    }
+    if (el) el.style.display = "none";
   }
 
   /** Populate the title screen leaderboard from fetched ghost records. */
@@ -1721,6 +1735,7 @@ export class Game {
     this.milestones.update(dt);
     this.popups.update(dt);
     this.shockwave.update(dt);
+    this.grazeStream.update(dt);
     this.envParticles.update(dt, this.playerZ);
     this.skybox.update(
       this.biomes.biomeIndex,
@@ -1770,6 +1785,9 @@ export class Game {
 
     if (this.dailyChallengeQueued) {
       this.dailyChallengeQueued = false;
+      // DAILY = fresh deterministic run; abandon any persistent ghost-race lock.
+      this.currentRaceGhostId = null;
+      this.currentRaceSeed = null;
       this.startGame(true);
       return;
     }
@@ -1784,6 +1802,9 @@ export class Game {
       this.menuNavSuppressFrames === 0 &&
       this.input.justPressed("click")
     ) {
+      // Fresh normal run; abandon any persistent ghost-race lock.
+      this.currentRaceGhostId = null;
+      this.currentRaceSeed = null;
       this.startGame(false);
     }
   }
@@ -1864,6 +1885,10 @@ export class Game {
     this.player.shattered = false;
     this.player.group.position.set(0, 0, 0);
     this.hud.classList.add("hidden");
+    this.hud.classList.remove("is-gameover");
+    document.body.classList.remove("is-gameover");
+    this.centerMessage.classList.remove("is-gameover");
+    this.gameOverOverlay.classList.remove("active");
     this.titleOverlay.classList.remove("hidden");
     this.centerMessage.style.opacity = "0";
     this.centerTitle.textContent = "";
@@ -1978,6 +2003,9 @@ export class Game {
     this.multiplayerOpen = false;
     this.multiplayerModal.classList.add("hidden");
     this.hud.classList.remove("hidden");
+    this.hud.classList.remove("is-gameover");
+    document.body.classList.remove("is-gameover");
+    this.centerMessage.classList.remove("is-gameover");
     this.centerMessage.style.opacity = "0";
     this.menuNav.detach();
     this.menuNavSuppressFrames = 4;
@@ -2302,14 +2330,24 @@ export class Game {
       this.worldEvents.setRandom(seededRandom(baseSeed + 3));
       this.bossWaves.setRandom(seededRandom(baseSeed + 4));
     } else {
-      // Use the pending race seed if set (Race This Ghost), else generate a fresh one.
+      // Resolve the active ghost-race target. New races flow in via the
+      // pending* fields (set by the leaderboard RACE buttons just before
+      // calling startGame); we copy them to current* so RETRY can replay
+      // the same race. BACK TO TITLE / PLAY / DAILY clear current*.
+      if (this.pendingRaceGhostId !== null) {
+        this.currentRaceGhostId = this.pendingRaceGhostId;
+        this.currentRaceSeed = this.pendingRaceSeed;
+        this.pendingRaceGhostId = null;
+        this.pendingRaceSeed = null;
+      }
+
+      // Use the active race seed if set (Race This Ghost), else generate fresh.
       // Guard against seed=0 — mulberry32 produces a degenerate sequence from 0.
-      let seed = this.pendingRaceSeed;
+      let seed = this.currentRaceSeed;
       if (seed === null) {
         do { seed = Math.floor(Math.random() * 0xffffffff); } while (seed === 0);
       }
       this.runSeed = seed;
-      this.pendingRaceSeed = null;
       this.world.setRandom(seededRandom(seed));
       this.powerups.setRandom(seededRandom(seed + 1));
       this.speedGates.setRandom(seededRandom(seed + 2));
@@ -2416,8 +2454,11 @@ export class Game {
     this.menuNav.detach();
     this.menuNavSuppressFrames = 4;
     this.centerMessage.style.opacity = "0";
-    // Clear blur overlay and game-over content from previous game over
+    // Clear blur overlay, game-over class, and game-over content from previous game over
     this.gameOverOverlay.classList.remove("active");
+    this.hud.classList.remove("is-gameover");
+    document.body.classList.remove("is-gameover");
+    this.centerMessage.classList.remove("is-gameover");
     if (this.centerStats) this.centerStats.innerHTML = "";
     // Restore HUD state indicator
     this.hudState.style.display = "";
@@ -2429,18 +2470,27 @@ export class Game {
       }, 2000);
     }
 
-    // Ghost racing — reload ghost pool, reset playback, start recording.
-    // If racing a specific ghost, filter the pool to that one ghost so only they appear;
-    // otherwise restore the full cached pool (handles returning from a race run).
-    if (this.pendingRaceGhostId !== null) {
-      const target = this.cachedGhosts.find(g => g.id === this.pendingRaceGhostId);
-      this.ghostManager.loadGhosts(target ? [target] : []);
-      this.racingGhostName = target?.name ?? null;
-      this.pendingRaceGhostId = null;
-    } else {
-      if (this.cachedGhosts.length > 0) {
-        this.ghostManager.loadGhosts(this.cachedGhosts);
+    // Ghost racing — single-ghost model only.
+    // Race active: load the one selected ghost so it spawns and renders.
+    // No race: load no ghosts (a normal run is just the player).
+    // The legacy "load top 3 ghosts as ambient racers" behaviour was
+    // removed — those ghosts ran on a different seed than the live run,
+    // so they were random runs through unrelated obstacles, not a race.
+    if (this.currentRaceGhostId !== null) {
+      const target = this.cachedGhosts.find(g => g.id === this.currentRaceGhostId);
+      if (target) {
+        this.ghostManager.loadGhosts([target]);
+        this.racingGhostName = target.name;
+      } else {
+        // Cached ghost list refreshed and the chosen one fell off — bail to
+        // a normal run rather than ghosting silently.
+        this.ghostManager.loadGhosts([]);
+        this.racingGhostName = null;
+        this.currentRaceGhostId = null;
+        this.currentRaceSeed = null;
       }
+    } else {
+      this.ghostManager.loadGhosts([]);
       this.racingGhostName = null;
     }
     this.ghostManager.startRun();
@@ -2641,6 +2691,10 @@ export class Game {
             "NEAR MISS +15", this.player.group.position.x, this.playerZ, this.camera,
             "#00ccff", 14
           );
+          // Particle stream from player → graze bar. Intensity scales with how
+          // close the miss was: razor-thin = full burst, edge of band = trickle.
+          const intensity = 1 - grazeDist / GRAZE_BAND;
+          this.emitGrazeParticles(intensity);
         }
       }
 
@@ -3583,6 +3637,24 @@ export class Game {
 
   /** Compute closest-edge distance from player to any nearby non-colliding obstacle.
    *  Returns Infinity if no obstacle is in the Z range. */
+  /**
+   * Project the player's world position to body-relative screen px and emit
+   * a particle burst toward the graze bar. Intensity 0..1 scales count + size.
+   */
+  private emitGrazeParticles(intensity: number) {
+    const v = new THREE.Vector3(
+      this.player.group.position.x,
+      this.player.group.position.y + 0.4,
+      this.playerZ
+    );
+    v.project(this.camera);
+    const bodyRect = document.body.getBoundingClientRect();
+    // NDC (-1..1) → body-relative px. Y is flipped.
+    const x = (v.x * 0.5 + 0.5) * bodyRect.width;
+    const y = (-v.y * 0.5 + 0.5) * bodyRect.height;
+    this.grazeStream.emit(x, y, intensity);
+  }
+
   private checkGrazeProximity(): number {
     const px = this.player.group.position.x;
     const pz = this.playerZ;
@@ -3927,6 +3999,15 @@ export class Game {
     this.hudState.style.opacity = "0";
     this.hudState.style.display = "none";
 
+    // Hide all in-game HUD pieces (speed, score, phase bar, near-miss meter,
+    // boost/brake rings, etc) so they don't bleed through the blur overlay.
+    // CSS in index.html gates each element off `#hud.is-gameover` and the
+    // body-scoped `is-gameover` class also covers HUD siblings appended to
+    // body (e.g. #near-miss-hint, #graze-particle-stream).
+    this.hud.classList.add("is-gameover");
+    document.body.classList.add("is-gameover");
+    this.centerMessage.classList.add("is-gameover");
+
     // Blur overlay — frosted glass behind game over screen
     this.gameOverOverlay.classList.add("active");
 
@@ -3986,6 +4067,22 @@ export class Game {
       this.gameOverTimer = 0;
       this.startGame(this.isDailyMode);
     });
+
+    // BACK TO TITLE — clears any active ghost race and returns to the title
+    // overlay without a fresh round. Same destination the page-load lands on.
+    const backBtn = document.getElementById("center-back-to-title") as HTMLElement | null;
+    if (backBtn) {
+      // Clone+rebind so we don't accumulate listeners across game-overs.
+      const fresh = backBtn.cloneNode(true) as HTMLElement;
+      backBtn.replaceWith(fresh);
+      fresh.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this.gameOverTimer < 0.6) return;
+        this.returnToTitleFromGameOver();
+      });
+      fresh.addEventListener("mousedown", (e) => e.stopPropagation());
+      fresh.addEventListener("keydown", (e) => e.stopPropagation());
+    }
     this.centerMessage.style.opacity = "1";
 
     // Tab switching
@@ -4268,6 +4365,58 @@ export class Game {
   // --- Game Over ---
 
   private gameOverTimer = 0;
+
+  /** From the game-over screen, return to the title overlay. Clears any
+   *  active ghost race, resets HUD state, and re-applies title menu nav.
+   *  Same destination the page-load lands on; the brain reviewer can verify
+   *  parity with the Title state by comparing this against transitionToIdle. */
+  private returnToTitleFromGameOver() {
+    // Clear any in-progress ghost race so the next PLAY is a fresh normal run.
+    this.currentRaceGhostId = null;
+    this.currentRaceSeed = null;
+    this.pendingRaceGhostId = null;
+    this.pendingRaceSeed = null;
+    this.racingGhostName = null;
+    this.updateRaceChip();
+
+    // Hide HUD + game-over overlay, clear gameover styling.
+    this.gameOverOverlay.classList.remove("active");
+    this.hud.classList.add("hidden");
+    this.hud.classList.remove("is-gameover");
+    document.body.classList.remove("is-gameover");
+    this.centerMessage.classList.remove("is-gameover");
+    this.centerMessage.style.opacity = "0";
+    this.centerStats.innerHTML = "";
+    this.centerRetry.textContent = "";
+
+    // Reset transient effects so the title preview camera doesn't show death VFX.
+    this.bloomPass.strength = 0.6;
+    this.vignette.setIntensity(0);
+    this.postfx.setVignette(0);
+    this.shake.intensity = 0;
+
+    // Hide ghosts left over from the race.
+    this.ghostManager.hideAll();
+    this.ghostManager.clear();
+
+    // Drop any in-flight near-miss particles so they don't linger on title.
+    this.grazeStream.clearAll();
+
+    // Restore HUD state indicator for the next run.
+    this.hudState.style.display = "";
+    this.hudState.style.opacity = "";
+
+    // Hide death debris cleanly — player mesh becomes the title preview crystal.
+    this.player.group.visible = false;
+    this.player.shattered = false;
+
+    // Show title overlay and re-attach menu nav.
+    this.titleOverlay.classList.remove("hidden");
+    this.state = GameState.Title;
+    this.gameOverTimer = 0;
+    this.applyTitleMenuScope();
+    this.menuNavSuppressFrames = 4;
+  }
 
   private updateGameOver(dt: number, menuConsumedActivate: boolean) {
     // Camera slowly drifts + continue shake
