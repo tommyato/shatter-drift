@@ -219,6 +219,19 @@ class ComboBorderGlow {
     this.el.style.filter = filter;
     this.previousCombo = combo;
   }
+
+  /** Hard-clear all paint state. Call on return-to-title / startGame so the
+   *  break-flash box-shadow doesn't bleed into the title screen when the
+   *  player dies mid-combo (combo break sets a 0.3s orange-red glow that
+   *  stays painted forever if no further update() ticks fire). */
+  reset() {
+    this.previousCombo = 0;
+    this.breakFlashTimer = 0;
+    this.pulseTime = 0;
+    this.el.style.opacity = "0";
+    this.el.style.boxShadow = "none";
+    this.el.style.filter = "none";
+  }
 }
 
 /** Flash overlay for power-up collection */
@@ -2456,6 +2469,9 @@ export class Game {
     // Clear warn vignette from previous run
     this.hudPhaseWarnVignette.style.opacity = "0";
     this.hudPhaseWarnVignette.style.boxShadow = "none";
+    // Reset combo-border so any leftover break-flash from a previous run
+    // doesn't paint orange-red edges on the new launch.
+    this.comboBorderGlow.reset();
     // Restore HUD state indicator
     this.hudState.style.display = "";
 
@@ -4354,6 +4370,10 @@ export class Game {
     // Clear the CSS warn vignette (DOM element)
     this.hudPhaseWarnVignette.style.opacity = "0";
     this.hudPhaseWarnVignette.style.boxShadow = "none";
+    // Clear the combo-border break-flash. On death with combo>=3 it paints a
+    // 0.3s orange-red inset box-shadow; without a reset, the painted shadow
+    // bleeds into the title screen since update() stops being called.
+    this.comboBorderGlow.reset();
 
     // Hide ghosts left over from the race.
     this.ghostManager.hideAll();
