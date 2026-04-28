@@ -3395,7 +3395,7 @@ export class Game {
 
   private updatePhaseHud() {
     // — warning-state tunables ——————————————————————————————————————————
-    const PHASE_WARN_THRESHOLD       = 0.35;  // energy below this → warning ramp
+    const PHASE_WARN_THRESHOLD       = 0.50;  // energy below this → warning ramp
     const PHASE_WARN_FREQ_MIN        = 0.012; // rad/ms — slow pulse near threshold
     const PHASE_WARN_FREQ_MAX        = 0.040; // rad/ms — urgent pulse near 0
     const PHASE_WARN_VIGNETTE_MIN_A  = 0.15;  // screen-edge alpha at threshold
@@ -3407,6 +3407,7 @@ export class Game {
     const PHASE_WARN_MID_G           = 110;   // rgb(255,110,0) orange at t=0.5
     const PHASE_WARN_END_G           =  22;   // rgb(255, 22,0) danger-red at t=1
     const PHASE_BAR_WIDTH            = 220;   // px — ~1.57× original 140 px
+    const PHASE_IDLE_WARN_THRESHOLD  = 0.20;  // idle red vignette when energy ≤ this
     // ———————————————————————————————————————————————————————————————————
 
     const fillWidth = this.phaseEnergy * PHASE_BAR_WIDTH;
@@ -3467,7 +3468,15 @@ export class Game {
     this.hudPhaseFill.style.background = "#00ffcc";
     this.hudPhaseFill.style.boxShadow  = "0 0 10px rgba(0,255,204,0.45)";
     this.hudPhaseMeter.style.opacity   = isFull ? "0.16" : "0.45";
-    this.hudPhaseWarnVignette.style.boxShadow = "none";
+
+    if (this.phaseEnergy <= PHASE_IDLE_WARN_THRESHOLD) {
+      // Slow red pulse — peripheral warning that phase is critically low while idle
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * PHASE_WARN_FREQ_MIN);
+      const vignetteA = (0.35 * (0.65 + 0.35 * pulse)).toFixed(3);
+      this.hudPhaseWarnVignette.style.boxShadow = `inset 0 0 80px 40px rgba(255,22,0,${vignetteA})`;
+    } else {
+      this.hudPhaseWarnVignette.style.boxShadow = "none";
+    }
   }
 
   /** Compute closest-edge distance from player to any nearby non-colliding obstacle.
