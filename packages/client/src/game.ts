@@ -782,6 +782,7 @@ export class Game {
     // Created dynamically and appended to the HUD div so it hides/shows with it.
     {
       const chip = document.createElement("div");
+      chip.id = "hud-race-chip";
       chip.style.cssText = [
         "position:absolute",
         "top:18px",
