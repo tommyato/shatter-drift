@@ -34,7 +34,7 @@ import {
   type ContractInstance,
 } from "./contracts";
 import { fetchLeaderboard, submitScore, fetchGhosts, submitGhost, fetchGhostUploadThreshold, type LeaderboardEntry } from "./leaderboard";
-import { GhostRecorder, GhostManager } from "./ghost";
+import { GhostRecorder, GhostManager, type GhostRecord } from "./ghost";
 import { getLocalUsername, setLocalUsername, migrateLegacyUsername } from "./coolname";
 import { MenuNavigation } from "./menu-navigation";
 import {
@@ -491,7 +491,7 @@ export class Game {
   /** Seed used for the current/most-recent run. Captured at startGame(). */
   private runSeed = 0;
   /** Ghost records from the last successful fetchGhosts() — source of truth for race selection. */
-  private cachedGhosts: import('./ghost').GhostRecord[] = [];
+  private cachedGhosts: GhostRecord[] = [];
   /** Set before startGame() to race a specific ghost on its own seed. Cleared in startGame(). */
   private pendingRaceSeed: number | null = null;
   private pendingRaceGhostId: string | null = null;
@@ -923,13 +923,14 @@ export class Game {
   private async loadGhostsAsync() {
     try {
       const [ghosts, threshold] = await Promise.all([
-        fetchGhosts(3),
+        fetchGhosts(10), // fetch top 10 — ghostManager caps active racers at 3; extras power the title leaderboard
         fetchGhostUploadThreshold(),
       ]);
       this.ghostUploadThreshold = threshold;
       this.cachedGhosts = ghosts; // keep for race selection and pool restoration between runs
       this.ghostManager.loadGhosts(ghosts);
       this.updateTitleGhostLine();
+      this.populateTitleLeaderboard(ghosts);
     } catch {
       // Silent — ghost racing is optional polish.
     }
@@ -957,6 +958,55 @@ export class Game {
     } else {
       el.style.display = "none";
     }
+  }
+
+  /** Populate the title screen leaderboard from fetched ghost records. */
+  private populateTitleLeaderboard(ghosts: GhostRecord[]) {
+    const rows = document.getElementById("title-lb-rows");
+    if (!rows) return;
+
+    if (ghosts.length === 0) {
+      rows.innerHTML = `<div style="color:#445566;font-size:10px;font-family:'Orbitron',monospace;letter-spacing:1px;padding:4px 0">No runs yet — be first.</div>`;
+      return;
+    }
+
+    let html = "";
+    for (let i = 0; i < ghosts.length; i++) {
+      const g = ghosts[i];
+      const hasRace = typeof g.seed === "number" && g.seed !== 0;
+      const isTop3 = i < 3;
+      const nameColor = isTop3 ? "#ffcc00" : "#8899aa";
+      const rankColor = isTop3 ? "#ffcc00" : "#445566";
+      const safeName = g.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      if (hasRace) {
+        html += `<button class="title-lb-row" data-ui data-ghost-id="${g.id}" data-ghost-seed="${g.seed}" data-ghost-name="${safeName}">`;
+      } else {
+        html += `<div class="title-lb-row">`;
+      }
+      html += `<span style="color:${rankColor};min-width:16px;font-size:9px">${i + 1}</span>`;
+      html += `<span style="color:${nameColor};flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:10px;margin:0 6px">${safeName}</span>`;
+      html += `<span style="color:#557788;font-size:9px;margin-right:4px">${g.score.toLocaleString()}</span>`;
+      html += `<span style="color:#334455;font-size:9px;margin-right:${hasRace ? "6px" : "0"}">${g.distance}m</span>`;
+      if (hasRace) {
+        html += `<span class="title-lb-race-badge">RACE ›</span></button>`;
+      } else {
+        html += `</div>`;
+      }
+    }
+    rows.innerHTML = html;
+
+    // Event delegation — one persistent listener handles all RACE clicks.
+    // Not { once } — the title can be revisited (e.g. after closing MP modal).
+    rows.addEventListener("click", (e: Event) => {
+      const btn = (e.target as Element).closest("button[data-ghost-id]") as HTMLElement | null;
+      if (!btn) return;
+      const ghostId = btn.dataset.ghostId;
+      const ghostSeed = parseInt(btn.dataset.ghostSeed ?? "0", 10);
+      if (!ghostId || !ghostSeed) return;
+      this.pendingRaceGhostId = ghostId;
+      this.pendingRaceSeed = ghostSeed;
+      this.startGame(false);
+    });
   }
 
   private initPauseMenu() {

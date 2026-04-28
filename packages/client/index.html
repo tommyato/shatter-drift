@@ -901,6 +901,44 @@
       text-shadow: 0 0 10px rgba(0,255,204,0.3);
     }
 
+    /* Title screen leaderboard */
+    #title-leaderboard {
+      margin-top: 18px;
+      width: min(90%, 340px);
+      border: 1px solid rgba(0,255,204,0.15);
+      border-radius: 6px;
+      background: rgba(0,10,20,0.55);
+      padding: 10px 12px;
+      animation: fadeInUp 0.8s ease-out 1.25s both;
+      pointer-events: auto;
+    }
+    .title-lb-row {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      padding: 5px 4px;
+      border: none;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      font-family: 'Orbitron', monospace;
+      background: transparent;
+      border-radius: 2px;
+      text-align: left;
+      transition: background 0.12s;
+    }
+    .title-lb-row:last-child { border-bottom: none; }
+    button.title-lb-row { cursor: pointer; }
+    button.title-lb-row:hover,
+    button.title-lb-row:active { background: rgba(0,255,204,0.07); }
+    .title-lb-race-badge {
+      font-family: 'Orbitron', monospace;
+      font-size: 8px;
+      color: rgba(0,255,204,0.45);
+      letter-spacing: 1px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    button.title-lb-row:hover .title-lb-race-badge { color: #00ffcc; }
+
     /* Responsive title on narrow screens */
     @media (max-width: 480px) {
       #title-overlay h1 {
@@ -1034,6 +1072,10 @@
         margin-top:10px;letter-spacing:2px;text-shadow:0 0 10px rgba(255,204,102,0.3);
         display:none;
       "></div>
+      <div id="title-leaderboard">
+        <div style="font-family:'Orbitron',monospace;font-size:10px;color:#334455;letter-spacing:3px;text-align:center;margin-bottom:6px">TOP RUNS</div>
+        <div id="title-lb-rows" style="font-family:'Orbitron',monospace;font-size:10px;color:#445566;text-align:center;padding:4px 0;letter-spacing:1px">Loading...</div>
+      </div>
       <div class="daily-btn" id="daily-btn" data-ui>DAILY CHALLENGE</div>
       <div id="daily-timer" style="
         font-family:'Orbitron',monospace;font-size:10px;
