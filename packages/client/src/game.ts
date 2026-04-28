@@ -709,7 +709,16 @@ export class Game {
     this.hudPhaseFill = document.getElementById("hud-phase-fill")!;
     this.hudPhaseWarnVignette = document.getElementById("hud-phase-warn-vignette")!;
     // Particle stream from player → phase bar on near-miss; intensity scales count.
-    this.grazeStream = new GrazeParticleStream(document.body);
+    // Graze stream — explicit cyan config with chunkier glow so the trail
+    // reads clearly against the dark bottom-center phase bar. Default was
+    // too subtle once the bar moved from left-edge (vertical) to bottom
+    // (small + horizontal, easy to miss).
+    this.grazeStream = new GrazeParticleStream(document.body, {
+      color: "#9bf7ff",
+      glowColor: "#00ccff",
+      glowSize: "10px",
+      zIndex: "25",
+    });
     this.grazeStream.setBarTarget(this.hudPhaseMeter, this.hudPhaseFill);
     // Particle stream from gems → score HUD; yellow/orange to match gem color.
     this.scoreStream = new GrazeParticleStream(document.body, {
@@ -775,10 +784,11 @@ export class Game {
       const chip = document.createElement("div");
       chip.style.cssText = [
         "position:absolute",
-        "top:12px",
-        "right:16px",
+        "top:18px",
+        "left:50%",
+        "transform:translateX(-50%)",
         "font-family:'Orbitron',monospace",
-        "font-size:9px",
+        "font-size:10px",
         "font-weight:700",
         "letter-spacing:2px",
         "color:#00ffcc",

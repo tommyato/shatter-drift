@@ -84,8 +84,15 @@ const GHOST_COLORS = [
   { hex: 0xcccccc, label: "silver" },
 ];
 
-const GHOST_OPACITY = 0.3;
+const GHOST_OPACITY = 0.45;
 const NAME_SPRITE_SCALE = 1.4;
+/** Vertical lift so the ghost crystal floats clearly above the player's lane.
+ *  Without this it spawns at y=0 — same plane as the player — and the
+ *  semi-transparent wireframe is invisible behind the cyan player crystal. */
+const GHOST_Y_LIFT = 1.4;
+/** Lateral offset per ghost, alternating sides, so multiple ghosts spread
+ *  out instead of stacking on the player's path. Index 0 → +1.6, 1 → -1.6, etc. */
+const GHOST_LANE_SPREAD = 1.6;
 
 /** One running ghost. */
 interface Ghost {
@@ -108,6 +115,9 @@ interface Ghost {
   nameVisibleTime: number;
   /** True once name-tag fade-in has completed. */
   nameFullyVisible: boolean;
+  /** Lateral offset applied at render time so this ghost is visible
+   *  alongside the player rather than stacked on top of it. */
+  laneOffsetX: number;
 }
 
 /** Particle burst that plays when a ghost fades out. */
@@ -169,7 +179,12 @@ export class GhostManager {
       const record = records[i];
       if (!record.frames || record.frames.length < 2) continue;
       const colorSpec = GHOST_COLORS[i % GHOST_COLORS.length];
-      this.ghosts.push(this.createGhost(record, colorSpec.hex));
+      // Alternate sides so a 1-ghost race always spawns to the right
+      // (player can spot it immediately without head-checking).
+      const side = i % 2 === 0 ? 1 : -1;
+      const tier = Math.floor(i / 2) + 1;
+      const laneOffsetX = side * GHOST_LANE_SPREAD * tier;
+      this.ghosts.push(this.createGhost(record, colorSpec.hex, laneOffsetX));
     }
     // Add to scene — hidden until startRun() unhides them.
     for (const g of this.ghosts) {
@@ -178,7 +193,7 @@ export class GhostManager {
     }
   }
 
-  private createGhost(record: GhostRecord, color: number): Ghost {
+  private createGhost(record: GhostRecord, color: number, laneOffsetX: number): Ghost {
     const group = new THREE.Group();
 
     // Wireframe icosahedron — same geo as player crystal, but hollow-looking.
@@ -227,6 +242,7 @@ export class GhostManager {
       spawnPosition: new THREE.Vector3(0, 0, 0),
       nameVisibleTime: -1,
       nameFullyVisible: false,
+      laneOffsetX,
     };
   }
 
@@ -244,10 +260,11 @@ export class GhostManager {
       g.group.visible = this.enabled;
       g.nameVisibleTime = -1;
       g.nameFullyVisible = false;
-      // Record spawn position from first frame.
+      // Record spawn position from first frame (with visible offset so the
+      // name-tag distance check matches the rendered position).
       if (g.record.frames.length > 0) {
         const first = g.record.frames[0];
-        g.spawnPosition.set(first.x, 0, first.z);
+        g.spawnPosition.set(first.x + g.laneOffsetX, GHOST_Y_LIFT, first.z);
       }
     }
   }
@@ -296,7 +313,10 @@ export class GhostManager {
       const x = a.x + (b.x - a.x) * tt;
       const z = a.z + (b.z - a.z) * tt;
 
-      g.group.position.set(x, 0, z);
+      // Apply visible offsets — ghosts spawn next to the player's lane and
+      // float slightly above so they read as a separate racer rather than
+      // disappearing behind the cyan player crystal.
+      g.group.position.set(x + g.laneOffsetX, GHOST_Y_LIFT, z);
 
       // Subtle spin so stationary ghosts still feel alive.
       g.mesh.rotation.y += dt * 1.2;
