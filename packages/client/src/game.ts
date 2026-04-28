@@ -2697,7 +2697,8 @@ export class Game {
 
     // --- Graze detection: fills phaseMeter while skimming obstacles (not while phased) ---
     if (!this.player.shattered) {
-      const grazeDist = this.checkGrazeProximity();
+      const graze = this.checkGrazeProximity();
+      const grazeDist = graze.dist;
       if (grazeDist > 0 && grazeDist < GRAZE_BAND) {
         this.phaseMeter = Math.min(100, this.phaseMeter + GRAZE_FILL_RATE * dt);
         if (this.grazeThrottleTimer <= 0) {
@@ -2714,10 +2715,14 @@ export class Game {
             "NEAR MISS +15", this.player.group.position.x, this.playerZ, this.camera,
             "#00ccff", 14
           );
-          // Particle stream from player → graze bar. Intensity scales with how
-          // close the miss was: razor-thin = full burst, edge of band = trickle.
+          // Particle stream from contact point → graze bar. Intensity scales
+          // with how close the miss was: razor-thin = full burst, edge of band
+          // = trickle. Side-aware so left grazes curve from the left.
           const intensity = 1 - grazeDist / GRAZE_BAND;
-          this.emitGrazeParticles(intensity);
+          const contactX = isNaN(graze.obstacleX)
+            ? this.player.group.position.x
+            : graze.obstacleX;
+          this.emitGrazeParticles(intensity, contactX);
         }
       }
 
@@ -3661,10 +3666,20 @@ export class Game {
   /**
    * Project the player's world position to body-relative screen px and emit
    * a particle burst toward the graze bar. Intensity 0..1 scales count + size.
+   * `contactX` is the world-X of the obstacle edge that was grazed — used to
+   *   1. start the trail closer to the actual graze point (so it doesn't
+   *      always begin inside the player's own glow), and
+   *   2. tag the burst with a side hint so its spline curves through that
+   *      side instead of every trail tracing the same arc through center.
    */
-  private emitGrazeParticles(intensity: number) {
+  private emitGrazeParticles(intensity: number, contactX: number) {
+    const px = this.player.group.position.x;
+    // Bias the emission point ~60% from player toward the obstacle so the
+    // trail spawns at the contact point rather than inside the player crystal
+    // — eliminates the "all particles emerge from the same glow blob" read.
+    const emitWorldX = px + (contactX - px) * 0.6;
     const v = new THREE.Vector3(
-      this.player.group.position.x,
+      emitWorldX,
       this.player.group.position.y + 0.4,
       this.playerZ
     );
@@ -3673,13 +3688,19 @@ export class Game {
     // NDC (-1..1) → body-relative px. Y is flipped.
     const x = (v.x * 0.5 + 0.5) * bodyRect.width;
     const y = (-v.y * 0.5 + 0.5) * bodyRect.height;
-    this.grazeStream.emit(x, y, intensity);
+    // Side: -1 if obstacle was to player's left, +1 to the right.
+    const side = contactX < px ? -1 : 1;
+    this.grazeStream.emit(x, y, intensity, side);
   }
 
-  private checkGrazeProximity(): number {
+  /** Closest-edge distance to any non-colliding obstacle in range, plus the
+   *  X of that obstacle edge (for side-aware feedback). `obstacleX` is NaN
+   *  when no obstacle is in range. */
+  private checkGrazeProximity(): { dist: number; obstacleX: number } {
     const px = this.player.group.position.x;
     const pz = this.playerZ;
     let minDist = Infinity;
+    let nearestX = NaN;
 
     for (const obs of this.world.obstacles) {
       if (!obs.active) continue;
@@ -3689,15 +3710,23 @@ export class Game {
       if (obs.isGate && obs.wallSegments) {
         for (const seg of obs.wallSegments) {
           const dist = Math.abs(px - seg.x) - seg.halfWidth;
-          if (dist < minDist) minDist = dist;
+          if (dist < minDist) {
+            minDist = dist;
+            // Report the *near* edge of the wall segment, not its center —
+            // that's the actual graze contact point.
+            nearestX = seg.x + (px < seg.x ? -seg.halfWidth : seg.halfWidth);
+          }
         }
       } else if (!obs.isGate) {
         const dist = Math.abs(px - obs.x) - obs.halfWidth;
-        if (dist < minDist) minDist = dist;
+        if (dist < minDist) {
+          minDist = dist;
+          nearestX = obs.x + (px < obs.x ? -obs.halfWidth : obs.halfWidth);
+        }
       }
     }
 
-    return minDist;
+    return { dist: minDist, obstacleX: nearestX };
   }
 
 

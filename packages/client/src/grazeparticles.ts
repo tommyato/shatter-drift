@@ -115,19 +115,33 @@ export class GrazeParticleStream {
    * @param fromX  body-relative x in px
    * @param fromY  body-relative y in px
    * @param intensity 0..1 — proximity ratio (1 = razor-thin miss) or combo scale
+   * @param side  optional spatial hint: -1 = particles came from player's left,
+   *              +1 = right, 0 = no preference (default). Used to vary the
+   *              spline so left grazes curve through the left side of the
+   *              screen and right grazes through the right — instead of every
+   *              trail tracing the same arc through the player's center.
    */
-  emit(fromX: number, fromY: number, intensity: number) {
+  emit(fromX: number, fromY: number, intensity: number, side: number = 0) {
     if (!this.targetEl) return;
     const parentRect = this.container.getBoundingClientRect();
     const targetRect = this.targetEl.getBoundingClientRect();
-    // Aim near center or right edge depending on target shape
-    const toX = targetRect.left + targetRect.width * 0.8 - parentRect.left;
+    // Aim at the middle of the target element. For the phase bar this means
+    // particles land at the bar's center — symmetric, easier to read than the
+    // old 80%-across aim, and pairs naturally with side-varied splines.
+    const toX = targetRect.left + targetRect.width * 0.5 - parentRect.left;
     const toY = targetRect.top + targetRect.height / 2 - parentRect.top;
 
     const clamped = Math.max(0, Math.min(1, intensity));
     const count = Math.round(8 + clamped * 16); // 8 → 24 — louder so the trail reads at a glance
     const baseSize = 4 + clamped * 4;            // 4 → 8 px
     const dur = PARTICLE_DURATION + Math.random() * 0.08;
+
+    // Side-biased lateral push: left grazes (side=-1) push the spline's mid
+    // point further left before converging on the bar centre; right grazes do
+    // the opposite. Magnitude scales with intensity so close calls swing
+    // wider. Zero side ⇒ unbiased (gem→score uses this).
+    const sideClamped = Math.max(-1, Math.min(1, side));
+    const lateralPush = sideClamped * (60 + clamped * 60); // ±60..±120 px
 
     let spawned = 0;
     for (const p of this.particles) {
@@ -141,7 +155,11 @@ export class GrazeParticleStream {
       p.size = baseSize + Math.random() * 2;
       p.elapsed = 0;
       p.duration = dur + Math.random() * 0.1;
-      p.jitterX = (Math.random() - 0.5) * 24;
+      // Combine the side-biased push with a smaller jitter so neighbouring
+      // particles still spread but the trail as a whole curves toward the
+      // graze side. sin(t·π) profile in update() means jitterX peaks at
+      // mid-arc — which is exactly where we want the lateral bow.
+      p.jitterX = lateralPush + (Math.random() - 0.5) * 36;
       p.el.style.width = `${p.size}px`;
       p.el.style.height = `${p.size}px`;
       spawned++;
@@ -170,21 +188,45 @@ export class GrazeParticleStream {
         p.el.style.opacity = "0";
       }
     }
-    // Target pulse: brighten + tiny scale on the pulse element while pulseTimer > 0
+    // Target pulse on arrival. Two layers, both visible regardless of
+    // overflow:hidden on the bar wrapper:
+    //   • drop-shadow on targetEl (outer) — expands OUTSIDE the element so
+    //     the bar visibly halos brighter and bigger even though its 8 px
+    //     height clips any inner transform.
+    //   • brightness/saturate filter on targetPulseEl (inner) — the cyan
+    //     fill gets noticeably hotter inside the bar.
+    // For score (where targetEl === targetPulseEl) only one element animates.
     if (this.pulseTimer > 0) {
       this.pulseTimer = Math.max(0, this.pulseTimer - dt);
-      if (this.targetPulseEl) {
-        const k = this.pulseTimer / 0.3; // 0..1ish
-        const k01 = Math.max(0, Math.min(1, k));
-        // Louder arrival: bigger brightness lift + scale-Y pop so the bar
-        // visibly thickens when graze particles land. Score target keeps a
-        // gentler lift since it's a chunky number, not a thin pill.
-        this.targetPulseEl.style.filter = `brightness(${1 + k01 * 1.4}) saturate(${1 + k01 * 0.6})`;
+      const k = this.pulseTimer / 0.3; // 0..1ish
+      const k01 = Math.max(0, Math.min(1, k));
+      const blur = 8 + k01 * 22;       // 8 → 30 px outer halo
+      const alpha = 0.4 + k01 * 0.5;   // 0.4 → 0.9
+      const rgb = this.hexToRgb(this.config.glowColor);
+      const dropShadow = `drop-shadow(0 0 ${blur.toFixed(1)}px rgba(${rgb},${alpha.toFixed(2)}))`;
+      if (this.targetEl) {
+        // Outer halo + slight brightness lift on the whole bar.
+        this.targetEl.style.filter = `${dropShadow} brightness(${1 + k01 * 0.4})`;
+      }
+      if (this.targetPulseEl && this.targetPulseEl !== this.targetEl) {
+        // Inner fill: punchier brightness/saturation since the bar is dim by
+        // default (opacity 0.2..0.45) and the cyan fill is what we want to
+        // see flash.
+        this.targetPulseEl.style.filter = `brightness(${1 + k01 * 1.6}) saturate(${1 + k01 * 0.8})`;
+      } else if (this.targetPulseEl) {
+        this.targetPulseEl.style.filter = `${dropShadow} brightness(${1 + k01 * 1.4}) saturate(${1 + k01 * 0.6})`;
+        // Score number is a standalone element with no clipping parent, so
+        // the scale pop still reads.
         this.targetPulseEl.style.transform = `scale(${1 + k01 * 0.25})`;
       }
-    } else if (this.targetPulseEl && this.targetPulseEl.style.filter) {
-      this.targetPulseEl.style.filter = "";
-      this.targetPulseEl.style.transform = "";
+    } else {
+      if (this.targetEl && this.targetEl.style.filter) {
+        this.targetEl.style.filter = "";
+      }
+      if (this.targetPulseEl && (this.targetPulseEl.style.filter || this.targetPulseEl.style.transform)) {
+        this.targetPulseEl.style.filter = "";
+        this.targetPulseEl.style.transform = "";
+      }
     }
   }
 
@@ -194,6 +236,9 @@ export class GrazeParticleStream {
       p.el.style.opacity = "0";
     }
     this.pulseTimer = 0;
+    if (this.targetEl) {
+      this.targetEl.style.filter = "";
+    }
     if (this.targetPulseEl) {
       this.targetPulseEl.style.filter = "";
       this.targetPulseEl.style.transform = "";
