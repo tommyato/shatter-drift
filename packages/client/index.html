@@ -1183,8 +1183,17 @@
 
     /* Responsive title on narrow screens */
     @media (max-width: 719px) {
+      html {
+        align-items: flex-start;
+        justify-content: flex-start;
+      }
+      body {
+        width: 100vw;
+        height: 100vh;
+      }
       #title-overlay {
-        padding: 12px 16px;
+        justify-content: flex-start;
+        padding: 28px 16px 96px;
       }
       #title-overlay::before,
       #title-overlay::after {
@@ -1193,6 +1202,7 @@
       #title-overlay .title-shell {
         max-width: 640px;
         gap: 12px;
+        margin: 0 auto;
       }
       #title-overlay .title-main {
         align-items: center;
@@ -1231,6 +1241,12 @@
       }
       #title-overlay .prompt {
         font-size: 12px;
+      }
+      #title-leaderboard {
+        max-height: min(42vh, 320px);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
       }
     }
 
