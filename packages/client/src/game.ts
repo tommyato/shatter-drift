@@ -484,7 +484,6 @@ export class Game {
   private recorder: GameRecorder | null = null;
   private demoMode = false;
   private onnxMode = false;
-  private portalRefUrl = "";
 
   // Ghost racing — async multiplayer playback
   private ghostRecorder = new GhostRecorder();
@@ -810,9 +809,7 @@ export class Game {
 
     // Resize. `window.resize` fires when the viewport changes (which
     // recomputes body's `min(...)` 16:9 formula). We also subscribe to a
-    // ResizeObserver on the container itself as a belt-and-braces signal —
-    // important for the portal iframe embed, where the parent iframe can
-    // resize without firing a `window.resize` event in this document.
+    // ResizeObserver on the container itself as a belt-and-braces signal.
     window.addEventListener("resize", () => this.onResize());
     if (typeof ResizeObserver !== "undefined") {
       const ro = new ResizeObserver(() => this.onResize());
@@ -839,9 +836,6 @@ export class Game {
 
     // Default menu scope = title. Refreshed on every state transition.
     this.applyTitleMenuScope();
-
-    // Handle Vibeverse portal arrival
-    this.handlePortalArrival();
   }
 
   // -----------------------------------------------------------------
@@ -1295,10 +1289,6 @@ export class Game {
       const code = this.lobbyClient?.getLobbyCode();
       if (!code || !LOBBY_CODE_RE.test(code)) return;
       const url = this.buildInviteUrl(code);
-      // Emit postMessage to parent frame so the portal can optionally handle it.
-      if (window.parent !== window) {
-        try { window.parent.postMessage({ type: "sd-mp-invite-link", code, fallbackUrl: url }, "*"); } catch { /* cross-origin */ }
-      }
       const prevText = this.multiplayerStatusEl.textContent ?? "";
       const prevIsError = this.multiplayerStatusEl.classList.contains("error");
       void navigator.clipboard.writeText(url).then(() => {
@@ -1526,10 +1516,7 @@ export class Game {
 
   /**
    * Build a shareable invite URL embedding the lobby code.
-   * When iframed, prefers the parent page's URL (via document.referrer) so the
-   * link points at the portal rather than the iframe src. Otherwise uses the
-   * current window location. Existing query params are preserved; any stale
-   * `?lobby=` param is replaced.
+   * Existing query params are preserved; any stale `?lobby=` param is replaced.
    */
   private buildInviteUrl(code: string): string {
     let basePath: string;
@@ -3079,17 +3066,6 @@ export class Game {
       this.vignette.setIntensity(vignetteTarget);
     }
 
-    // Vibeverse portal check (always active, even when phasing)
-    if (!this.demoMode) {
-      const portal = this.world.checkPortalCollision(
-        this.player.group.position.x,
-        this.playerZ
-      );
-      if (portal) {
-        this.enterVibeverse();
-        return;
-      }
-    }
 
     // Power-up collection (works in any state)
     const collectedPU = this.powerups.checkCollection(
@@ -4508,45 +4484,6 @@ export class Game {
       subtext: "There is still more speed to squeeze out of this run.",
       color: "#ff88ff",
     };
-  }
-
-  // --- Vibeverse ---
-
-  private enterVibeverse() {
-    const gameUrl = encodeURIComponent(window.location.origin + window.location.pathname);
-    const speed = Math.floor(this.speed);
-    const url = `https://portal.pieter.com/?username=crystal&color=00ffcc&speed=${speed}&ref=${gameUrl}`;
-    window.location.href = url;
-  }
-
-  private handlePortalArrival() {
-    const params = new URLSearchParams(window.location.search);
-    const isPortal = params.get("portal") === "true";
-    this.onnxMode = params.get("_ai") === "onnx";
-    this.demoMode = params.get("demo") === "true" || this.onnxMode;
-    const shouldRecord = params.get("record") === "true";
-    const recordDuration = parseInt(params.get("duration") || "15", 10);
-
-    // Store ref URL for return portal
-    this.portalRefUrl = params.get("ref") || "";
-
-    if (this.onnxMode) {
-      this.autopilot = null;
-      this.onnxAgent = new OnnxAgent();
-      void this.onnxAgent.load();
-      if (shouldRecord) {
-        this.recorder = new GameRecorder(recordDuration);
-      }
-      this.startGame();
-    } else if (this.demoMode) {
-      this.autopilot = new Autopilot();
-      if (shouldRecord) {
-        this.recorder = new GameRecorder(recordDuration);
-      }
-      this.startGame();
-    } else if (isPortal) {
-      this.startGame();
-    }
   }
 
   // --- Resize ---

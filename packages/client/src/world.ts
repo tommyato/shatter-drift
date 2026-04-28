@@ -62,16 +62,6 @@ export interface EnergyOrb {
   collected: boolean;
 }
 
-// --- Vibeverse portal ---
-
-export interface VibeversePortal {
-  group: THREE.Group;
-  z: number;
-  x: number;
-  active: boolean;
-  ring: THREE.Mesh;
-}
-
 // --- World generation ---
 
 const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
@@ -79,7 +69,6 @@ const LANE_WIDTH = 9; // total playable width (-4.5 to 4.5)
 export { WALL_DISTANCE } from "@sd/sim";
 /** Actual playable half-width accounting for camera parallax */
 export { PLAYABLE_HALF_WIDTH } from "@sd/sim";
-const PORTAL_INTERVAL = 300; // meters between portal appearances
 
 const GRID_FLOOR_VERTEX = /* glsl */ `
 varying vec2 vWorldXZ;
@@ -301,7 +290,6 @@ function forEachObstacleMat(obs: Obstacle, fn: (mat: THREE.ShaderMaterial) => vo
 export class World {
   obstacles: Obstacle[] = [];
   orbs: EnergyOrb[] = [];
-  portals: VibeversePortal[] = [];
   private renderMode: "sp" | "mp-renderer" = "sp";
 
   private scene: THREE.Scene;
@@ -310,7 +298,6 @@ export class World {
   private random: () => number = Math.random;
   private nextObstacleZ = INITIAL_OBSTACLE_Z;
   private nextOrbZ = INITIAL_ORB_Z;
-  private nextPortalZ = PORTAL_INTERVAL;
   private nextMarkerZ = 100; // distance markers every 100m
   private cleanupTimer = 0; // periodic cleanup of inactive objects
   private plasmaElapsed = 0;
@@ -507,13 +494,6 @@ export class World {
         this.orbs.splice(i, 1);
       }
     }
-    // Portals
-    for (let i = this.portals.length - 1; i >= 0; i--) {
-      if (!this.portals[i].active) {
-        this.disposePortal(this.portals[i]);
-        this.portals.splice(i, 1);
-      }
-    }
     // Markers
     for (let i = this.markers.length - 1; i >= 0; i--) {
       if (!this.markers[i].active) {
@@ -539,11 +519,6 @@ export class World {
       while (this.nextOrbZ < playerZ + SPAWN_DISTANCE) {
         this.spawnOrbCluster(this.nextOrbZ);
         this.nextOrbZ += ORB_SPACING + this.random() * 5;
-      }
-
-      while (this.nextPortalZ < playerZ + SPAWN_DISTANCE) {
-        this.spawnPortal(this.nextPortalZ);
-        this.nextPortalZ += PORTAL_INTERVAL;
       }
 
       while (this.nextMarkerZ < playerZ + SPAWN_DISTANCE) {
@@ -584,23 +559,7 @@ export class World {
       orb.mesh.scale.setScalar(pulse);
     }
 
-    // Update portals
-    for (const portal of this.portals) {
-      if (!portal.active) continue;
-      portal.ring.rotation.z += dt * 1.5;
-      portal.ring.rotation.x += dt * 0.3;
-      // Pulse glow
-      const pulse = 0.6 + Math.sin(performance.now() * 0.003) * 0.2;
-      (portal.ring.material as THREE.MeshStandardMaterial).emissiveIntensity = pulse;
-    }
-
     // Despawn behind player
-    for (const portal of this.portals) {
-      if (portal.active && portal.z < playerZ + DESPAWN_DISTANCE) {
-        portal.active = false;
-        portal.group.visible = false;
-      }
-    }
     for (const obs of this.obstacles) {
       if (obs.active && obs.z < playerZ + DESPAWN_DISTANCE) {
         obs.active = false;
@@ -1500,65 +1459,6 @@ export class World {
     this.markers.push({ group, z, active: true });
   }
 
-  private spawnPortal(z: number) {
-    const group = new THREE.Group();
-    const x = (this.random() < 0.5 ? -1 : 1) * (2 + this.random() * 1.5);
-
-    // Torus ring
-    const torusGeo = new THREE.TorusGeometry(1.5, 0.15, 16, 32);
-    const torusMat = new THREE.MeshStandardMaterial({
-      color: 0x00ff44,
-      emissive: 0x00ff44,
-      emissiveIntensity: 0.6,
-      metalness: 0.3,
-      roughness: 0.2,
-      transparent: true,
-      opacity: 0.85,
-    });
-    const ring = new THREE.Mesh(torusGeo, torusMat);
-    ring.rotation.y = Math.PI / 2; // face the player
-    group.add(ring);
-
-    // Inner glow disc
-    const discGeo = new THREE.CircleGeometry(1.3, 32);
-    const discMat = new THREE.MeshBasicMaterial({
-      color: 0x00ff44,
-      transparent: true,
-      opacity: 0.15,
-      side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    const disc = new THREE.Mesh(discGeo, discMat);
-    disc.rotation.y = Math.PI / 2;
-    group.add(disc);
-
-    group.position.set(x, 1, z);
-    this.scene.add(group);
-
-    this.portals.push({
-      group,
-      z,
-      x,
-      active: true,
-      ring,
-    });
-  }
-
-  /** Check if player entered a portal */
-  checkPortalCollision(playerX: number, playerZ: number): VibeversePortal | null {
-    for (const portal of this.portals) {
-      if (!portal.active) continue;
-      const dz = Math.abs(playerZ - portal.z);
-      if (dz > 2) continue;
-      const dx = Math.abs(playerX - portal.x);
-      if (dx < 1.5) {
-        return portal;
-      }
-    }
-    return null;
-  }
-
   /** Shatter an obstacle visually and disable its collision */
   shatterObstacle(obs: Obstacle, impactX: number, impactZ: number, speed: number = 0): void {
     this.voronoiShatter.shatterObstacle(obs, impactX, impactZ, this.biomes.colors, speed);
@@ -1642,26 +1542,21 @@ export class World {
 
   reset() {
     this.voronoiShatter.reset();
-    // Remove all obstacles, orbs, and portals
+    // Remove all obstacles, orbs, and markers
     for (const obs of this.obstacles) {
       this.disposeObstacle(obs);
     }
     for (const orb of this.orbs) {
       this.disposeOrb(orb);
     }
-    for (const portal of this.portals) {
-      this.disposePortal(portal);
-    }
     this.obstacles.length = 0;
     this.orbs.length = 0;
-    this.portals.length = 0;
     for (const marker of this.markers) {
       this.disposeMarker(marker);
     }
     this.markers.length = 0;
     this.nextObstacleZ = INITIAL_OBSTACLE_Z;
     this.nextOrbZ = INITIAL_ORB_Z;
-    this.nextPortalZ = PORTAL_INTERVAL;
     this.nextMarkerZ = 100;
     this.cleanupTimer = 0;
     this.plasmaElapsed = 0;
@@ -1713,16 +1608,6 @@ export class World {
     this.scene.remove(orb.mesh);
     orb.mesh.geometry.dispose();
     (orb.mesh.material as THREE.Material).dispose();
-  }
-
-  private disposePortal(portal: VibeversePortal) {
-    this.scene.remove(portal.group);
-    portal.group.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        (child.material as THREE.Material).dispose();
-      }
-    });
   }
 
   private disposeMarker(marker: { group: THREE.Group }) {
