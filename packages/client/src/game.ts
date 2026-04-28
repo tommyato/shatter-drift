@@ -2460,6 +2460,9 @@ export class Game {
     document.body.classList.remove("is-gameover");
     this.centerMessage.classList.remove("is-gameover");
     if (this.centerStats) this.centerStats.innerHTML = "";
+    // Clear warn vignette from previous run
+    this.hudPhaseWarnVignette.style.opacity = "0";
+    this.hudPhaseWarnVignette.style.boxShadow = "none";
     // Restore HUD state indicator
     this.hudState.style.display = "";
 
@@ -4394,6 +4397,9 @@ export class Game {
     this.vignette.setIntensity(0);
     this.postfx.setVignette(0);
     this.shake.intensity = 0;
+    // Clear the CSS warn vignette (DOM element)
+    this.hudPhaseWarnVignette.style.opacity = "0";
+    this.hudPhaseWarnVignette.style.boxShadow = "none";
 
     // Hide ghosts left over from the race.
     this.ghostManager.hideAll();
