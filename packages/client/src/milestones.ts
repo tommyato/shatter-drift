@@ -3,6 +3,8 @@
  * Provides dopamine hits and sense of progression.
  */
 
+import { playChallengeComplete } from "./audio";
+
 export interface Milestone {
   id: string;
   label: string;
@@ -125,6 +127,7 @@ export class MilestoneTracker {
       if (triggered) {
         m.triggered = true;
         this.displayQueue.push(m);
+        playChallengeComplete();
       }
     }
   }

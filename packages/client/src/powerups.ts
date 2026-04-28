@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { playBump } from "./audio";
 
 /**
  * Power-up system — collectible items that grant temporary abilities.
@@ -203,6 +204,10 @@ export class PowerUpManager {
       const ap = this.activePowerUps[i];
       ap.remaining -= dt;
       if (ap.remaining <= 0) {
+        // Subtle audio feedback on powerup expiration (skip Shield — it's instant/consumed-on-hit)
+        if (ap.type !== PowerUpType.Shield) {
+          playBump();
+        }
         this.activePowerUps.splice(i, 1);
       }
     }
