@@ -355,11 +355,11 @@
       height: 100%;
       display: flex;
       flex-direction: column;
-      align-items: center;
+      align-items: stretch;
       z-index: 20;
       pointer-events: auto;
       overflow-y: auto;
-      padding: 20px 16px;
+      padding: 24px 16px;
     }
     /* Flex spacers center content when it fits, but collapse when it overflows
        so the top isn't pushed off screen (unlike justify-content: center) */
@@ -367,6 +367,35 @@
     #title-overlay::after {
       content: '';
       flex: 1 0 0px;
+    }
+
+    #title-overlay .title-shell {
+      width: min(1120px, 100%);
+      margin: auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    #title-overlay .title-main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    #title-overlay .title-identity,
+    #title-overlay .title-cta-block,
+    #title-overlay .title-side {
+      width: 100%;
+    }
+
+    #title-overlay .title-identity {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
 
     #title-overlay h1 {
@@ -397,8 +426,24 @@
       font-size: 16px;
       color: #668899;
       letter-spacing: 6px;
-      margin-bottom: 48px;
+      margin-bottom: 0;
       animation: fadeInUp 0.8s ease-out 0.3s both;
+    }
+
+    #title-overlay .title-controls-card {
+      width: 100%;
+      padding: 18px 20px;
+      border-radius: 18px;
+      border: 1px solid rgba(0,255,204,0.14);
+      background:
+        radial-gradient(circle at top left, rgba(0,255,204,0.08), transparent 52%),
+        linear-gradient(180deg, rgba(0,12,24,0.48), rgba(0,6,12,0.28));
+      box-shadow:
+        0 14px 32px rgba(0,0,0,0.22),
+        inset 0 1px 0 rgba(168,212,224,0.05);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      animation: fadeInUp 0.8s ease-out 0.6s both;
     }
 
     #title-overlay .controls {
@@ -407,8 +452,7 @@
       color: #6b8299;
       line-height: 2.2;
       text-align: center;
-      margin-bottom: 36px;
-      animation: fadeInUp 0.8s ease-out 0.6s both;
+      margin-bottom: 0;
     }
 
     #title-overlay .controls span {
@@ -421,35 +465,84 @@
       font-size: 20px;
       color: #ffcc00;
       text-shadow: 0 0 20px rgba(255,204,0,0.4);
-      animation: promptPulse 1.5s ease-in-out infinite, fadeInUp 0.8s ease-out 0.9s both;
+      animation: promptPulse 1.5s ease-in-out infinite, fadeInUp 0.8s ease-out 1s both;
     }
 
     #title-overlay .high-score {
       font-family: 'Orbitron', monospace;
       font-size: 13px;
       color: #556677;
-      margin-top: 20px;
+      margin-top: 0;
       letter-spacing: 1px;
-      animation: fadeInUp 0.8s ease-out 1.2s both;
+      text-align: center;
+      animation: fadeInUp 0.8s ease-out 1.15s both;
+    }
+
+    #title-overlay .title-cta-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      animation: fadeInUp 0.8s ease-out 0.9s both;
+    }
+
+    #title-overlay .title-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: stretch;
+      gap: 12px;
+      width: 100%;
+    }
+
+    #title-overlay .title-action-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex: 1 1 240px;
+      max-width: 280px;
+      width: 100%;
+    }
+
+    #title-overlay .title-daily-cluster {
+      flex: 1 1 280px;
+      min-width: min(100%, 280px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
     }
 
     /* Multiplayer button */
-    #title-overlay .multiplayer-btn {
+    #title-overlay .multiplayer-btn,
+    #title-overlay .customize-btn,
+    #title-overlay .daily-btn,
+    #title-overlay .play-btn,
+    #title-leaderboard-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      width: 100%;
       font-family: 'Orbitron', monospace;
       font-size: 13px;
       font-weight: 700;
-      color: #7ce8ff;
       letter-spacing: 3px;
-      margin-top: 18px;
       cursor: pointer;
-      border: 1px solid rgba(124,232,255,0.35);
-      border-radius: 4px;
-      padding: 10px 28px;
-      background: rgba(40,120,180,0.08);
+      border-radius: 16px;
+      padding: 12px 22px;
       transition: all 0.2s;
-      animation: fadeInUp 0.8s ease-out 1.3s both;
-      text-shadow: 0 0 12px rgba(124,232,255,0.35);
       pointer-events: auto;
+      text-align: center;
+    }
+
+    #title-overlay .multiplayer-btn {
+      color: #7ce8ff;
+      border: 1px solid rgba(124,232,255,0.35);
+      background: rgba(40,120,180,0.08);
+      text-shadow: 0 0 12px rgba(124,232,255,0.35);
+      animation: fadeInUp 0.8s ease-out 1.2s both;
     }
     #title-overlay .multiplayer-btn:hover {
       color: #b7f7ff;
@@ -460,18 +553,12 @@
 
     /* Customize button */
     #title-overlay .customize-btn {
-      font-family: 'Orbitron', monospace;
       font-size: 12px;
+      font-weight: 400;
       color: #668899;
-      letter-spacing: 3px;
-      margin-top: 16px;
-      cursor: pointer;
       border: 1px solid #334455;
-      border-radius: 4px;
-      padding: 8px 24px;
       background: rgba(0,20,30,0.5);
-      transition: all 0.3s;
-      animation: fadeInUp 0.8s ease-out 1.5s both;
+      animation: fadeInUp 0.8s ease-out 1.25s both;
     }
     #title-overlay .customize-btn:hover {
       color: #00ffcc;
@@ -482,21 +569,13 @@
 
     /* Daily Challenge button */
     #title-overlay .daily-btn {
-      font-family: 'Orbitron', monospace;
       font-size: 13px;
       font-weight: 700;
       color: #ffcc00;
-      letter-spacing: 3px;
-      margin-top: 20px;
-      cursor: pointer;
       border: 1px solid rgba(255,204,0,0.3);
-      border-radius: 4px;
-      padding: 10px 28px;
       background: rgba(255,204,0,0.06);
-      transition: all 0.2s;
       animation: fadeInUp 0.8s ease-out 1.1s both;
       text-shadow: 0 0 12px rgba(255,204,0,0.4);
-      pointer-events: auto;
     }
     #title-overlay .daily-btn:hover {
       color: #ffe566;
@@ -902,48 +981,276 @@
     }
 
     /* Title screen leaderboard */
+    #title-overlay .title-side {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #title-leaderboard-toggle {
+      color: #00ffcc;
+      border: 1px solid rgba(0,255,204,0.22);
+      background:
+        radial-gradient(circle at top left, rgba(0,255,204,0.08), transparent 52%),
+        linear-gradient(180deg, rgba(0,16,28,0.72), rgba(0,8,14,0.56));
+      box-shadow:
+        0 10px 24px rgba(0,0,0,0.24),
+        inset 0 1px 0 rgba(168,212,224,0.06);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      text-shadow: 0 0 12px rgba(0,255,204,0.28);
+    }
+
     #title-leaderboard {
-      margin-top: 18px;
-      width: min(90%, 340px);
-      border: 1px solid rgba(0,255,204,0.15);
-      border-radius: 6px;
-      background: rgba(0,10,20,0.55);
-      padding: 10px 12px;
+      width: 100%;
+      min-width: 0;
+      border: 1px solid rgba(0,255,204,0.22);
+      border-radius: 18px;
+      background:
+        radial-gradient(circle at top left, rgba(0,255,204,0.12), transparent 56%),
+        linear-gradient(180deg, rgba(0,16,28,0.78), rgba(0,8,14,0.62));
+      box-shadow:
+        0 16px 40px rgba(0, 0, 0, 0.32),
+        inset 0 1px 0 rgba(168,212,224,0.08);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 16px 18px;
       animation: fadeInUp 0.8s ease-out 1.25s both;
       pointer-events: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #title-leaderboard[data-collapsed="true"] {
+      display: none;
+    }
+    .title-lb-eyebrow {
+      font-family: 'Orbitron', monospace;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: #3a8a99;
+      text-transform: uppercase;
+    }
+    .title-lb-context {
+      font-family: 'Orbitron', monospace;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: #ffcc00;
+      text-transform: uppercase;
+    }
+    .title-lb-threshold {
+      font-family: 'Orbitron', monospace;
+      font-size: 10px;
+      letter-spacing: 1.4px;
+      color: #00ffcc;
+      text-transform: uppercase;
+    }
+    #title-lb-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .title-lb-empty {
+      font-family: 'Orbitron', monospace;
+      font-size: 13px;
+      color: #a8d4e0;
+      letter-spacing: 1px;
+      text-align: center;
+      padding: 12px 0 6px;
     }
     .title-lb-row {
-      display: flex;
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      gap: 10px;
       align-items: center;
       width: 100%;
-      padding: 5px 4px;
+      min-height: 40px;
+      padding: 8px 0;
       border: none;
-      border-bottom: 1px solid rgba(255,255,255,0.04);
+      border-bottom: 1px solid rgba(168,212,224,0.08);
       font-family: 'Orbitron', monospace;
       background: transparent;
-      border-radius: 2px;
+      border-radius: 12px;
       text-align: left;
-      transition: background 0.12s;
+      transition: background 0.12s, box-shadow 0.12s, border-color 0.12s;
     }
     .title-lb-row:last-child { border-bottom: none; }
-    button.title-lb-row { cursor: pointer; }
+    button.title-lb-row {
+      cursor: pointer;
+      padding-left: 10px;
+      padding-right: 10px;
+    }
     button.title-lb-row:hover,
-    button.title-lb-row:active { background: rgba(0,255,204,0.07); }
-    .title-lb-race-badge {
-      font-family: 'Orbitron', monospace;
-      font-size: 8px;
-      color: rgba(0,255,204,0.45);
+    button.title-lb-row:active {
+      background: rgba(0,255,204,0.07);
+      box-shadow: inset 0 0 0 1px rgba(0,255,204,0.12);
+    }
+    .title-lb-rank {
+      color: #3a8a99;
+      font-size: 13px;
+      letter-spacing: 1px;
+    }
+    .title-lb-row.is-podium .title-lb-rank,
+    .title-lb-row.is-podium .title-lb-name {
+      color: #ffcc00;
+    }
+    .title-lb-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #a8d4e0;
+      font-size: 13px;
+      letter-spacing: 1px;
+    }
+    .title-lb-side {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 3px;
+      min-width: max-content;
+    }
+    .title-lb-score {
+      color: #00ffcc;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+    .title-lb-meta {
+      color: #a8d4e0;
+      font-size: 11px;
       letter-spacing: 1px;
       white-space: nowrap;
-      flex-shrink: 0;
+    }
+    .title-lb-race-badge {
+      font-family: 'Orbitron', monospace;
+      font-size: 11px;
+      color: rgba(0,255,204,0.72);
+      letter-spacing: 1px;
+      white-space: nowrap;
     }
     button.title-lb-row:hover .title-lb-race-badge { color: #00ffcc; }
 
+    @media (min-width: 720px) {
+      #title-overlay .title-shell {
+        grid-template-columns: minmax(0, 1fr) minmax(480px, 540px);
+        gap: 36px;
+      }
+      #title-overlay .title-main {
+        align-items: flex-start;
+        padding-top: 18px;
+      }
+      #title-overlay .title-identity {
+        align-items: flex-start;
+      }
+      #title-overlay h1,
+      #title-overlay .tagline,
+      #title-overlay .controls,
+      #title-overlay .high-score,
+      #title-overlay .title-daily-cluster,
+      #title-overlay .title-action-row,
+      #title-overlay .title-action-stack {
+        text-align: left;
+      }
+      #title-overlay h1::after {
+        margin-left: 0;
+      }
+      #title-overlay .title-cta-block {
+        align-items: flex-start;
+      }
+      #title-overlay .title-action-row {
+        justify-content: flex-start;
+      }
+      #title-overlay .title-daily-cluster {
+        align-items: flex-start;
+      }
+      #title-overlay .play-btn {
+        width: auto;
+        min-width: 210px;
+      }
+      #title-overlay .multiplayer-btn,
+      #title-overlay .customize-btn,
+      #title-overlay .daily-btn {
+        justify-content: flex-start;
+      }
+      #title-leaderboard-toggle {
+        display: none;
+      }
+      #title-leaderboard {
+        display: flex !important;
+      }
+    }
+
     /* Responsive title on narrow screens */
+    @media (max-width: 719px) {
+      #title-overlay {
+        padding: 12px 16px;
+      }
+      #title-overlay::before,
+      #title-overlay::after {
+        display: none;
+      }
+      #title-overlay .title-shell {
+        max-width: 640px;
+        gap: 12px;
+      }
+      #title-overlay .title-main {
+        align-items: center;
+        gap: 10px;
+      }
+      #title-overlay .title-identity {
+        align-items: center;
+      }
+      #title-overlay .title-cta-block {
+        order: 2;
+        gap: 10px;
+      }
+      #title-overlay .title-controls-card {
+        order: 3;
+        padding: 12px 14px;
+      }
+      #title-overlay .title-side {
+        order: 4;
+      }
+      #title-overlay .title-action-stack,
+      #title-overlay .title-daily-cluster {
+        max-width: none;
+      }
+      #title-overlay .title-action-row {
+        gap: 10px;
+      }
+      #title-overlay .play-btn {
+        min-height: 42px;
+      }
+      #title-overlay .multiplayer-btn,
+      #title-overlay .customize-btn,
+      #title-overlay .daily-btn,
+      #title-leaderboard-toggle {
+        min-height: 40px;
+        padding: 10px 18px;
+      }
+      #title-overlay .prompt {
+        font-size: 12px;
+      }
+    }
+
     @media (max-width: 480px) {
       #title-overlay h1 {
+        font-size: clamp(32px, 16vw, 52px);
         letter-spacing: 4px;
         text-align: center;
+      }
+      #title-overlay .tagline {
+        font-size: 12px;
+        letter-spacing: 4px;
+      }
+      #title-overlay .controls {
+        font-size: 11px;
+        line-height: 1.8;
+      }
+      #title-overlay .high-score,
+      #title-overlay #title-ghost-line {
+        font-size: 11px;
       }
     }
 
@@ -975,21 +1282,15 @@
     }
     /* PLAY button — primary CTA on title screen. */
     #title-overlay .play-btn {
-      font-family: 'Orbitron', monospace;
       font-size: 18px;
       font-weight: 700;
       color: #00ffcc;
       letter-spacing: 4px;
-      cursor: pointer;
       border: 1px solid rgba(0,255,204,0.5);
-      border-radius: 4px;
-      padding: 12px 48px;
       background: rgba(0,255,204,0.08);
-      transition: all 0.2s;
       animation: fadeInUp 0.8s ease-out 0.9s both;
       text-shadow: 0 0 14px rgba(0,255,204,0.5);
-      pointer-events: auto;
-      margin-top: 8px;
+      box-shadow: 0 14px 28px rgba(0,0,0,0.24), inset 0 1px 0 rgba(168,212,224,0.06);
     }
     #title-overlay .play-btn:hover {
       color: #aaffee;
@@ -1050,47 +1351,68 @@
 
     <!-- Title -->
     <div id="title-overlay">
-      <h1>SHATTER DRIFT</h1>
-      <div class="tagline">BREAK TO SURVIVE</div>
-      <div class="controls controls-desktop">
-        <span>A/D</span> or <span>LEFT/RIGHT</span> &mdash; DODGE<br>
-        HOLD <span>SPACE</span> or <span>CLICK</span> &mdash; SHATTER THROUGH OBSTACLES<br>
-        RELEASE &mdash; RECOMBINE &amp; COLLECT ORBS<br>
-        <span>PHASE STREAKS</span> = BONUS POINTS
+      <div class="title-shell">
+        <div class="title-main">
+          <div class="title-identity">
+            <h1>SHATTER DRIFT</h1>
+            <div class="tagline">BREAK TO SURVIVE</div>
+          </div>
+          <div class="title-controls-card">
+            <div class="controls controls-desktop">
+              <span>A/D</span> or <span>LEFT/RIGHT</span> &mdash; DODGE<br>
+              HOLD <span>SPACE</span> or <span>CLICK</span> &mdash; SHATTER THROUGH OBSTACLES<br>
+              RELEASE &mdash; RECOMBINE &amp; COLLECT ORBS<br>
+              <span>PHASE STREAKS</span> = BONUS POINTS
+            </div>
+            <div class="controls controls-mobile">
+              <span>TOUCH + DRAG</span> &mdash; STEER &amp; SHATTER<br>
+              <span>LIFT FINGER</span> &mdash; RECOMBINE &amp; COLLECT ORBS<br>
+              <span>PHASE STREAKS</span> = BONUS POINTS
+            </div>
+          </div>
+          <div class="title-cta-block">
+            <div class="play-btn" id="play-btn" data-ui>PLAY</div>
+            <div class="prompt prompt-desktop" style="font-size:13px">PRESS SPACE OR CLICK</div>
+            <div class="prompt prompt-mobile">TAP TO PLAY</div>
+            <div class="high-score" id="title-high-score"></div>
+            <div id="title-ghost-line" style="
+              font-family:'Orbitron',monospace;font-size:12px;color:#ffcc66;
+              letter-spacing:2px;text-shadow:0 0 10px rgba(255,204,102,0.3);
+              display:none;
+            "></div>
+            <div class="title-action-row">
+              <div class="title-daily-cluster">
+                <div class="daily-btn" id="daily-btn" data-ui>DAILY CHALLENGE</div>
+                <div id="daily-timer" style="
+                  font-family:'Orbitron',monospace;font-size:10px;
+                  color:#668899;letter-spacing:1px;
+                  animation: fadeInUp 0.8s ease-out 1.1s both;
+                ">Resets in --:--:--</div>
+                <div id="title-daily-best" style="
+                  font-family:'Orbitron',monospace;font-size:11px;
+                  color:#ffcc00;letter-spacing:1px;
+                  text-shadow:0 0 10px rgba(255,204,0,0.3);
+                  animation: fadeInUp 0.8s ease-out 1.1s both;
+                  display:none;
+                "></div>
+              </div>
+              <div class="title-action-stack">
+                <div class="multiplayer-btn" id="multiplayer-btn" data-ui>MULTIPLAYER</div>
+                <div class="customize-btn" id="customize-btn" data-ui>CUSTOMIZE</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="title-side">
+          <button id="title-leaderboard-toggle" type="button" data-ui aria-expanded="false" aria-controls="title-leaderboard">TOP RUNS ▼</button>
+          <div id="title-leaderboard" data-collapsed="true">
+            <div class="title-lb-eyebrow">Top Runs</div>
+            <div class="title-lb-context">Global Ghost Leaderboard</div>
+            <div class="title-lb-threshold" id="title-lb-threshold">Targets · Beat the top run</div>
+            <div id="title-lb-rows" class="title-lb-empty">Loading...</div>
+          </div>
+        </div>
       </div>
-      <div class="controls controls-mobile">
-        <span>TOUCH + DRAG</span> &mdash; STEER &amp; SHATTER<br>
-        <span>LIFT FINGER</span> &mdash; RECOMBINE &amp; COLLECT ORBS<br>
-        <span>PHASE STREAKS</span> = BONUS POINTS
-      </div>
-      <div class="play-btn" id="play-btn" data-ui>PLAY</div>
-      <div class="prompt prompt-desktop" style="font-size:13px;margin-top:14px;animation:fadeInUp 0.8s ease-out 1s both">PRESS SPACE OR CLICK</div>
-      <div class="prompt prompt-mobile">TAP TO PLAY</div>
-      <div class="high-score" id="title-high-score"></div>
-      <div id="title-ghost-line" style="
-        font-family:'Orbitron',monospace;font-size:12px;color:#ffcc66;
-        margin-top:10px;letter-spacing:2px;text-shadow:0 0 10px rgba(255,204,102,0.3);
-        display:none;
-      "></div>
-      <div id="title-leaderboard">
-        <div style="font-family:'Orbitron',monospace;font-size:10px;color:#334455;letter-spacing:3px;text-align:center;margin-bottom:6px">TOP RUNS</div>
-        <div id="title-lb-rows" style="font-family:'Orbitron',monospace;font-size:10px;color:#445566;text-align:center;padding:4px 0;letter-spacing:1px">Loading...</div>
-      </div>
-      <div class="daily-btn" id="daily-btn" data-ui>DAILY CHALLENGE</div>
-      <div id="daily-timer" style="
-        font-family:'Orbitron',monospace;font-size:10px;
-        color:#668899;margin-top:6px;letter-spacing:1px;
-        animation: fadeInUp 0.8s ease-out 1.1s both;
-      ">Resets in --:--:--</div>
-      <div id="title-daily-best" style="
-        font-family:'Orbitron',monospace;font-size:11px;
-        color:#ffcc00;margin-top:4px;letter-spacing:1px;
-        text-shadow:0 0 10px rgba(255,204,0,0.3);
-        animation: fadeInUp 0.8s ease-out 1.1s both;
-        display:none;
-      "></div>
-      <div class="multiplayer-btn" id="multiplayer-btn" data-ui>MULTIPLAYER</div>
-      <div class="customize-btn" id="customize-btn" data-ui>CUSTOMIZE</div>
     </div>
 
     <div id="multiplayer-modal" class="hidden">

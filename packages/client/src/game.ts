@@ -424,6 +424,9 @@ export class Game {
   private hudGrazeMeter!: HTMLElement;
   private hudGrazeFill!: HTMLElement;
   private titleOverlay!: HTMLElement;
+  private titleLeaderboardEl: HTMLElement | null = null;
+  private titleLeaderboardToggleEl: HTMLButtonElement | null = null;
+  private titleLeaderboardExpanded = false;
   private centerMessage!: HTMLElement;
   private centerTitle!: HTMLElement;
   private centerStats!: HTMLElement;
@@ -709,6 +712,8 @@ export class Game {
     document.body.appendChild(this.nearMissHintEl);
 
     this.titleOverlay = document.getElementById("title-overlay")!;
+    this.titleLeaderboardEl = document.getElementById("title-leaderboard");
+    this.titleLeaderboardToggleEl = document.getElementById("title-leaderboard-toggle") as HTMLButtonElement | null;
     this.centerMessage = document.getElementById("center-message")!;
     this.centerTitle = document.getElementById("center-title")!;
     this.centerStats = document.getElementById("center-stats")!;
@@ -818,6 +823,8 @@ export class Game {
       playBtn.addEventListener("mousedown", (e) => e.stopPropagation());
     }
 
+    this.initTitleLeaderboardToggle();
+
     // Default menu scope = title. Refreshed on every state transition.
     this.applyTitleMenuScope();
 
@@ -835,10 +842,12 @@ export class Game {
     const items: HTMLElement[] = [];
     const playBtn = document.getElementById("play-btn");
     const dailyBtn = document.getElementById("daily-btn");
+    const leaderboardToggle = document.getElementById("title-leaderboard-toggle");
     const multiplayerBtn = document.getElementById("multiplayer-btn");
     const customizeBtn = document.getElementById("customize-btn");
     if (playBtn) items.push(playBtn);
     if (dailyBtn) items.push(dailyBtn);
+    if (leaderboardToggle && getComputedStyle(leaderboardToggle).display !== "none") items.push(leaderboardToggle);
     if (MULTIPLAYER_ENABLED && multiplayerBtn) items.push(multiplayerBtn);
     if (customizeBtn) items.push(customizeBtn);
     // Esc / B is a no-op on the title screen — there's nothing to back
@@ -919,6 +928,29 @@ export class Game {
     this.menuNavSuppressFrames = 2;
   }
 
+  private initTitleLeaderboardToggle() {
+    if (!this.titleLeaderboardEl || !this.titleLeaderboardToggleEl) return;
+    this.titleLeaderboardToggleEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.titleLeaderboardExpanded = !this.titleLeaderboardExpanded;
+      this.updateTitleLeaderboardLayout();
+      this.applyTitleMenuScope();
+    });
+    this.titleLeaderboardToggleEl.addEventListener("mousedown", (e) => e.stopPropagation());
+    this.updateTitleLeaderboardLayout();
+    setTimeout(() => this.updateTitleLeaderboardLayout(), 0);
+  }
+
+  private updateTitleLeaderboardLayout() {
+    if (!this.titleLeaderboardEl || !this.titleLeaderboardToggleEl) return;
+    const frameWidth = document.body.clientWidth || this.gameContainer?.clientWidth || window.innerWidth;
+    const desktop = frameWidth >= 720;
+    const expanded = desktop || this.titleLeaderboardExpanded;
+    this.titleLeaderboardEl.dataset.collapsed = expanded ? "false" : "true";
+    this.titleLeaderboardToggleEl.setAttribute("aria-expanded", expanded ? "true" : "false");
+    this.titleLeaderboardToggleEl.textContent = expanded ? "TOP RUNS ▲" : "TOP RUNS ▼";
+  }
+
   /** Fetch ghost recordings + upload threshold in parallel. Fire-and-forget. */
   private async loadGhostsAsync() {
     try {
@@ -963,11 +995,17 @@ export class Game {
   /** Populate the title screen leaderboard from fetched ghost records. */
   private populateTitleLeaderboard(ghosts: GhostRecord[]) {
     const rows = document.getElementById("title-lb-rows");
+    const threshold = document.getElementById("title-lb-threshold");
     if (!rows) return;
 
     if (ghosts.length === 0) {
-      rows.innerHTML = `<div style="color:#445566;font-size:10px;font-family:'Orbitron',monospace;letter-spacing:1px;padding:4px 0">No runs yet — be first.</div>`;
+      if (threshold) threshold.textContent = "TARGETS · BE FIRST TO SET THE TARGET";
+      rows.innerHTML = `<div class="title-lb-empty">No runs yet — be first.</div>`;
       return;
+    }
+
+    if (threshold) {
+      threshold.textContent = this.getTitleLeaderboardThresholdCallout(ghosts[0]);
     }
 
     let html = "";
@@ -975,20 +1013,21 @@ export class Game {
       const g = ghosts[i];
       const hasRace = typeof g.seed === "number" && g.seed !== 0;
       const isTop3 = i < 3;
-      const nameColor = isTop3 ? "#ffcc00" : "#8899aa";
-      const rankColor = isTop3 ? "#ffcc00" : "#445566";
       const safeName = g.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      const rowClass = `title-lb-row${hasRace ? " is-raceable" : ""}${isTop3 ? " is-podium" : ""}`;
       if (hasRace) {
-        html += `<button class="title-lb-row" data-ui data-ghost-id="${g.id}" data-ghost-seed="${g.seed}" data-ghost-name="${safeName}">`;
+        html += `<button type="button" class="${rowClass}" data-ui data-ghost-id="${g.id}" data-ghost-seed="${g.seed}" data-ghost-name="${safeName}">`;
       } else {
-        html += `<div class="title-lb-row">`;
+        html += `<div class="${rowClass}">`;
       }
-      html += `<span style="color:${rankColor};min-width:16px;font-size:9px">${i + 1}</span>`;
-      html += `<span style="color:${nameColor};flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:10px;margin:0 6px">${safeName}</span>`;
-      html += `<span style="color:#557788;font-size:9px;margin-right:4px">${g.score.toLocaleString()}</span>`;
-      html += `<span style="color:#334455;font-size:9px;margin-right:${hasRace ? "6px" : "0"}">${g.distance}m</span>`;
+      html += `<span class="title-lb-rank">${String(i + 1).padStart(2, "0")}</span>`;
+      html += `<span class="title-lb-name">${safeName}</span>`;
+      html += `<span class="title-lb-side">`;
+      html += `<span class="title-lb-score">${g.score.toLocaleString()}</span>`;
+      html += `<span class="title-lb-meta">${g.distance}m${hasRace ? ` · <span class="title-lb-race-badge">RACE ›</span>` : ""}</span>`;
+      html += `</span>`;
       if (hasRace) {
-        html += `<span class="title-lb-race-badge">RACE ›</span></button>`;
+        html += `</button>`;
       } else {
         html += `</div>`;
       }
@@ -996,7 +1035,8 @@ export class Game {
     rows.innerHTML = html;
 
     // Event delegation — one persistent listener handles all RACE clicks.
-    // Not { once } — the title can be revisited (e.g. after closing MP modal).
+    if (rows.dataset.bound === "1") return;
+    rows.dataset.bound = "1";
     rows.addEventListener("click", (e: Event) => {
       const btn = (e.target as Element).closest("button[data-ghost-id]") as HTMLElement | null;
       if (!btn) return;
@@ -1007,6 +1047,18 @@ export class Game {
       this.pendingRaceSeed = ghostSeed;
       this.startGame(false);
     });
+  }
+
+  private getTitleLeaderboardThresholdCallout(topGhost: GhostRecord): string {
+    // TODO: enrich ghost metadata with streak/orb counts so this hook can mirror
+    // the full Clockwork Climb-style "distance / streak / orbs" target line.
+    const targetScore = this.roundLeaderboardTarget(topGhost.score, 5000);
+    const targetDistance = this.roundLeaderboardTarget(topGhost.distance, 25);
+    return `TARGETS · SCORE ${targetScore.toLocaleString()}+ · DISTANCE ${targetDistance}m+`;
+  }
+
+  private roundLeaderboardTarget(value: number, step: number): number {
+    return Math.max(step, Math.ceil(value / step) * step);
   }
 
   private initPauseMenu() {
@@ -4396,5 +4448,6 @@ export class Game {
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
     this.postfx.setResolution(w, h);
+    this.updateTitleLeaderboardLayout();
   }
 }
