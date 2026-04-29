@@ -78,7 +78,7 @@ export class ScorePopups {
     });
   }
 
-  /** Show a popup anchored to a 3D world position — pushed to screen edges to avoid obstructing gameplay */
+  /** Show a popup anchored to a 3D world position — rises from player position */
   showAt3D(
     text: string,
     worldX: number,
@@ -97,20 +97,28 @@ export class ScorePopups {
     // Body is the 16:9 letterbox frame (see index.html), so its
     // clientWidth is the canvas width — popups stay inside the frame.
     const halfW = document.body.clientWidth / 2;
-    // Push popup to top margin — keeps it visible but out of the play area
+    const halfH = document.body.clientHeight / 2;
+    
+    // Map NDC to screen space (note: NDC y∈[-1,1] with y inversion)
     const sx = vec.x * halfW + halfW;
-    const sy = Math.min(80, 40 + Math.random() * 40);
+    const sy = (-vec.y + 1) * halfH;
+    
+    // Start popup ~50px above the projected player position
+    const startY = sy - 50 + (Math.random() * 40 - 20); // ±20px jitter
+    
+    // Clamp horizontally so labels don't escape the letterbox
+    const clampedX = Math.max(80, Math.min(sx, halfW * 2 - 80));
 
-    this.show(text, sx, sy, color, size, 0.4);
+    this.show(text, clampedX, startY, color, size, 0.7);
   }
 
-  /** Show a centered large popup (for milestones) — positioned in upper zone to avoid obstructing gameplay */
+  /** Show a centered large popup (for milestones) — positioned below top HUD to avoid covering race/ghost info */
   showCenter(text: string, subtitle: string = "", color: string = "#ffcc00") {
     const cx = document.body.clientWidth / 2;
-    const cy = document.body.clientHeight * 0.22;
-    this.show(text, cx, cy, color, 18, 0.4);
+    const cy = document.body.clientHeight * 0.45;
+    this.show(text, cx, cy, color, 24, 0.7);
     if (subtitle) {
-      this.show(subtitle, cx, cy + 26, "#aaccdd", 10, 0.4);
+      this.show(subtitle, cx, cy + 30, "#aaccdd", 12, 0.7);
     }
   }
 
@@ -120,7 +128,7 @@ export class ScorePopups {
       p.life -= dt;
 
       const progress = 1 - p.life / p.maxLife;
-      const floatY = p.startY - progress * 40; // float upward 40px
+      const floatY = p.startY - progress * 60; // float upward 60px
 
       // Fade out in last 30% of life
       const fadeStart = 0.7;
