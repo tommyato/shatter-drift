@@ -119,11 +119,22 @@ void main() {
   // Vignette falloff — grid fades into darkness at the edges/distance
   float vignette = 1.0 - smoothstep(35.0, 80.0, distFromPlayer);
 
-  // Subtle pulse animation
-  float pulse = 0.88 + 0.12 * sin(uTime * 2.2);
+  // Breathing pulse — visibly modulates intensity (slower, deeper than the old subtle one)
+  float pulse = 0.6 + 0.4 * sin(uTime * 1.4);
 
-  // Combine: line intensity + intersection bonus + proximity boost, all modulated by biome opacity
-  float gridIntensity = (line + intersection * 0.5) * (1.0 + proximityGlow * 0.5) * vignette * pulse * uGridOpacity;
+  // Outward ring wave radiating from the player — half-rectified so it adds, never subtracts
+  float ring = max(0.0, sin(distFromPlayer * 0.4 - uTime * 3.0));
+
+  // Intersections pulse harder than line segments — nodes "fire"
+  float nodePulse = 0.7 + 0.6 * sin(uTime * 1.4);
+
+  // Combine: line intensity + intersection bonus (with stronger pulse) + proximity + outward ring,
+  // all modulated by biome opacity
+  float gridIntensity = (line * pulse + intersection * 0.5 * nodePulse)
+                      * (1.0 + proximityGlow * 0.5)
+                      * (1.0 + ring * 0.6)
+                      * vignette
+                      * uGridOpacity;
 
   // Output: additive grid lines (transparent background — scene darkness shows through)
   gl_FragColor = vec4(uGridColor, clamp(gridIntensity, 0.0, 1.0));
