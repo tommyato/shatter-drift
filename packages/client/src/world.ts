@@ -344,6 +344,27 @@ export class World {
     this.createTunnelWalls();
   }
 
+  /** Generates a soft radial-gradient sprite (white core → transparent edge)
+   *  for the starfield material. Replaces square pixel points with proper
+   *  glowy circular dots that read as stars instead of polygons. */
+  private createStarSprite(): THREE.CanvasTexture {
+    const SIZE = 64;
+    const canvas = document.createElement("canvas");
+    canvas.width = SIZE;
+    canvas.height = SIZE;
+    const ctx = canvas.getContext("2d")!;
+    const gradient = ctx.createRadialGradient(SIZE / 2, SIZE / 2, 0, SIZE / 2, SIZE / 2, SIZE / 2);
+    gradient.addColorStop(0.0, "rgba(255,255,255,1)");
+    gradient.addColorStop(0.18, "rgba(255,255,255,0.85)");
+    gradient.addColorStop(0.45, "rgba(255,255,255,0.25)");
+    gradient.addColorStop(1.0, "rgba(255,255,255,0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
   private createStarfield() {
     const count = 2500;
     const STAR_RADIUS = 150;
@@ -362,7 +383,10 @@ export class World {
       positions[i * 3 + 1] = Math.abs(r * sinPhi * Math.sin(theta)) + 5;
       positions[i * 3 + 2] = r * Math.cos(phi);
 
-      const brightness = 0.3 + Math.random() * 0.7;
+      // 2026-04-29: bumped brightness floor 0.3 → 0.5 so stars read as
+      // *glowing*, not "barely there". With the soft sprite + additive blend,
+      // dim stars were getting completely lost in the nebula.
+      const brightness = 0.5 + Math.random() * 0.6;
       this.starBaseColors[i * 3] = brightness;
       this.starBaseColors[i * 3 + 1] = brightness;
       this.starBaseColors[i * 3 + 2] = brightness;
@@ -376,14 +400,18 @@ export class World {
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(this.starColors, 3));
 
+    // 2026-04-29: switched from square pixel points to soft radial sprites
+    // with additive blending. Stars now read as glowing dots with halos
+    // instead of square pixels relying on bloom to fake roundness.
     const mat = new THREE.PointsMaterial({
-      // 2026-04-29: bumped size 0.3 → 0.45 + opacity 0.8 → 0.95 so bloom
-      // pickup is stronger, especially in zone 1 which was reading "empty".
-      size: 0.45,
+      size: 1.4,
+      map: this.createStarSprite(),
       vertexColors: true,
       transparent: true,
-      opacity: 0.95,
+      opacity: 1.0,
       sizeAttenuation: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
 
     this.starfield = new THREE.Points(geo, mat);
