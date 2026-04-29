@@ -1298,6 +1298,9 @@ export class Game {
         this.ghostToggle = !this.ghostToggle;
         localStorage.setItem("shatterDriftGhostToggle", this.ghostToggle ? "1" : "0");
         this.updateTitleGhostLine();
+        // Re-render title leaderboard so the RACE-A-GHOST panel reflects the
+        // new toggle state without requiring a return-to-title cycle.
+        this.populateTitleLeaderboard(this.cachedGhosts);
         paint();
       });
     }
@@ -2668,7 +2671,14 @@ export class Game {
     // The legacy "load top 3 ghosts as ambient racers" behaviour was
     // removed — those ghosts ran on a different seed than the live run,
     // so they were random runs through unrelated obstacles, not a race.
-    if (this.currentRaceGhostId !== null) {
+    // GHOST: OFF on the title disables ghost racing entirely — clear any
+    // pending race target so the run plays solo even if a RACE button was
+    // somehow still wired up. Belt-and-suspenders with the panel-render gate.
+    if (!this.ghostToggle) {
+      this.currentRaceGhostId = null;
+      this.currentRaceSeed = null;
+    }
+    if (this.ghostToggle && this.currentRaceGhostId !== null) {
       const target = this.cachedGhosts.find(g => g.id === this.currentRaceGhostId);
       if (target) {
         this.ghostManager.loadGhosts([target]);
@@ -4514,8 +4524,10 @@ export class Game {
 
     // Ghost pool — RACE buttons for any seeded ghost records.
     // Legacy ghosts without a seed are skipped (no fair race possible).
+    // GHOST: OFF on the title hides the entire RACE-A-GHOST section so the
+    // toggle actually does what it says (matching the ghostToggle gate in startGame).
     const seededGhosts = this.cachedGhosts.filter(g => typeof g.seed === "number");
-    if (seededGhosts.length > 0) {
+    if (this.ghostToggle && seededGhosts.length > 0) {
       let ghostHtml = `<div style="font-family:'Orbitron',monospace;font-size:10px;color:#334455;letter-spacing:3px;text-align:center;margin:16px 0 6px;border-top:1px solid #1a2a35;padding-top:12px">RACE A GHOST</div>`;
       for (const ghost of seededGhosts) {
         ghostHtml += `
