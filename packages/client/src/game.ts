@@ -311,6 +311,12 @@ export class Game {
   /** The 16:9 letterbox frame element. Renderer + camera read its dims. */
   private gameContainer!: HTMLElement;
 
+  // Perf instrumentation — active only when ?_perf=1 is in the URL
+  private perfEnabled = false;
+  private perfFrameTimes: number[] = [];
+  private perfLastLogTime = 0;
+  private perfPrevFrameTime = 0;
+
   // Game objects
   private player!: Player;
   private world!: World;
@@ -578,12 +584,27 @@ export class Game {
     this.gameContainer = container;
     const initW = container.clientWidth || 1;
     const initH = container.clientHeight || 1;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     this.renderer.setSize(initW, initH);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
     container.insertBefore(this.renderer.domElement, container.firstChild);
+
+    // WebGL context-loss recovery — context loss under low VRAM (especially
+    // in Chrome incognito) is a known failure mode. Reload on restore so the
+    // renderer re-initialises cleanly rather than leaving a black canvas.
+    this.renderer.domElement.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault(); // allow webglcontextrestored to fire
+      console.warn('[sd] WebGL context lost');
+    }, false);
+    this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+      console.warn('[sd] WebGL context restored — reloading');
+      window.location.reload();
+    }, false);
+
+    // Perf instrumentation — opt-in via ?_perf=1
+    this.perfEnabled = new URLSearchParams(window.location.search).get('_perf') === '1';
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x020208);
@@ -1808,6 +1829,27 @@ export class Game {
   }
 
   private loop() {
+    // Frame-time instrumentation — active only with ?_perf=1
+    if (this.perfEnabled) {
+      const now = performance.now();
+      if (this.perfPrevFrameTime > 0) {
+        this.perfFrameTimes.push(now - this.perfPrevFrameTime);
+        // Rolling 120-frame window (~2s at 60fps)
+        if (this.perfFrameTimes.length > 120) this.perfFrameTimes.shift();
+        if (now - this.perfLastLogTime >= 2000) {
+          const sorted = [...this.perfFrameTimes].sort((a, b) => a - b);
+          const p50ms = sorted[Math.floor(sorted.length * 0.50)] ?? 0;
+          const p95ms = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
+          console.log(
+            `[perf] frame-ms p50=${p50ms.toFixed(1)} p95=${p95ms.toFixed(1)} | ` +
+            `fps p50=${(1000 / p50ms).toFixed(1)} p95=${(1000 / p95ms).toFixed(1)}`
+          );
+          this.perfLastLogTime = now;
+        }
+      }
+      this.perfPrevFrameTime = now;
+    }
+
     let dt = Math.min(this.clock.getDelta(), 0.05);
 
     // Apply slow-mo from power-ups
