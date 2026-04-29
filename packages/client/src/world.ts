@@ -246,15 +246,21 @@ float noise(vec2 p) {
 }
 
 void main() {
-  float lines = pow(clamp(sin((vUv.y * 84.0) - uTime * 6.2) * 0.5 + 0.5, 0.0, 1.0), 5.0);
-  float shimmer = noise(vec2(vUv.x * 11.0 + uTime * 0.4, vUv.y * 19.0 - uTime * 1.7));
+  // 2026-04-29: animation more visible — faster streaks, stronger alpha contribution.
+  // The shader was always animating but uOpacity 0.25 + tiny alpha weights made motion invisible.
+  float lines = pow(clamp(sin((vUv.y * 84.0) - uTime * 7.5) * 0.5 + 0.5, 0.0, 1.0), 5.0);
+  float shimmer = noise(vec2(vUv.x * 11.0 + uTime * 0.6, vUv.y * 19.0 - uTime * 2.2));
   float pulse = 0.5 + 0.5 * sin(uTime * 2.4 + vUv.y * 9.0);
-  float streak = smoothstep(0.75, 1.0, sin((vUv.y + uTime * 0.65) * 20.0) * 0.5 + 0.5);
+  // Diagonal flowing streak — the headline motion: stripe sweeps along the wall fast enough to read as movement.
+  float streak = smoothstep(0.72, 1.0, sin((vUv.y * 6.0 + vUv.x * 1.4 - uTime * 1.6)) * 0.5 + 0.5);
+  // Secondary fast streak adds a sense of layered flow.
+  float streak2 = smoothstep(0.82, 1.0, sin((vUv.y * 14.0 - uTime * 3.2)) * 0.5 + 0.5);
 
   vec3 color = mix(uBaseColor * 0.65, uEdgeColor, lines * 0.7 + pulse * 0.18);
-  color += uAccentColor * streak * 0.45;
+  color += uAccentColor * streak * 0.55;
+  color += uEdgeColor * streak2 * 0.40;
   color += uAccentColor * shimmer * 0.18;
-  float alpha = uOpacity * (0.16 + lines * 0.2 + streak * 0.08 + pulse * 0.04);
+  float alpha = uOpacity * (0.20 + lines * 0.22 + streak * 0.32 + streak2 * 0.18 + pulse * 0.08);
 
   gl_FragColor = vec4(color, alpha);
 }
@@ -458,8 +464,8 @@ export class World {
           uTime: { value: 0 },
           uBaseColor: { value: new THREE.Color(0x7733cc) },
           uEdgeColor: { value: new THREE.Color(0xdd99ff) },
-          uAccentColor: { value: new THREE.Color(0xff87f8) },
-          uOpacity: { value: 0.25 },
+          uAccentColor: { value: new THREE.Color(0xc488ff) },
+          uOpacity: { value: 0.45 },
         },
         transparent: true,
         side: THREE.DoubleSide,
