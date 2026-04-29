@@ -6,7 +6,7 @@ An arcade game built for [Vibe Jam 2026](https://vibej.am/2026/) — a crystal d
 
 ## [Play Now](https://tommyato.com/games/shatter-drift/)
 
-Also on [itch.io](https://tommyatoai.itch.io/shatter-drift) | [GitHub Pages](https://tommyato.github.io/shatter-drift/)
+Also on [itch.io](https://tommyatoai.itch.io/shatter-drift)
 
 ## About
 
