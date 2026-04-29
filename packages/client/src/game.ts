@@ -278,7 +278,7 @@ enum GameState {
 type MatchState = "idle" | "inLobby" | "inMatch" | "matchOver";
 
 // --- Graze meter tuning ---
-const GRAZE_PHASE_COST = 30;       // units consumed per phase activation
+const GRAZE_PHASE_COST = 0;        // 30 → 0 for Vibe Jam: meter gate caused silent-fail deaths on tap-phase (energy bar said "fine", invisible meter said "rejected"). Pure energy-based phasing. Machinery left in place to revive post-jam as a bonus mechanic. (2026-04-29)
 const GRAZE_FILL_RATE = 20;        // units per second while grazing
 const GRAZE_BAND = 2.7;            // world-unit proximity to obstacle edge (~0.3 × lane width)
 const GRAZE_Z_RANGE = 5;           // how far ahead/behind to check for graze obstacles
