@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { PLAYER_MOVE_SPEED, PLAYABLE_HALF_WIDTH } from "@sd/sim";
+import { PLAYER_COLLISION_RADIUS, SHATTERED_COLLISION_RADIUS, PLAYER_MOVE_SPEED, PLAYABLE_HALF_WIDTH } from "@sd/sim";
 import type { CrystalSkin } from "./unlocks";
 
 const FRAGMENT_COUNT = 20; // icosahedron faces
@@ -251,7 +251,7 @@ export class Player {
 
   /** Get collision radius (smaller when shattered = more forgiving) */
   getCollisionRadius(): number {
-    return this.shattered ? 0.1 : 0.25;
+    return this.shattered ? SHATTERED_COLLISION_RADIUS : PLAYER_COLLISION_RADIUS;
   }
 
   /** Check if player can collect (must be whole) */

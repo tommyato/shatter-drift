@@ -5,7 +5,7 @@ export const WALL_DISTANCE = LANE_WIDTH / 2 + 1.5
 export const INITIAL_SPEED = 12
 export const MAX_SPEED = 45
 export const PLAYER_MOVE_SPEED = 8
-export const PLAYER_COLLISION_RADIUS = 0.25
+export const PLAYER_COLLISION_RADIUS = 0.20
 export const SHATTERED_COLLISION_RADIUS = 0.1
 
 export const PHASE_DRAIN_RATE = 0.25
