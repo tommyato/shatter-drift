@@ -522,6 +522,8 @@ export class Game {
   private racingGhostName: string | null = null;
   /** HUD chip that shows "RACING: NAME" when chasing a specific ghost. */
   private raceChipEl: HTMLElement | null = null;
+  /** HUD chip showing GHOST AHEAD/BEHIND distance while racing. */
+  private ghostDistanceChipEl: HTMLElement | null = null;
 
   // Run contracts — three randomized goals per run, award score bonuses on completion
   private contracts: ContractInstance[] = [];
@@ -806,6 +808,33 @@ export class Game {
       this.raceChipEl = chip;
     }
 
+    // Ghost distance chip — shows GHOST AHEAD/BEHIND NM while racing a ghost.
+    {
+      const chip = document.createElement("div");
+      chip.id = "hud-ghost-distance-chip";
+      chip.style.cssText = [
+        "position:absolute",
+        "top:38px",
+        "left:50%",
+        "transform:translateX(-50%)",
+        "font-family:'Orbitron',monospace",
+        "font-size:9px",
+        "font-weight:700",
+        "letter-spacing:2px",
+        "color:#7be0c8",
+        "background:rgba(0,255,204,0.06)",
+        "border:1px solid rgba(0,255,204,0.2)",
+        "border-radius:3px",
+        "padding:2px 8px",
+        "pointer-events:none",
+        "z-index:15",
+        "white-space:nowrap",
+        "display:none",
+      ].join(";");
+      this.hud.appendChild(chip);
+      this.ghostDistanceChipEl = chip;
+    }
+
     // Pause menu
     this.initPauseMenu();
 
@@ -1019,6 +1048,34 @@ export class Game {
     } else {
       this.raceChipEl.style.display = "none";
     }
+  }
+
+  /** Per-frame update for the ghost distance chip.
+   *  Shows GHOST AHEAD NM / GHOST BEHIND NM / GHOST EVEN based on Z-delta.
+   *  EVEN band (|delta| < 1m) prevents flickering near zero. */
+  private updateGhostDistanceChip() {
+    if (!this.ghostDistanceChipEl) return;
+    if (!this.currentRaceGhostId) {
+      this.ghostDistanceChipEl.style.display = "none";
+      return;
+    }
+    const ghostInfo = this.ghostManager.getGhostById(this.currentRaceGhostId);
+    if (!ghostInfo || ghostInfo.finished) {
+      this.ghostDistanceChipEl.style.display = "none";
+      return;
+    }
+    const delta = ghostInfo.position.z - this.playerZ;
+    const dist = Math.round(Math.abs(delta));
+    let text: string;
+    if (Math.abs(delta) < 1) {
+      text = "GHOST EVEN";
+    } else if (delta > 0) {
+      text = `GHOST AHEAD ${dist}M`;
+    } else {
+      text = `GHOST BEHIND ${dist}M`;
+    }
+    this.ghostDistanceChipEl.textContent = text;
+    this.ghostDistanceChipEl.style.display = "";
   }
 
   /** Legacy "Racing against N ghosts" line — dead under the single-ghost
@@ -2591,6 +2648,7 @@ export class Game {
       this.hud.classList.remove("hidden");
       this.contractHUD.show();
       this.updateRaceChip();
+      this.updateGhostDistanceChip();
 
       // Daily banner
       if (this.dailyBanner) {
@@ -2840,6 +2898,7 @@ export class Game {
       this.player.shattered
     );
     this.ghostManager.update(dt);
+    this.updateGhostDistanceChip();
 
     // World difficulty is now fully biome-driven (see world.ts)
 
@@ -4391,6 +4450,7 @@ export class Game {
     this.pendingRaceSeed = null;
     this.racingGhostName = null;
     this.updateRaceChip();
+    this.updateGhostDistanceChip();
 
     // Hide HUD + game-over overlay, clear gameover styling.
     this.gameOverOverlay.classList.remove("active");

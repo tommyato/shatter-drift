@@ -78,6 +78,9 @@ export class GhostRecorder {
   }
 }
 
+/** Number of world-space points in each ghost's motion trail. */
+const TRAIL_POINTS = 20;
+
 const GHOST_COLORS = [
   { hex: 0xffffff, label: "white" },
   { hex: 0xffcc66, label: "gold" },
@@ -124,6 +127,16 @@ interface Ghost {
   /** Lateral offset applied at render time so this ghost is visible
    *  alongside the player rather than stacked on top of it. */
   laneOffsetX: number;
+  /** World-space motion trail (stays in place as ghost moves forward). */
+  trailLine: THREE.Line;
+  trailGeometry: THREE.BufferGeometry;
+  trailMaterial: THREE.LineBasicMaterial;
+  /** Position samples, newest at slot 0 (TRAIL_POINTS * 3 floats). */
+  trailPositions: Float32Array;
+  /** Vertex colors — fades from 0 at slot 0 (nearest ghost) to ghost color * 0.5 at oldest. */
+  trailColors: Float32Array;
+  /** How many trail slots have been written (0–TRAIL_POINTS). */
+  trailFilled: number;
 }
 
 /** Particle burst that plays when a ghost fades out. */
@@ -158,6 +171,7 @@ export class GhostManager {
     this.enabled = enabled;
     for (const g of this.ghosts) {
       g.group.visible = enabled && !g.finished;
+      if (!enabled) g.trailLine.visible = false;
     }
   }
 
@@ -246,6 +260,27 @@ export class GhostManager {
     // Start with name-tag hidden — will fade in once ghost has spread out.
     nameMaterial.opacity = 0;
 
+    // Motion trail — lives directly in the scene (NOT in group) so emitted
+    // points stay at their world-space positions as the ghost moves on.
+    const trailPositions = new Float32Array(TRAIL_POINTS * 3);
+    const trailColors = new Float32Array(TRAIL_POINTS * 3);
+    const trailGeo = new THREE.BufferGeometry();
+    trailGeo.setAttribute("position", new THREE.BufferAttribute(trailPositions, 3));
+    trailGeo.setAttribute("color", new THREE.BufferAttribute(trailColors, 3));
+    trailGeo.setDrawRange(0, 0);
+    const trailMat = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 1,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const trailLine = new THREE.Line(trailGeo, trailMat);
+    trailLine.visible = false;
+    // Bypass frustum culling — trail bounding box isn't kept up-to-date.
+    trailLine.frustumCulled = false;
+    this.scene.add(trailLine);
+
     return {
       record,
       group,
@@ -263,6 +298,12 @@ export class GhostManager {
       nameVisibleTime: -1,
       nameFullyVisible: false,
       laneOffsetX,
+      trailLine,
+      trailGeometry: trailGeo,
+      trailMaterial: trailMat,
+      trailPositions,
+      trailColors,
+      trailFilled: 0,
     };
   }
 
@@ -281,6 +322,14 @@ export class GhostManager {
       g.group.visible = this.enabled;
       g.nameVisibleTime = -1;
       g.nameFullyVisible = false;
+      // Reset trail buffer.
+      g.trailPositions.fill(0);
+      g.trailColors.fill(0);
+      g.trailFilled = 0;
+      g.trailLine.visible = false;
+      (g.trailGeometry.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+      (g.trailGeometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+      g.trailGeometry.setDrawRange(0, 0);
       // Record spawn position from first frame (with visible offset so the
       // name-tag distance check matches the rendered position).
       if (g.record.frames.length > 0) {
@@ -308,6 +357,7 @@ export class GhostManager {
           g.fadeTimer = 0.6;
           this.beatenNames.push(g.record.name);
           this.spawnBurst(g.group.position, g.color);
+          g.trailLine.visible = false;  // Hide trail immediately on fade-out
         }
         g.fadeTimer -= dt;
         const fade = Math.max(0, g.fadeTimer / 0.6);
@@ -339,6 +389,9 @@ export class GhostManager {
       // float slightly above so they read as a separate racer rather than
       // disappearing behind the cyan player crystal.
       g.group.position.set(x + g.laneOffsetX, GHOST_Y_LIFT, z);
+
+      // Update world-space trail.
+      this.updateTrail(g);
 
       // Subtle spin so stationary ghosts still feel alive.
       g.mesh.rotation.y += dt * 1.2;
@@ -388,6 +441,47 @@ export class GhostManager {
         this.bursts.splice(i, 1);
       }
     }
+  }
+
+  /** Shift trail buffer back by one slot and write the ghost's current world position at slot 0.
+   *  Vertex colors fade from black (slot 0, newest — invisible with additive blending)
+   *  to ghost color * 0.5 (oldest slot — faint glow behind the crystal). */
+  private updateTrail(g: Ghost) {
+    const N = TRAIL_POINTS;
+    const pos = g.trailPositions;
+    const col = g.trailColors;
+
+    // Shift all points back by one.
+    for (let i = N - 1; i > 0; i--) {
+      pos[i * 3]     = pos[(i - 1) * 3];
+      pos[i * 3 + 1] = pos[(i - 1) * 3 + 1];
+      pos[i * 3 + 2] = pos[(i - 1) * 3 + 2];
+    }
+    // Newest point = current ghost world position.
+    pos[0] = g.group.position.x;
+    pos[1] = g.group.position.y;
+    pos[2] = g.group.position.z;
+
+    if (g.trailFilled < N) g.trailFilled++;
+    const filled = g.trailFilled;
+
+    // Color gradient: slot 0 (nearest ghost) → black (invisible with additive);
+    // slot filled-1 (oldest, furthest behind) → ghost color * 0.5.
+    const r = ((g.color >> 16) & 0xff) / 255;
+    const gv = ((g.color >> 8) & 0xff) / 255;
+    const b = (g.color & 0xff) / 255;
+    for (let i = 0; i < N; i++) {
+      const t = filled > 1 ? i / (filled - 1) : 0;
+      const brightness = t * 0.5;
+      col[i * 3]     = r * brightness;
+      col[i * 3 + 1] = gv * brightness;
+      col[i * 3 + 2] = b * brightness;
+    }
+
+    (g.trailGeometry.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+    (g.trailGeometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+    g.trailGeometry.setDrawRange(0, filled);
+    g.trailLine.visible = this.enabled && filled >= 2;
   }
 
   private spawnBurst(position: THREE.Vector3, color: number) {
@@ -440,14 +534,28 @@ export class GhostManager {
 
   /** Hide all ghosts (e.g. during title / game over). Does not destroy them. */
   hideAll() {
-    for (const g of this.ghosts) g.group.visible = false;
+    for (const g of this.ghosts) {
+      g.group.visible = false;
+      g.trailLine.visible = false;
+    }
+  }
+
+  /** Minimal accessor for the active race ghost's world position + finished state.
+   *  Game uses this for the distance chip HUD — avoids reaching into private state. */
+  getGhostById(id: string): { position: THREE.Vector3; finished: boolean } | null {
+    const g = this.ghosts.find(ghost => ghost.record.id === id);
+    if (!g) return null;
+    return { position: g.group.position, finished: g.finished };
   }
 
   clear() {
     for (const g of this.ghosts) {
       this.scene.remove(g.group);
+      this.scene.remove(g.trailLine);
       g.mesh.geometry.dispose();
       g.material.dispose();
+      g.trailGeometry.dispose();
+      g.trailMaterial.dispose();
       if (g.nameMaterial.map) g.nameMaterial.map.dispose();
       g.nameMaterial.dispose();
     }
