@@ -53,7 +53,7 @@ const BIOMES: Biome[] = [
       ambientIntensity: 1.1,
       directionalLight: 0x6688cc,
       directionalIntensity: 1.0,
-      starTint: [0.7, 0.8, 1.0],
+      starTint: [0.85, 0.85, 1.1], // 2026-04-29: slight purple lean to match nebula in void skybox
       gridColor: 0x9944ff,
       gridOpacity: 0.35,
       bloomStrength: 1.1,

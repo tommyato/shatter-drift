@@ -377,10 +377,12 @@ export class World {
     geo.setAttribute("color", new THREE.BufferAttribute(this.starColors, 3));
 
     const mat = new THREE.PointsMaterial({
-      size: 0.3,
+      // 2026-04-29: bumped size 0.3 → 0.45 + opacity 0.8 → 0.95 so bloom
+      // pickup is stronger, especially in zone 1 which was reading "empty".
+      size: 0.45,
       vertexColors: true,
       transparent: true,
-      opacity: 0.8,
+      opacity: 0.95,
       sizeAttenuation: true,
     });
 

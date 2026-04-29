@@ -56,8 +56,11 @@ const fragmentShader = `
 `;
 
 // Per-biome brightness tuning — darker for early biomes, brighter for later
-const BIOME_BRIGHTNESS = [0.15, 0.25, 0.35, 0.4, 0.35];
-const BIOME_SATURATION = [0.6, 0.8, 1.0, 0.9, 0.85];
+// 2026-04-29: void was 0.15, hiding the purple nebula already in the texture.
+// Bumped to 0.55 — first zone needs to look interesting, not empty. Saturation
+// 0.6 → 0.85 to let the purple read instead of going gray.
+const BIOME_BRIGHTNESS = [0.55, 0.25, 0.35, 0.4, 0.35];
+const BIOME_SATURATION = [0.85, 0.8, 1.0, 0.9, 0.85];
 
 export class SkyboxManager {
   private sphere: THREE.Mesh;
