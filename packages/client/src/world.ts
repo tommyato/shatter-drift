@@ -1488,6 +1488,25 @@ export class World {
         // Widen the gap to cover the destroyed wall's area
         const childX = new THREE.Vector3();
         hit.getWorldPosition(childX);
+
+        // Remove the destroyed segment from wallSegments so checkObstacleCollision
+        // doesn't treat the now-invisible geometry as a live collision surface.
+        // Without this, a player who phases through a gate wall and then unphases
+        // while still in the obstacle's z-range dies to the invisible (destroyed)
+        // segment — the root cause of the post-shatter-unphase-death bug.
+        if (obs.wallSegments) {
+          let nearestSegIdx = 0;
+          let nearestSegDist = Infinity;
+          for (let i = 0; i < obs.wallSegments.length; i++) {
+            const d = Math.abs(obs.wallSegments[i]!.x - childX.x);
+            if (d < nearestSegDist) {
+              nearestSegDist = d;
+              nearestSegIdx = i;
+            }
+          }
+          obs.wallSegments.splice(nearestSegIdx, 1);
+        }
+
         const edge = PLAYABLE_HALF_WIDTH;
         if (childX.x < obs.gapX) {
           // Left wall destroyed — extend gap leftward

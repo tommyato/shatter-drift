@@ -399,6 +399,70 @@ section('Deterministic replay');
 }
 
 // ==========================================================================
+// Test 11: Post-shatter unphase survival
+//
+// Regression guard for the "phase through wall → unphase → die" bug class.
+//
+// The client-side root cause was that world.ts:shatterObstacle hid the
+// destroyed gate-segment mesh but left its entry in obs.wallSegments, so
+// checkObstacleCollision would fire on the invisible geometry after the
+// player unphased. That fix lives in client/src/world.ts.
+//
+// Here we verify the sim-side contract: after phasing through an obstacle
+// (wall_destroyed event fires), releasing phase on the VERY NEXT FRAME must
+// not kill the player. The sim handles this via destroyObstacle → setting
+// obstacle.active = false (non-gate) or splicing wallSegments (gate).
+// This test guards against regressions in that cleanup path.
+// ==========================================================================
+section('Post-shatter unphase survival');
+{
+  const sim = new SimClass({ seed: 42, fixedDt: 1/60 });
+  sim.reset();
+
+  // Strategy: shatter continuously. When a wall_destroyed event fires (we
+  // just phased through something), release phase on the next frame while
+  // still potentially within the destroyed obstacle's z-window. Player must
+  // stay alive — if they die, the obstacle wasn't properly deactivated.
+  let postPhaseDeaths = 0;
+  let phaseUnphaseTests = 0;
+  let justDestroyedWall = false;
+
+  for (let i = 0; i < 600; i++) {
+    const state = sim.getState();
+    if (!state.alive) { sim.reset(); justDestroyedWall = false; continue; }
+
+    let action;
+    if (justDestroyedWall) {
+      // Release phase the frame immediately after we destroyed a wall
+      action = 0;
+      phaseUnphaseTests++;
+      justDestroyedWall = false;
+    } else {
+      action = 3; // hold shatter
+    }
+
+    const result = sim.step(action);
+
+    // Record if a wall was just destroyed this frame (so next frame we release)
+    for (const ev of result.events) {
+      if (ev.type === 'wall_destroyed') {
+        justDestroyedWall = true;
+        break;
+      }
+    }
+
+    // If we died on the frame we released phase (the frame after wall_destroyed),
+    // that's the sim-side post-shatter-unphase-death bug
+    if (action === 0 && phaseUnphaseTests > 0 && !result.state.alive) {
+      postPhaseDeaths++;
+    }
+  }
+
+  assert(phaseUnphaseTests > 0, `Exercised unphase-after-shatter scenario (${phaseUnphaseTests} samples)`);
+  assert(postPhaseDeaths === 0, `No post-shatter-unphase deaths on immediate unphase (${postPhaseDeaths} found)`);
+}
+
+// ==========================================================================
 // Summary
 // ==========================================================================
 console.log(`\n${'='.repeat(50)}`);
