@@ -503,7 +503,6 @@ export class Game {
   private ghostRecorder = new GhostRecorder();
   private ghostManager!: GhostManager;
   private ghostUploadThreshold = 0;
-  private ghostToggle = true;
   /** Seed used for the current/most-recent run. Captured at startGame(). */
   private runSeed = 0;
   /** Ghost records from the last successful fetchGhosts() — source of truth for race selection. */
@@ -697,9 +696,6 @@ export class Game {
     this.runHistory = new RunHistoryTracker();
     this.contractHUD = new ContractHUD();
 
-    // Ghost racing — load persisted toggle and kick off async fetch
-    const storedGhostToggle = localStorage.getItem("shatterDriftGhostToggle");
-    this.ghostToggle = storedGhostToggle === null ? true : storedGhostToggle === "1";
     this.ghostManager = new GhostManager();
     this.loadGhostsAsync();
 
@@ -1048,10 +1044,8 @@ export class Game {
     const items: HTMLElement[] = [];
     const volume = document.getElementById("pause-volume");
     const resume = document.getElementById("pause-resume");
-    const ghost = document.getElementById("pause-ghost-toggle");
     // Resume first so it's the default-focused (mash A to unpause).
     if (resume) items.push(resume);
-    if (ghost) items.push(ghost);
     if (volume) items.push(volume);
     this.menuNav.setScope(items, () => this.resumeGame());
   }
@@ -1283,27 +1277,6 @@ export class Game {
       e.stopPropagation();
       this.resumeGame();
     });
-
-    // Ghost toggle — persisted and applied live
-    const ghostBtn = document.getElementById("pause-ghost-toggle");
-    if (ghostBtn) {
-      const paint = () => {
-        ghostBtn.textContent = `GHOST: ${this.ghostToggle ? "ON" : "OFF"}`;
-        ghostBtn.style.color = this.ghostToggle ? "#00ffcc" : "#668899";
-        ghostBtn.style.borderColor = this.ghostToggle ? "#00ffcc" : "#334455";
-      };
-      paint();
-      ghostBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.ghostToggle = !this.ghostToggle;
-        localStorage.setItem("shatterDriftGhostToggle", this.ghostToggle ? "1" : "0");
-        this.updateTitleGhostLine();
-        // Re-render title leaderboard so the RACE-A-GHOST panel reflects the
-        // new toggle state without requiring a return-to-title cycle.
-        this.populateTitleLeaderboard(this.cachedGhosts);
-        paint();
-      });
-    }
 
     // ESC to pause/resume
     window.addEventListener("keydown", (e) => {
@@ -2665,20 +2638,8 @@ export class Game {
       }, 2000);
     }
 
-    // Ghost racing — single-ghost model only.
-    // Race active: load the one selected ghost so it spawns and renders.
-    // No race: load no ghosts (a normal run is just the player).
-    // The legacy "load top 3 ghosts as ambient racers" behaviour was
-    // removed — those ghosts ran on a different seed than the live run,
-    // so they were random runs through unrelated obstacles, not a race.
-    // GHOST: OFF on the title disables ghost racing entirely — clear any
-    // pending race target so the run plays solo even if a RACE button was
-    // somehow still wired up. Belt-and-suspenders with the panel-render gate.
-    if (!this.ghostToggle) {
-      this.currentRaceGhostId = null;
-      this.currentRaceSeed = null;
-    }
-    if (this.ghostToggle && this.currentRaceGhostId !== null) {
+    // Ghost racing — load the selected ghost when a race is active.
+    if (this.currentRaceGhostId !== null) {
       const target = this.cachedGhosts.find(g => g.id === this.currentRaceGhostId);
       if (target) {
         this.ghostManager.loadGhosts([target]);
@@ -4524,10 +4485,8 @@ export class Game {
 
     // Ghost pool — RACE buttons for any seeded ghost records.
     // Legacy ghosts without a seed are skipped (no fair race possible).
-    // GHOST: OFF on the title hides the entire RACE-A-GHOST section so the
-    // toggle actually does what it says (matching the ghostToggle gate in startGame).
     const seededGhosts = this.cachedGhosts.filter(g => typeof g.seed === "number");
-    if (this.ghostToggle && seededGhosts.length > 0) {
+    if (seededGhosts.length > 0) {
       let ghostHtml = `<div style="font-family:'Orbitron',monospace;font-size:10px;color:#334455;letter-spacing:3px;text-align:center;margin:16px 0 6px;border-top:1px solid #1a2a35;padding-top:12px">RACE A GHOST</div>`;
       for (const ghost of seededGhosts) {
         ghostHtml += `
