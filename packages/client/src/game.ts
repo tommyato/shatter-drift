@@ -524,6 +524,10 @@ export class Game {
   private raceChipEl: HTMLElement | null = null;
   /** HUD chip showing GHOST AHEAD/BEHIND distance while racing. */
   private ghostDistanceChipEl: HTMLElement | null = null;
+  /** HUD progress bar showing player/ghost positions along race distance. */
+  private ghostProgressBarEl: HTMLElement | null = null;
+  private ghostProgressBarPlayerMarkerEl: HTMLElement | null = null;
+  private ghostProgressBarGhostMarkerEl: HTMLElement | null = null;
 
   // Run contracts — three randomized goals per run, award score bonuses on completion
   private contracts: ContractInstance[] = [];
@@ -696,8 +700,7 @@ export class Game {
     // Ghost racing — load persisted toggle and kick off async fetch
     const storedGhostToggle = localStorage.getItem("shatterDriftGhostToggle");
     this.ghostToggle = storedGhostToggle === null ? true : storedGhostToggle === "1";
-    this.ghostManager = new GhostManager(this.scene);
-    this.ghostManager.setEnabled(this.ghostToggle);
+    this.ghostManager = new GhostManager();
     this.loadGhostsAsync();
 
     // Cache HUD elements
@@ -833,6 +836,93 @@ export class Game {
       ].join(";");
       this.hud.appendChild(chip);
       this.ghostDistanceChipEl = chip;
+    }
+
+    // Ghost progress bar — shows player and ghost positions along the race distance.
+    {
+      const bar = document.createElement("div");
+      bar.id = "hud-ghost-progress-bar";
+      bar.style.cssText = [
+        "position:absolute",
+        "top:60px",
+        "left:50%",
+        "transform:translateX(-50%)",
+        "width:180px",
+        "height:6px",
+        "background:rgba(0,255,204,0.06)",
+        "border:1px solid rgba(0,255,204,0.2)",
+        "border-radius:3px",
+        "pointer-events:none",
+        "z-index:15",
+        "display:none",
+      ].join(";");
+      this.hud.appendChild(bar);
+      this.ghostProgressBarEl = bar;
+
+      // Player marker
+      const playerMarker = document.createElement("div");
+      playerMarker.style.cssText = [
+        "position:absolute",
+        "top:50%",
+        "transform:translate(-50%,-50%)",
+        "width:8px",
+        "height:8px",
+        "background:#00ffcc",
+        "border-radius:50%",
+        "box-shadow:0 0 4px #00ffcc",
+      ].join(";");
+      bar.appendChild(playerMarker);
+      this.ghostProgressBarPlayerMarkerEl = playerMarker;
+
+      // Player label
+      const playerLabel = document.createElement("div");
+      playerLabel.textContent = "YOU";
+      playerLabel.style.cssText = [
+        "position:absolute",
+        "top:10px",
+        "left:50%",
+        "transform:translateX(-50%)",
+        "font-family:'Orbitron',monospace",
+        "font-size:7px",
+        "font-weight:700",
+        "letter-spacing:1.5px",
+        "color:#00ffcc",
+        "white-space:nowrap",
+      ].join(";");
+      playerMarker.appendChild(playerLabel);
+
+      // Ghost marker
+      const ghostMarker = document.createElement("div");
+      ghostMarker.style.cssText = [
+        "position:absolute",
+        "top:50%",
+        "transform:translate(-50%,-50%)",
+        "width:8px",
+        "height:8px",
+        "background:transparent",
+        "border:1.5px solid #7be0c8",
+        "border-radius:50%",
+        "box-shadow:0 0 4px #7be0c8",
+      ].join(";");
+      bar.appendChild(ghostMarker);
+      this.ghostProgressBarGhostMarkerEl = ghostMarker;
+
+      // Ghost label
+      const ghostLabel = document.createElement("div");
+      ghostLabel.textContent = "GHOST";
+      ghostLabel.style.cssText = [
+        "position:absolute",
+        "top:10px",
+        "left:50%",
+        "transform:translateX(-50%)",
+        "font-family:'Orbitron',monospace",
+        "font-size:7px",
+        "font-weight:700",
+        "letter-spacing:1.5px",
+        "color:#7be0c8",
+        "white-space:nowrap",
+      ].join(";");
+      ghostMarker.appendChild(ghostLabel);
     }
 
     // Pause menu
@@ -1078,6 +1168,29 @@ export class Game {
     this.ghostDistanceChipEl.style.display = "";
   }
 
+  /** Per-frame update for the ghost progress bar.
+   *  Shows player and ghost positions as markers along the race distance. */
+  private updateGhostProgressBar() {
+    if (!this.ghostProgressBarEl || !this.ghostProgressBarPlayerMarkerEl || !this.ghostProgressBarGhostMarkerEl) return;
+    if (!this.currentRaceGhostId) {
+      this.ghostProgressBarEl.style.display = "none";
+      return;
+    }
+    const ghostInfo = this.ghostManager.getGhostById(this.currentRaceGhostId);
+    if (!ghostInfo || ghostInfo.finished) {
+      this.ghostProgressBarEl.style.display = "none";
+      return;
+    }
+    
+    const targetDistance = ghostInfo.record.distance;
+    const playerProgress = Math.max(0, Math.min(1, this.playerZ / targetDistance));
+    const ghostProgress = Math.max(0, Math.min(1, ghostInfo.position.z / targetDistance));
+    
+    this.ghostProgressBarPlayerMarkerEl.style.left = `${playerProgress * 100}%`;
+    this.ghostProgressBarGhostMarkerEl.style.left = `${ghostProgress * 100}%`;
+    this.ghostProgressBarEl.style.display = "";
+  }
+
   /** Legacy "Racing against N ghosts" line — dead under the single-ghost
    *  race model. Kept as a no-op to retain the call sites' invariants
    *  (always hide the line) without restoring the multi-ghost affordance. */
@@ -1184,7 +1297,6 @@ export class Game {
         e.stopPropagation();
         this.ghostToggle = !this.ghostToggle;
         localStorage.setItem("shatterDriftGhostToggle", this.ghostToggle ? "1" : "0");
-        this.ghostManager.setEnabled(this.ghostToggle);
         this.updateTitleGhostLine();
         paint();
       });
@@ -2649,6 +2761,7 @@ export class Game {
       this.contractHUD.show();
       this.updateRaceChip();
       this.updateGhostDistanceChip();
+      this.updateGhostProgressBar();
 
       // Daily banner
       if (this.dailyBanner) {
@@ -2899,6 +3012,7 @@ export class Game {
     );
     this.ghostManager.update(dt);
     this.updateGhostDistanceChip();
+    this.updateGhostProgressBar();
 
     // World difficulty is now fully biome-driven (see world.ts)
 
@@ -4451,6 +4565,7 @@ export class Game {
     this.racingGhostName = null;
     this.updateRaceChip();
     this.updateGhostDistanceChip();
+    this.updateGhostProgressBar();
 
     // Hide HUD + game-over overlay, clear gameover styling.
     this.gameOverOverlay.classList.remove("active");
